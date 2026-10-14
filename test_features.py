@@ -914,3 +914,51 @@ class LiveRefresh(unittest.TestCase):
                 new = lib.change_signature()
                 self.assertNotEqual(new, sig)
                 sig = new
+
+
+class BottomBarWhilePlaying(unittest.TestCase):
+    """While a game runs, the bottom bar stays on it: clicking elsewhere must not hide Stop."""
+
+    def test_stop_stays_when_clicking_elsewhere(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            import i18n
+            from library import Library
+            QApplication.instance() or QApplication([])
+            i18n.set_language("en")
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            exe = Path(tmp) / "game.exe"
+            exe.write_bytes(b"")
+            reading = lib.add_game("Reading Now", "PC", exe=str(exe))
+            other = lib.add_game("Something Else", "PC", exe=str(exe))
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.refresh()
+                w.games = {g.game_id: g for g in lib.list_games()}
+                w.worker = SimpleNamespace(stop_pressed=threading.Event(), force_close=threading.Event())
+                w.playing_id, w.play_phase = reading.game_id, "playing"
+
+                def bar():
+                    return w.d_title.text(), w.play_btn.text(), w.play_btn.isEnabled()
+                w.clear_selection()                                         # click on empty space
+                self.assertEqual(bar(), ("Reading Now", "Stop", True))
+                for i in range(w.grid.count()):                             # click another game
+                    if w.grid.item(i).data(app.GAME_ID_ROLE) == other.game_id:
+                        w.grid.setCurrentItem(w.grid.item(i))
+                self.assertEqual(w.selected_id(), other.game_id)
+                self.assertEqual(bar(), ("Reading Now", "Stop", True))
+                w.play_btn.click()                                          # Stop acts on the running game
+                self.assertTrue(w.worker.stop_pressed.is_set())
+                w.worker, w.playing_id, w.play_phase = None, None, "done"   # it closed
+                w._update_details()
+                self.assertEqual(bar(), ("Something Else", "Read", True))  # back to the selection
+            finally:
+                w.worker = None
+                w.close()

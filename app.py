@@ -3713,7 +3713,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.saves_btn = QPushButton()
         self.saves_btn.clicked.connect(self._open_saves)
         self.edit_btn = QPushButton()
-        self.edit_btn.clicked.connect(self.edit_selected)
+        self.edit_btn.clicked.connect(lambda: self.edit_game(self.bar_game()) if self._bar_shows_running()
+                                      else self.edit_selected())
         self.trash_btn = TrashButton()
         self.trash_btn.clicked.connect(lambda: self.remove_game(self.selected_id() or ""))
         self.trash_btn.installEventFilter(self)       # games can be dropped on it
@@ -4039,6 +4040,16 @@ class MainWindow(TaskOwner, QMainWindow):
     def selected(self) -> Optional[Game]:
         return self.games.get(self.selected_id() or "")
 
+    def bar_game(self) -> Optional[Game]:
+        """The game the bottom bar shows and acts on: while a game runs, always that one (so Stop never
+        disappears when you click elsewhere); otherwise the selected game."""
+        if self.worker is not None and self.playing_id in self.games:
+            return self.games[self.playing_id]
+        return self.selected()
+
+    def _bar_shows_running(self) -> bool:
+        return self.worker is not None and self.playing_id in self.games
+
     def open_folder(self, fid: str) -> None:
         self.current_folder = fid
         self.search.blockSignals(True)
@@ -4067,8 +4078,8 @@ class MainWindow(TaskOwner, QMainWindow):
                 and self.play_phase in ("starting", "playing"))
 
     def _play_button(self) -> None:
-        g = self.selected()
-        if g is not None and self._running(g.game_id) and not self.selected_folder():
+        g = self.bar_game()
+        if g is not None and self._running(g.game_id):
             self._stop_game()
             return
         self.activate_selected()
@@ -4148,7 +4159,7 @@ class MainWindow(TaskOwner, QMainWindow):
 
     @guarded
     def _status_changed(self, _i: int) -> None:
-        g = self.selected()
+        g = self.bar_game()
         if g is None:
             return
         s = self.d_status.currentData() or ""
@@ -4159,7 +4170,7 @@ class MainWindow(TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ bottom bar / top status
     def _update_details(self) -> None:
-        fid = self.selected_folder()
+        fid = None if self._bar_shows_running() else self.selected_folder()
         if fid:
             n = len(self.folder_games.get(fid, []))
             self.d_title.setText(self.folder_name(fid))
@@ -4177,7 +4188,7 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         self.saves_btn.show()
         self.edit_btn.setText(tr("bar.edit"))
-        g = self.selected()
+        g = self.bar_game()
         busy = self.worker is not None
         for w in (self.play_btn, self.edit_btn, self.saves_btn, self.d_status):
             w.setEnabled(g is not None)
@@ -4703,7 +4714,9 @@ class MainWindow(TaskOwner, QMainWindow):
         if fid:
             self.rename_folder(fid)
             return
-        g = self.selected()
+        self.edit_game(self.selected())
+
+    def edit_game(self, g: Optional[Game]) -> None:
         if g is None:
             return
         d = GameDialog(self.library, self.settings, self.library.get(g.game_id) or g, parent=self)
@@ -4738,7 +4751,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self.refresh()
 
     def _open_saves(self) -> None:
-        g = self.selected()
+        g = self.bar_game()
         if g:
             open_folder(g.paths_for(self.settings.machine_name).save_dir)
 
