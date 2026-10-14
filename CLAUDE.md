@@ -223,7 +223,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 4. Packaging — done 2026-10-14 (v1.0.0). `py make_icon.py` builds assets/Icon.ico (10 sizes) from Icon.png;
    `py build.py` runs PyInstaller (folder build, windowed, icon, version info, assets bundled incl. Font.otf)
    -> dist\Ikemen Reader\Ikemen Reader.exe (~128 MB folder). Tested on the PC: opens, library + theme + fonts OK.
-   Git: local repo (branch main), build/ and dist/ ignored. Next: live test on the laptop.
+   Git: local repo (branch main), build/ and dist/ ignored. Laptop live test over Google Drive passed
+   2026-10-14 (owner: "Everything worked").
 
 ## Notes
 - Owner is not very experienced with terminals; explain commands plainly.
