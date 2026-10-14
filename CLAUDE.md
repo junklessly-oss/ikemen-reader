@@ -6,8 +6,10 @@ The owner is a Japanese learner who reads VNs for immersion and switches machine
 Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 
 ## How sync works
-- No cloud APIs. Saves are mirrored into a folder synced by a desktop client (owner uses OneDrive:
-  `C:\Users\Jaden\OneDrive\VNSaves`; any desktop sync client works).
+- No cloud APIs. Saves are mirrored into a folder synced by a desktop client. Owner switched from OneDrive (its app
+  wouldn't sign in: error 0x8004de80, custom-domain account) to Google Drive for desktop on 2026-10-14:
+  cloud folder `G:\My Drive\VNSaves` (streaming mode; VNSaves should be "Available offline"). The old
+  `C:\Users\Jaden\OneDrive\VNSaves` is no longer used; a verified safety copy is in `..\save-backups\`.
 - `sync_engine.py`: three-way fingerprint compare (local / cloud / last-synced base, base stored locally
   per device). Pull, push, or CONFLICT. On conflict nothing changes until the user picks a side.
   Anything overwritten is backed up locally (last 10 kept) and can be restored. Atomic writes; junk files
