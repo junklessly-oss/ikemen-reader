@@ -1,3 +1,5 @@
 psutil>=5.9
 PySide6-Essentials>=6.8
 truststore>=0.9
+# to build Ikemen Reader.exe (py build.py):
+pyinstaller>=6.10

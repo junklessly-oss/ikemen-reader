@@ -218,8 +218,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 2. Launch/exit handling — done; tested 2026-10-13 with Sakura no Toki (saves `%APPDATA%\枕\サクラノ刻`).
 3. UI — redesign built 2026-10-13 (all items above). Needs the owner's real-world test: Luna launch
    (incl. Luna-already-open behaviour), LE, first-play detection on a real new game, laptop side.
-4. Packaging into a single .exe (PyInstaller) so the laptop doesn't need Python; convert Icon.png to a
-   multi-size .ico; decide whether Font.otf is embedded or shipped beside the exe.
+4. Packaging — done 2026-10-14 (v1.0.0). `py make_icon.py` builds assets/Icon.ico (10 sizes) from Icon.png;
+   `py build.py` runs PyInstaller (folder build, windowed, icon, version info, assets bundled incl. Font.otf)
+   -> dist\Ikemen Reader\Ikemen Reader.exe (~128 MB folder). Tested on the PC: opens, library + theme + fonts OK.
+   Git: local repo (branch main), build/ and dist/ ignored. Next: live test on the laptop.
 
 ## Notes
 - Owner is not very experienced with terminals; explain commands plainly.
