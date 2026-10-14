@@ -1,7 +1,7 @@
 """
 vn.py - small command-line front end (the window, app.py, is the main way to use Ikemen Reader).
 
-    py vn.py setup --device 1 --cloud "C:\\Users\\You\\OneDrive\\VNSaves" [--le "C:\\LE\\LEProc.exe"] [--luna "...\\LunaTranslator.exe"]
+    py vn.py setup --device 1 --cloud "G:\\My Drive\\VNSaves" [--le "C:\\LE\\LEProc.exe"] [--luna "...\\LunaTranslator.exe"]
     py vn.py add "Game Title" --exe "D:\\VN\\game.exe" [--save "D:\\VN\\savedata"] [--art cover.jpg]
     py vn.py paths "Game Title" [--exe ...] [--save ...]   (sets paths for THIS device)
     py vn.py list
@@ -50,7 +50,7 @@ def main() -> None:
 
     p = sub.add_parser("setup")
     p.add_argument("--device", required=True, choices=["1", "2"], help="1 on one computer, 2 on the other")
-    p.add_argument("--cloud", required=True, help="the synced folder (OneDrive/Drive/Dropbox)")
+    p.add_argument("--cloud", required=True, help="a folder your cloud service keeps in sync")
     p.add_argument("--le", default="", help="path to Locale Emulator's LEProc.exe on this device")
     p.add_argument("--luna", default="", help="path to LunaTranslator.exe (or LunaHook) on this device")
 

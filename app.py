@@ -16,6 +16,7 @@ import dataclasses
 import math
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -497,6 +498,7 @@ HOVER_MS = 150                       # ease in/out time
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
+STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
 SCROLLBAR_LINGER_S = 1.2             # stays visible this long after scrolling / leaving the edge
 SCROLLBAR_EDGE_PX = 36               # mouse this close to the right edge shows it
 LIGHT_R = 5.5
@@ -507,7 +509,7 @@ FOLDER_PREFIX = "folder:"
 MIME_GAME = "application/x-ikemen-game"  # a game being dragged inside the grid
 FOLDER_PAD, FOLDER_GAP = 10, 8           # mosaic inside a folder tile
 # when a folder holds games in different states, its light shows the most important one
-STATE_PRIORITY = ["conflict", "syncing", "playing", "push", "pull", "checking", "detect", "unset", "empty", "synced"]
+STATE_PRIORITY = ["conflict", "syncing", "starting", "playing", "push", "pull", "checking", "detect", "unset", "empty", "synced"]
 
 
 def is_folder(item_id: Optional[str]) -> bool:
@@ -524,6 +526,7 @@ STATE_LOOK = {
     "detect":   ("grey", "calm", "sync.state.detect"),
     "checking": ("grey", "busy", "sync.state.checking"),
     "playing":  ("blue", "calm", "sync.state.playing"),
+    "starting": ("blue", "busy", "sync.state.starting"),
     "syncing":  ("blue", "busy", "sync.state.checking"),
 }
 
@@ -786,7 +789,7 @@ class PlayWorker(QThread):
     status = Signal(str)
     conflict = Signal(object)        # ConflictInfo -> the window asks the owner, blocking this thread
     result = Signal(object)          # PlayResult
-    phase = Signal(str)              # "syncing" / "playing" / "done"
+    phase = Signal(str)              # "syncing" / "starting" / "playing" / "done"
 
     def __init__(self, game: Game, settings: LocalSettings, library: Library, engine: SyncEngine,
                  without: tuple[str, ...] = (), watch: bool = False):
@@ -794,6 +797,16 @@ class PlayWorker(QThread):
         self.game, self.settings, self.library, self.engine = game, settings, library, engine
         self.without, self.watch = without, watch
         self.answer: Optional[str] = None
+        self.stop_pressed = threading.Event()     # Stop: stop waiting for the game / ask it to close
+        self.force_close = threading.Event()      # the owner agreed to end the game at once
+
+    @staticmethod
+    def _take(ev: threading.Event) -> bool:
+        """True once per press (the launcher acts on each press once)."""
+        if ev.is_set():
+            ev.clear()
+            return True
+        return False
 
     def _ask(self, info: ConflictInfo) -> Optional[str]:
         self.answer = None
@@ -803,7 +816,8 @@ class PlayWorker(QThread):
     def run(self) -> None:
         try:
             r = play(self.game, self.settings, self.library, self.engine, on_conflict=self._ask,
-                     status=self.status.emit, on_phase=self.phase.emit, without=self.without, watch=self.watch)
+                     status=self.status.emit, on_phase=self.phase.emit, without=self.without, watch=self.watch,
+                     stop=lambda: self._take(self.stop_pressed), force=lambda: self._take(self.force_close))
         except Exception as e:  # noqa: BLE001 - never let a surprise kill the thread silently
             r = PlayResult(False, "play.couldnt_start")
             r.window_title = str(e)
@@ -2339,7 +2353,7 @@ class SettingsDialog(QDialog):
 
         lay.addWidget(self._tx(section(""), "settings.cloud"))
         self.cloud = QLineEdit(current.cloud_root if current else "")
-        self.cloud.setPlaceholderText(r"C:\Users\You\OneDrive\VNSaves")
+        self._tx(self.cloud, "settings.cloud_placeholder", "setPlaceholderText")
         lay.addLayout(self._browse_row(self.cloud, self._pick_cloud))
         lay.addWidget(self._tx(hint(""), "settings.cloud_hint"))
 
@@ -2651,7 +2665,7 @@ class SettingsDialog(QDialog):
         return str(keep) if keep else ""
 
     def _pick_cloud(self):
-        start = self.cloud.text() or os.environ.get("OneDrive", str(Path.home()))
+        start = self.cloud.text() or str(Path.home())
         d = QFileDialog.getExistingDirectory(self, tr("settings.pick_cloud"), start)
         if d:
             self.cloud.setText(str(Path(d)))
@@ -3554,6 +3568,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self._recheck = False
         self._first_check = True
         self.playing_id: Optional[str] = None
+        self.stop_pending = False            # Stop was pressed; waiting for the game to close
         self.play_phase = "done"
         self.current_folder: Optional[str] = None     # folder id being viewed, None = the library
         self.folder_names: dict[str, str] = {}
@@ -3680,7 +3695,7 @@ class MainWindow(TaskOwner, QMainWindow):
         dl.setContentsMargins(22, 25, 22, 3)
         dl.setSpacing(12)
         self.play_btn = QPushButton(objectName="play")
-        self.play_btn.clicked.connect(lambda: self.activate_selected())
+        self.play_btn.clicked.connect(self._play_button)
         dl.addWidget(self.play_btn)
         dl.addSpacing(10)
         info = QVBoxLayout()
@@ -4046,6 +4061,41 @@ class MainWindow(TaskOwner, QMainWindow):
         else:
             self.clear_selection()
 
+    def _running(self, gid: Optional[str]) -> bool:
+        """Is this game being started or running (the big button says Stop)?"""
+        return (self.worker is not None and gid is not None and gid == self.playing_id
+                and self.play_phase in ("starting", "playing"))
+
+    def _play_button(self) -> None:
+        g = self.selected()
+        if g is not None and self._running(g.game_id) and not self.selected_folder():
+            self._stop_game()
+            return
+        self.activate_selected()
+
+    def _stop_game(self) -> None:
+        """Stop: before the game appears, stop waiting; once it runs, ask it to close like its own X button
+        (it may still ask "Quit?"). If it's still open a few seconds later, offer to force it closed."""
+        worker = self.worker
+        self.stop_pending = True
+        worker.stop_pressed.set()
+        self._update_details()
+        if self.play_phase == "playing":
+            QTimer.singleShot(STOP_PATIENCE_MS, lambda: self._still_running(worker))
+
+    def _still_running(self, worker) -> None:
+        if worker is not self.worker or self.play_phase != "playing":
+            return                                  # it closed (or a new game was started since)
+        g = self.games.get(self.playing_id)
+        force = ask_yes_no(self, tr("stop.body", title=g.title if g else ""), tr("stop.force"), tr("stop.keep"))
+        if worker is not self.worker or self.play_phase != "playing":
+            return                                  # it closed while the question was open
+        if force:
+            worker.force_close.set()
+        else:
+            self.stop_pending = False               # Stop can be pressed again
+            self._update_details()
+
     def activate_selected(self) -> None:
         """Double-click / Enter / the big button: open a folder, or play a game."""
         fid = self.selected_folder()
@@ -4064,7 +4114,7 @@ class MainWindow(TaskOwner, QMainWindow):
             states = {self.light_state(g.game_id) for g in self.folder_games.get(gid[len(FOLDER_PREFIX):], [])}
             return next((s for s in STATE_PRIORITY if s in states), "synced")
         if gid == self.playing_id:
-            return "syncing" if self.play_phase == "syncing" else "playing"
+            return self.play_phase if self.play_phase in ("syncing", "starting") else "playing"
         return self.sync_states.get(gid, "checking")
 
     # ------------------------------------------------------------------ sort / filter
@@ -4162,10 +4212,13 @@ class MainWindow(TaskOwner, QMainWindow):
 
         mine = g.paths_for(self.settings.machine_name)
         ready = bool(mine.exe)
-        self.play_btn.setText(tr("bar.playing") if g.game_id == self.playing_id else tr("bar.play"))
-        self.play_btn.setEnabled(ready and not busy)
+        running = self._running(g.game_id)
+        self.play_btn.setText(tr("bar.stop") if running else
+                              tr("bar.playing") if g.game_id == self.playing_id else tr("bar.play"))
+        self.play_btn.setEnabled((ready and not busy) or (running and not self.stop_pending))
         self.saves_btn.setEnabled(bool(mine.save_dir) and Path(mine.save_dir).is_dir())
-        self.play_btn.setToolTip(tr("bar.tip_busy") if busy else ("" if ready else tr("bar.tip_no_exe")))
+        self.play_btn.setToolTip(tr("bar.tip_stop") if running else
+                                 tr("bar.tip_busy") if busy else ("" if ready else tr("bar.tip_no_exe")))
 
     def _html_width(self, text: str) -> int:
         from PySide6.QtGui import QTextDocument
@@ -4718,6 +4771,7 @@ class MainWindow(TaskOwner, QMainWindow):
             self.edit_selected()
             return
         self.playing_id = g.game_id
+        self.stop_pending = False
         self.worker = PlayWorker(self.library.get(g.game_id) or g, self.settings, self.library, self.engine,
                                  without, watch)
         self.worker.status.connect(self._play_status)
@@ -4729,7 +4783,7 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _play_status(self, key: str) -> None:
         if key == "status.launching":
-            # the bottom bar already says "Playing Now..."; keep the status line clear while playing
+            # the bottom bar already says "Starting the Game..."; keep the status line clear while playing
             self.statusBar().clearMessage()
         else:
             self.statusBar().showMessage(tr(key))
@@ -4756,12 +4810,14 @@ class MainWindow(TaskOwner, QMainWindow):
         self.worker = None
         gid = self.playing_id
         self.playing_id = None
+        self.stop_pending = False
         self.play_phase = "done"
         game = self.library.get(gid) if gid else None
         if not r.launched:
             self.statusBar().showMessage(tr(r.message))
             self.refresh()
-            self._launch_problem(r, worker.without)
+            if r.message != "play.cancelled":          # the owner chose that: no "Can't Start" box
+                self._launch_problem(r, worker.without)
             return
         msg = tr(r.message) if r.message else ""
         self.statusBar().showMessage(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)), 15000)
@@ -4847,7 +4903,7 @@ class MainWindow(TaskOwner, QMainWindow):
         g = self.selected()
         mine = g.paths_for(self.settings.machine_name)
         a = m.addAction(tr("menu.play"), lambda: self.play_selected())
-        a.setEnabled(self.play_btn.isEnabled())
+        a.setEnabled(self.play_btn.isEnabled() and self.worker is None)
         m.addAction(tr("menu.edit"), self.edit_selected)
         sm = m.addMenu(tr("menu.status"))
         for s in STATUSES:

@@ -31,7 +31,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - `sync_engine.py`, `regsync.py` (registry export/import + safety rules), `library.py` (settings, games,
   device slots, sorting), `launcher.py` (run/watch, window titles, Luna/LE, first-play detection),
   `detect.py` (save-location detection), `luna.py`, `vndb.py`, `titles.py` (title cleaning), `lnk.py`
-  (shortcut reader; follows Luna `--Exec` shortcuts to the game), `vn.py` (small CLI).
+  (shortcut reader; follows Luna `--Exec` shortcuts to the game), `vn.py` (small CLI), `outside.py` (starts
+  every outside program: games, Luna, LE, admin prompt).
 - `assets/`: `Logo.png`, `Icon.png`, `Font.otf` (Hiragino Maru Gothic ProN W4, owner-supplied, licence is
   likely Mac-only — owner's personal use), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
@@ -200,6 +201,26 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   refresh() stores the signature after our own changes; _rebuild keeps scroll position + selection.
 - Tests: 101 (13 sync attacks, registry/damaged-file/long-title/shortcut attacks). Random UI stress test (700-800
   actions incl. 162 drags, odd search text, theme/language switches) ran clean.
+
+## Luna fix (2026-10-14)
+- In the packaged .exe, Luna quit at once (exit code 1) and the app sat in "playing" for 90 s with no way out.
+  Cause: PyInstaller's SetDllDirectory(_internal) is inherited by child programs, so Luna loaded our
+  python314.dll. `outside.popen()` / `outside.normal_dll_search()` reset it for the moment of starting (then put
+  it back) and drop _PYI*/QT_PLUGIN_PATH/QML2_IMPORT_PATH/_MEIPASS-in-PATH. Running from source is unaffected,
+  so only a packaged test shows this. Verified with a packaged probe: Luna --Exec starts 大穢 again.
+- Phase "starting" until the game appears (bottom line "Starting the Game..."), then "playing" ("Now Reading..." /
+  読書中…). Luna exiting non-zero before the game appears -> play.luna_failed at once (offers Read Without Luna).
+- Stop button (owner's request): while starting/playing the Read button says Stop (JA 終了). Before the game
+  appears = stop waiting (play.cancelled, no dialog). Once running = WM_CLOSE to the game's visible windows
+  (launcher._ask_to_close, like its X; the game may ask "Quit?"); still open after STOP_PATIENCE_MS (6 s) ->
+  "Force Close / Keep Open" (launcher._force_close = kill; Keep Open re-enables Stop). Saves sync as usual after.
+  Verified on 大穢: closes on the first request.
+- Tests: 108.
+- Wording (owner, 2026-10-14): the interface never names one cloud service; it says "a cloud service of your
+  choice" / "your cloud service's app" (guide lists Google Drive, Dropbox, OneDrive only as examples). Code that
+  handles OneDrive specifically (duplicate names, refused folders, save search) stays. Guide now also covers: what
+  to pick after a blank-save-folder first session, games that make files on install, game waits for the choice,
+  closing only uploads.
 
 ## Ideas for later (owner interested, not scheduled)
 - Theme editor (low priority): Settings → "Customise Theme..." window listing every colour in COLORS/LIGHTS

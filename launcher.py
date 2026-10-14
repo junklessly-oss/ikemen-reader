@@ -29,6 +29,7 @@ import psutil
 
 import detect
 import luna
+import outside
 from library import Game, Library, LocalSettings
 from sync_engine import Action, ConflictResolver, SyncEngine, save_folder_problem
 from titles import clean_title, usable_window_title
@@ -123,6 +124,43 @@ def _window_titles() -> dict[int, list[str]]:
     return out
 
 
+def _ask_to_close(pids) -> int:
+    """Ask these programs to close, like clicking their windows' X (the game can still ask "Quit?" and save
+    its settings). Returns how many windows were asked."""
+    if sys.platform != "win32":
+        return 0
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    pids, targets = set(pids), []
+    WM_CLOSE = 0x0010
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value in pids:
+                targets.append(hwnd)
+        return True
+
+    user32.EnumWindows(cb, 0)
+    for hwnd in targets:
+        user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+    return len(targets)
+
+
+def _force_close(pids) -> None:
+    """End these programs at once (only after the owner agreed: anything unsaved in the game is lost)."""
+    for pid in pids:
+        try:
+            psutil.Process(pid).kill()
+        except psutil.Error:
+            pass        # already gone, or not ours to end (a game running as administrator)
+
+
 class ElevationDeclined(OSError):
     """The game needs administrator rights and the owner said No to Windows' permission prompt."""
 
@@ -151,8 +189,10 @@ def _start_elevated(cmd: list[str], cwd: str) -> int:
     info.nShow = SW_SHOWNORMAL
     shell32, kernel32 = ctypes.windll.shell32, ctypes.windll.kernel32
     shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
-    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+    with outside.normal_dll_search():
+        ok = shell32.ShellExecuteExW(ctypes.byref(info))
         err = ctypes.GetLastError()
+    if not ok:
         if err == 1223:                         # ERROR_CANCELLED: the owner clicked No
             raise ElevationDeclined(err, "declined")
         raise OSError(err, "couldn't start with administrator rights", None, err)
@@ -168,7 +208,7 @@ def _start(cmd: list[str], cwd: str):
     """(Popen, pid): start normally; if Windows says the program needs administrator rights, start it
     through the permission prompt instead (then there's no Popen, only the process id)."""
     try:
-        return subprocess.Popen(cmd, cwd=cwd), None
+        return outside.popen(cmd, cwd=cwd), None
     except OSError as e:
         if getattr(e, "winerror", None) == 740 and sys.platform == "win32":
             return None, _start_elevated(cmd, cwd)
@@ -283,14 +323,20 @@ class RunInfo:
     seconds: float
     window_title: str = ""
     started: bool = True        # False if the game never appeared (e.g. Luna couldn't start it)
+    cancelled: bool = False     # the owner pressed Stop before it appeared
+    helper_failed: bool = False # the program meant to start it (Luna) quit with an error first
 
 
 def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll: float = 1.0,
-        grace: float = 2.0, startup_wait: float = 90.0, cwd: Optional[Path] = None) -> RunInfo:
+        grace: float = 2.0, startup_wait: float = 90.0, cwd: Optional[Path] = None,
+        stop: Callable[[], bool] = lambda: False, force: Callable[[], bool] = lambda: False,
+        on_found: Callable[[], None] = lambda: None) -> RunInfo:
     """Run cmd and block until the game (and anything it spawned) has finished.
     track_root=False: the started program isn't the game (Luna) - only the game folder counts,
     and we wait up to startup_wait seconds for the game to show up.
     cmd=None: start nothing, just watch a game that is already running.
+    stop() -> True (once per press of Stop): before the game appears, stop waiting; after, ask it to close.
+    force() -> True: end the game's processes at once. on_found() is called once when the game appears.
     Playtime only counts time the PC was awake (a long gap between checks = sleep/hibernate)."""
     launched_at = time.time()
     clock = _ExactClock(not_before=launched_at)          # nothing from before Play counts
@@ -325,6 +371,7 @@ def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll:
         if found:
             if first_seen is None:
                 first_seen = now
+                on_found()
             else:
                 active += min(now - prev, max(poll, 0.2) * 5 + 2)   # a big jump = the PC was asleep
             last_seen = now
@@ -336,10 +383,18 @@ def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll:
         elif first_seen is None:
             if now - start > startup_wait or not cmd:
                 return RunInfo(0, "", started=False)
+            if stop():
+                return RunInfo(0, "", started=False, cancelled=True)
+            if not track_root and proc and proc.returncode not in (None, 0):
+                return RunInfo(0, "", started=False, helper_failed=True)   # Luna crashed: don't wait 90 s
         elif now - last_seen > grace:
             break
         prev = now
         if found:
+            if force():
+                _force_close(list(found))
+            elif stop():
+                _ask_to_close(list(found))
             # while it runs: react the moment one of its processes ends (check often in the first
             # seconds: a launcher may hand over to the game very quickly)
             _wait_for_an_exit(list(found), min(poll, 0.1) if now - start < 3 else poll, clock)
@@ -410,9 +465,11 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
          status: Callable[[str], None] = print,
          poll: float = 1.0, grace: float = 2.0,
          on_phase: Callable[[str], None] = lambda phase: None,
-         without: tuple[str, ...] = (), watch: bool = False) -> PlayResult:
+         without: tuple[str, ...] = (), watch: bool = False,
+         stop: Callable[[], bool] = lambda: False, force: Callable[[], bool] = lambda: False) -> PlayResult:
     """Sync saves down, run the game (through Luna / Locale Emulator if ticked), sync saves back up,
-    record playtime and "last played". on_phase is told "syncing", "playing" and "done".
+    record playtime and "last played". on_phase is told "syncing", "starting" (waiting for the game to
+    appear), "playing" and "done". stop/force: the Stop button (see run()).
     without: launch options to skip this time ("luna", "le") after the UI asked the owner.
     If this device has no save folder yet, the game runs without syncing and the result carries
     detected save-location candidates for the owner to confirm (see finish_first_play)."""
@@ -452,20 +509,21 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
             return PlayResult(False, "play.not_launched_conflict")
 
     status("status.launching")
-    on_phase("playing")
+    on_phase("starting")
     started_at = time.time()
+    waiting = dict(stop=stop, force=force, on_found=lambda: on_phase("playing"))
     try:
         if watch:
-            info = run(None, game_dir, poll=poll, grace=grace)
+            info = run(None, game_dir, poll=poll, grace=grace, **waiting)
         elif plan["luna"] and plan["luna"][0] == "translator":
             _, lp, uid = plan["luna"]
             info = run([lp, "--Exec", uid], game_dir, track_root=False, poll=poll, grace=grace,
-                       cwd=Path(lp).parent)
+                       cwd=Path(lp).parent, **waiting)
         else:
             if plan["luna"]:
                 luna.open_alongside(plan["luna"][1])
             cmd = [plan["le"], str(exe_path)] if plan["le"] else [str(exe_path)]
-            info = run(cmd, game_dir, poll=poll, grace=grace)
+            info = run(cmd, game_dir, poll=poll, grace=grace, **waiting)
     except ElevationDeclined:
         on_phase("done")
         return PlayResult(False, "play.admin_declined")
@@ -476,6 +534,10 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
         return PlayResult(False, "play.couldnt_start")
     if not info.started:
         on_phase("done")
+        if info.cancelled:
+            return PlayResult(False, "play.cancelled")
+        if info.helper_failed:
+            return PlayResult(False, "play.luna_failed", retry_without="luna")
         return PlayResult(False, "play.never_started")
     seconds = round(info.seconds, 3)          # kept to the millisecond (shown rounded, stored exactly)
 

@@ -15,8 +15,9 @@ GUIDE = {
             "computers. Play on one, then pick up right where you left off on the other.",
         ]),
         ("Getting Started", [
-            "- Saves travel through a cloud folder, such as a folder inside OneDrive. In Settings, choose the "
-            "same cloud folder on both computers.",
+            "- Saves travel through a cloud folder: any folder that a cloud service of your choice (Google Drive, "
+            "Dropbox, OneDrive and so on) keeps in sync on both computers. In Settings, choose that same folder on "
+            "both.",
             "- In Settings, set \"This Is\" to Device 1 on one computer and Device 2 on the other.",
             "- Your games, covers, folders and reading statuses are shared through the cloud folder "
             "automatically.",
@@ -34,20 +35,29 @@ GUIDE = {
             "- You can leave the save folder empty. The first time you play, Ikemen Reader looks for where the "
             "game saves and asks you to confirm it. Just save at least once during that first session.",
             "- If you've already played it on the other device, fill in its save folder before you first read it "
-            "on this device. Otherwise Ikemen Reader doesn't yet know where to put the other device's saves, so "
-            "that first session starts without your progress (you'll then be asked which saves to keep).",
+            "on this device. Then the other device's saves are put in place before the game starts, and you carry "
+            "on where you left off. If you leave it empty, Ikemen Reader doesn't yet know where to put them, so "
+            "that first session starts without your progress. Afterwards you're asked which saves to keep: choose "
+            "the other device's to get your progress back (the saves from that first session are backed up).",
             "- Launch With Luna and Launch With Locale Emulator start the game through those programs (set their "
             "locations in Settings first).",
         ]),
         ("Playing", [
             "- Select a game and press Read (or double-click it, or press Enter).",
+            "- While the game runs, the Read button says Stop: press it to close the game, like its own X button "
+            "(the game may still ask to confirm). If it doesn't close, you can choose to force it closed.",
             "- Before the game starts, any newer saves from the other device are downloaded. When the game "
             "closes, your saves are uploaded and your playtime is updated.",
             "- It never matters which device added a game first. The first time a game syncs on a device, the "
             "other device's saves are downloaded if this one has none yet. If both have saves, you choose which "
-            "to keep; the newer ones are marked, and the others are backed up first.",
-            "- If the saves changed on both devices, you'll be asked which ones to keep. Whatever gets replaced "
-            "is backed up first.",
+            "to keep; the newer ones are marked, and the others are backed up first. (Some games create a save "
+            "or settings file as soon as they're installed or first opened, so you may be asked even on a fresh "
+            "setup. Choose the device you actually played on.)",
+            "- If the saves changed on both devices since they last synced (for example, you read on both without "
+            "syncing in between), you'll be asked which ones to keep, and the game starts once you've chosen. "
+            "Whatever gets replaced is backed up first.",
+            "- Closing a game only ever uploads. If the other device uploaded newer saves while you were reading, "
+            "you're asked which to keep instead of either being overwritten.",
             "- Right-click a game and choose Restore an Earlier Save to bring back one of the last 10 backups.",
             "- Settings can't be opened while a game is running. If you close Ikemen Reader during play, it asks "
             "first; the game keeps running, and its saves upload the next time you open Ikemen Reader.",
@@ -105,7 +115,8 @@ GUIDE = {
             "イケメンリーダーは、2台のパソコンでビジュアルノベルのセーブを同じ状態に保つライブラリです。片方のパソコンで遊んだ続きを、もう片方でそのまま楽しめます。",
         ]),
         ("最初の設定", [
-            "- セーブはクラウドフォルダー（例：OneDrive内のフォルダー）を通してやり取りされます。設定で、両方のパソコンに同じクラウドフォルダーを選んでください。",
+            "- セーブはクラウドフォルダーを通してやり取りされます。お好みのクラウドサービス（Googleドライブ、Dropbox、OneDriveなど）で両方のパソコンに同期されているフォルダーなら、どれでも使えます。"
+            "設定で、両方のパソコンに同じフォルダーを選んでください。",
             "- 設定の「この端末は」で、片方を端末1、もう片方を端末2にしてください。",
             "- ゲーム・カバー画像・フォルダー・プレイ状況は、クラウドフォルダーを通して自動で共有されます。",
             "- 両方の端末で開いている場合、もう一方の端末での変更（ゲームの追加、カバー画像、フォルダー、新しいセーブ）は、クラウドフォルダーの同期が終わってから数秒で自動的に反映されます。",
@@ -117,16 +128,22 @@ GUIDE = {
             "カバーはドラッグとスクロールで切り抜けます。",
             "- 「この端末」には、今使っているパソコンでの .exe とセーブフォルダーを入力します。「もう一方の端末」は灰色で表示され、もう一方のパソコンで入力します。",
             "- セーブフォルダーは空欄のままでも大丈夫です。初めてプレイしたときに、セーブの場所を自動で探して確認を求めます。最初のプレイ中に、一度はセーブしてください。",
-            "- もう一方の端末ですでにプレイしているゲームは、ここで初めて読む前に、この端末のセーブフォルダーを入力してください。入力しないと、もう一方の端末のセーブをどこに置けばよいか分からないため、"
-            "最初のプレイは進行状況なしで始まります（そのあと、どちらのセーブを残すか尋ねます）。",
+            "- もう一方の端末ですでにプレイしているゲームは、ここで初めて読む前に、この端末のセーブフォルダーを入力してください。そうすれば、起動前にもう一方の端末のセーブが配置され、続きから遊べます。"
+            "空欄のままにすると、セーブをどこに置けばよいか分からないため、最初のプレイは進行状況なしで始まります。そのあと、どちらのセーブを残すか尋ねられたら、"
+            "もう一方の端末のセーブを選ぶと進行状況が戻ります（最初のプレイのセーブはバックアップされます）。",
             "- 「Lunaで起動」「Locale Emulatorで起動」を使うと、それぞれのプログラムを通してゲームを起動します（先に設定で場所を指定してください）。",
         ]),
         ("プレイ", [
             "- ゲームを選んで「読む」を押します（ダブルクリックやEnterキーでも起動できます）。",
+            "- ゲームの実行中、「読む」ボタンは「終了」になります。押すと、ゲームの×ボタンと同じようにゲームを閉じます（ゲーム側で確認が表示される場合があります）。"
+            "閉じない場合は、強制終了を選べます。",
             "- 起動前に、もう一方の端末の新しいセーブがあればダウンロードします。ゲームを終了すると、セーブをアップロードしてプレイ時間を記録します。",
             "- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
-            "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。",
-            "- 両方の端末でセーブが変更されていた場合は、どちらを残すか尋ねます。置き換えられる方は先にバックアップされます。",
+            "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"
+            "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。）",
+            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。選ぶとゲームが起動します。"
+            "置き換えられる方は先にバックアップされます。",
+            "- ゲームを終了したときは、アップロードだけを行います。読んでいる間にもう一方の端末が新しいセーブをアップロードしていた場合は、どちらかを上書きせずに、どちらを残すか尋ねます。",
             "- ゲームを右クリックして「以前のセーブを復元」を選ぶと、直近10件のバックアップから戻せます。",
             "- ゲームの実行中は設定を開けません。プレイ中にイケメンリーダーを閉じようとすると、確認が表示されます。ゲームはそのまま動き続け、セーブは次にイケメンリーダーを起動したときにアップロードされます。",
         ]),

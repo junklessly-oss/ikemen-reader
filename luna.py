@@ -20,6 +20,8 @@ from typing import Optional
 
 import psutil
 
+import outside
+
 
 def kind(luna_exe: str) -> str:
     """"translator" (can launch games itself) or "hook" (open alongside)."""
@@ -95,9 +97,9 @@ def running(luna_exe: str) -> bool:
 
 
 def launch_game(luna_exe: str, uid: str) -> subprocess.Popen:
-    return subprocess.Popen([luna_exe, "--Exec", uid], cwd=os.path.dirname(luna_exe))
+    return outside.popen([luna_exe, "--Exec", uid], cwd=os.path.dirname(luna_exe))
 
 
 def open_alongside(luna_exe: str) -> None:
     if not running(luna_exe):
-        subprocess.Popen([luna_exe], cwd=os.path.dirname(luna_exe))
+        outside.popen([luna_exe], cwd=os.path.dirname(luna_exe))

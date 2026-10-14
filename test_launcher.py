@@ -1,4 +1,5 @@
 """Run with:  py -m unittest -v   (uses fake games)"""
+import os
 import shutil
 import subprocess
 import sys
@@ -6,8 +7,10 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from launcher import play, run_game
+import outside
+from launcher import play, run, run_game
 from library import Library, LocalSettings, MachinePaths, load_local_settings
 from sync_engine import SyncEngine
 
@@ -150,6 +153,90 @@ class RunGameTests(unittest.TestCase):
             f'"{self.folder.runtime}" ./realgame &\nexit 0\n')
         t = run_game(exe, runtime, poll=0.1, grace=0.3)
         self.assertGreaterEqual(t, 2.5)
+
+    def test_luna_crashing_before_the_game_appears_stops_the_wait_at_once(self):
+        # stand-in for Luna: a program outside the game folder that quits with an error
+        t0 = time.monotonic()
+        info = run([sys.executable, "-c", "import sys; sys.exit(1)"], self.folder.dir, track_root=False, poll=0.1)
+        self.assertFalse(info.started)
+        self.assertTrue(info.helper_failed)
+        self.assertLess(time.monotonic() - t0, 5)
+
+    def test_stop_before_the_game_appears_stops_waiting(self):
+        t0 = time.monotonic()
+        info = run([sys.executable, "-c", "import time; time.sleep(4)"], self.folder.dir, track_root=False,
+                   poll=0.1, stop=lambda: time.monotonic() - t0 > 0.5)
+        self.assertFalse(info.started)
+        self.assertTrue(info.cancelled)
+        self.assertLess(time.monotonic() - t0, 3)
+
+    @staticmethod
+    def _press_once(after: float):
+        """A Stop button pressed once, `after` seconds from now."""
+        t0, pressed = time.monotonic(), []
+
+        def stop():
+            if not pressed and time.monotonic() - t0 > after:
+                pressed.append(1)
+                return True
+            return False
+        return stop
+
+    @unittest.skipUnless(IS_WINDOWS, "closing a game's window")
+    def test_stop_closes_the_game_like_its_x_button(self):
+        exe, runtime = self.folder.game(
+            "windowed", "import tkinter\nr = tkinter.Tk()\nr.title('Fake VN')\nr.after(20000, r.destroy)\nr.mainloop()\n", "")
+        t0 = time.monotonic()
+        info = run([runtime, exe], self.folder.dir, poll=0.1, grace=0.3, stop=self._press_once(2.5))
+        self.assertTrue(info.started)
+        self.assertLess(time.monotonic() - t0, 10)          # closed on request, not after 20 s
+
+    def test_force_close_ends_a_game_that_ignores_stop(self):
+        exe, runtime = self.folder.game("stubborn", "import time; time.sleep(30)", "sleep 30")
+        t0 = time.monotonic()
+        info = run([runtime, exe], self.folder.dir, poll=0.1, grace=0.3,
+                   stop=self._press_once(1), force=self._press_once(2))
+        self.assertTrue(info.started)
+        self.assertLess(time.monotonic() - t0, 10)
+
+    def test_told_once_when_the_game_appears(self):
+        exe, runtime = self.folder.game("game2", "import time; time.sleep(1)", "sleep 1")
+        seen = []
+        info = run([runtime, exe], self.folder.dir, poll=0.1, grace=0.3, on_found=lambda: seen.append(1))
+        self.assertTrue(info.started)
+        self.assertEqual(seen, [1])
+
+
+class OutsideProgramTests(unittest.TestCase):
+    """The packaged app must not hand its own DLL folder / Qt settings to Luna or games (Luna quit at once)."""
+
+    def test_environment_drops_the_packaged_apps_own_settings(self):
+        fake_own = str(Path(tempfile.gettempdir()) / "IkemenReader_internal")
+        env = {"_PYI_ARCHIVE_FILE": "x", "_PYI_PARENT_PROCESS_LEVEL": "1", "QT_PLUGIN_PATH": "x",
+               "QML2_IMPORT_PATH": "x", "PATH": fake_own + os.pathsep + r"C:\Windows", "KEEP": "me"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(sys, "_MEIPASS", fake_own, create=True):
+            out = outside.environment(frozen=True)
+        self.assertEqual({k.upper(): v for k, v in out.items()}, {"PATH": r"C:\Windows", "KEEP": "me"})
+        self.assertIsNone(outside.environment(frozen=False))     # running from source: inherit as is
+
+    @unittest.skipUnless(IS_WINDOWS, "Windows' DLL search folder")
+    def test_dll_folder_is_normal_while_starting_and_ours_again_after(self):
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32")
+        k32.GetDllDirectoryW.argtypes = [ctypes.c_ulong, ctypes.c_wchar_p]
+        k32.SetDllDirectoryW.argtypes = [ctypes.c_wchar_p]
+
+        def current():
+            buf = ctypes.create_unicode_buffer(1024)
+            return buf.value if k32.GetDllDirectoryW(len(buf), buf) else ""
+        own = tempfile.gettempdir()
+        k32.SetDllDirectoryW(own)
+        try:
+            with outside.normal_dll_search(frozen=True):
+                self.assertEqual(current(), "")
+            self.assertEqual(current(), own)
+        finally:
+            k32.SetDllDirectoryW(None)
 
 
 class PlayFlowTests(unittest.TestCase):

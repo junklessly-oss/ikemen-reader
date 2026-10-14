@@ -40,14 +40,23 @@ S: dict[str, tuple[str, str]] = {
     # ------------------------------------------------------------------ grid / bottom bar
     "grid.empty":               ("No games yet. Drag a game's .exe here, or click \"Add Game\".",
                                  "ゲームがまだありません。ゲームの .exe をここにドラッグするか、「ゲームを追加」をクリックしてください。"),
-    "grid.no_cloud":            ("The cloud folder can't be found:\n{path}\n\nIs OneDrive (or your sync app) running? "
+    "grid.no_cloud":            ("The cloud folder can't be found:\n{path}\n\nIs your cloud service's app running? "
                                  "You can change the folder in Settings.",
-                                 "クラウドフォルダーが見つかりません：\n{path}\n\nOneDrive（または同期アプリ）は起動していますか？"
+                                 "クラウドフォルダーが見つかりません：\n{path}\n\nクラウドサービスのアプリは起動していますか？"
                                  "フォルダーは設定で変更できます。"),
     "grid.drop_hint":           ("Drop to add", "ドロップして追加"),
     "card.never":               ("Never Played", "未プレイ"),
     "bar.play":                 ("Read", "読む"),
     "bar.playing":              ("Now Reading", "読書中"),
+    "bar.stop":                 ("Stop", "終了"),
+    "bar.tip_stop":             ("Close the game (it may ask to confirm in its own window)",
+                                 "ゲームを終了します（ゲーム側で確認が表示される場合があります）"),
+    "stop.body":                ("{title} is still open. It may be asking something in its own window. "
+                                 "Force it to close? Anything not saved in the game will be lost.",
+                                 "{title} はまだ開いています。ゲームの画面で確認が表示されているかもしれません。"
+                                 "強制終了しますか？ゲーム内で保存していない内容は失われます。"),
+    "stop.force":               ("Force Close", "強制終了"),
+    "stop.keep":                ("Keep Open", "開いたままにする"),
     "bar.played":               ("Played: {time}", "プレイ時間：{time}"),
     "bar.last_played":          ("Last Played: {date}", "最終プレイ：{date}"),
     "bar.edit":                 ("Edit", "編集"),
@@ -74,8 +83,9 @@ S: dict[str, tuple[str, str]] = {
     "sync.tip.detect":          ('Ikemen Reader finds the save location automatically while you play. Just save at least once.',
                                  'プレイ中にセーブの場所を自動で見つけます。プレイ中に一度はセーブしてください。'),
     "sync.state.checking":      ("Checking Saves...", "セーブを確認中…"),
-    "sync.state.playing":       ('Now Playing...',
-                                 'プレイ中…'),
+    "sync.state.playing":       ('Now Reading...',
+                                 '読書中…'),
+    "sync.state.starting":      ("Starting the Game...", "ゲームを起動中…"),
     "sync.tip.playing":         ("Saves will upload when the game closes.",
                                  "ゲームを終了するとセーブがアップロードされます。"),
 
@@ -115,6 +125,10 @@ S: dict[str, tuple[str, str]] = {
                                  "Nothing was changed.",
                                  "このゲームには管理者権限が必要ですが、許可されなかったため起動しませんでした。何も変更されていません。"),
     "play.couldnt_start":       ("The game couldn't be started.", "ゲームを起動できませんでした。"),
+    "play.cancelled":           ("Stopped waiting for the game. If it opens later, press Read and choose Wait for It to Close.",
+                                 "ゲームの起動を待つのをやめました。あとでゲームが開いた場合は、「読む」を押して「終了まで待つ」を選んでください。"),
+    "play.luna_failed":         ("Luna closed before the game started. Try starting the game from Luna itself to see what's wrong, or read without Luna.",
+                                 "ゲームが起動する前にLunaが終了しました。Luna から直接ゲームを起動して原因を確認するか、Lunaなしで読んでください。"),
     "play.never_started":       ("The game didn't start. If Luna shows an error, please check it there.",
                                  'ゲームが起動しませんでした。Lunaにエラーが表示されている場合は、そちらを確認してください。'),
     "play.not_launched_conflict":("The game wasn't started because the saves differ between the two devices. Please choose which ones to keep first.",
@@ -226,9 +240,9 @@ S: dict[str, tuple[str, str]] = {
     "error.save_shared":        ('"{title}" already uses this save folder on This Device. If two games sync the same folder, they can overwrite each other\'s saves. Use it anyway?',
                                  'このセーブフォルダーは、この端末ですでに「{title}」が使っています。2つのゲームで同じフォルダーを同期すると、お互いのセーブを上書きしてしまう恐れがあります。それでも使いますか？'),
     "error.cloud_write":        ("Couldn't finish that because a file is in use or the cloud folder isn't available right now. "
-                                 "Nothing was lost. Please check that OneDrive (or your sync app) is running, then try again.",
+                                 "Nothing was lost. Please check that your cloud service's app is running, then try again.",
                                  "ファイルが使用中か、クラウドフォルダーが現在使用できないため、完了できませんでした。何も失われていません。"
-                                 "OneDrive（または同期アプリ）が起動しているか確認してから、もう一度お試しください。"),
+                                 "クラウドサービスのアプリが起動しているか確認してから、もう一度お試しください。"),
     "error.game_gone":          ("This game is no longer in the library. It may have just been removed on the other device.",
                                  "このゲームはライブラリにありません。もう一方の端末で削除された可能性があります。"),
     "error.unexpected":         ("Something unexpected went wrong, but nothing was lost. The details were saved to:\n{path}",
@@ -370,8 +384,9 @@ S: dict[str, tuple[str, str]] = {
                                  '端末{n}はすでに別のパソコン（{computer}）で使われています。端末{other}に変更しますか？'),
     "settings.device_taken_keep": ("Use Device {n} Anyway", "このまま端末{n}を使う"),
     "settings.cloud":           ("Cloud Folder", "クラウドフォルダー"),
-    "settings.cloud_hint":      ('A folder inside OneDrive, Google Drive or Dropbox. Choose the same folder on both devices.',
-                                 'OneDrive・Googleドライブ・Dropbox内のフォルダーです。両方の端末で同じフォルダーを選んでください。'),
+    "settings.cloud_hint":      ('Any folder that a cloud service of your choice keeps in sync. Choose the same folder on both devices.',
+                                 'お好みのクラウドサービスで同期されるフォルダーなら、どれでも使えます。両方の端末で同じフォルダーを選んでください。'),
+    "settings.cloud_placeholder": ("A folder synced by your cloud service", "クラウドサービスで同期されるフォルダー"),
     "settings.le":              ("Locale Emulator (Optional)", "Locale Emulator（任意）"),
     "settings.le_placeholder":  ("LEProc.exe on This Device", "この端末の LEProc.exe"),
     "settings.luna":            ("Luna (Optional)", "Luna（任意）"),
