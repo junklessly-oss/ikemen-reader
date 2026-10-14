@@ -1,0 +1,8 @@
+# Python's cache files
+__pycache__/
+*.pyc
+# PyInstaller's build output (the packaged program is rebuilt from the code)
+build/
+dist/
+# temporary files
+*.tmp
