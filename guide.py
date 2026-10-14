@@ -46,6 +46,8 @@ GUIDE = {
             "- Select a game and press Read (or double-click it, or press Enter).",
             "- While the game runs, the Read button says Stop: press it to close the game, like its own X button "
             "(the game may still ask to confirm). If it doesn't close, you can choose to force it closed.",
+            "- You can browse other games while reading: selecting one shows its details at the bottom. Click an "
+            "empty space (or the game you're reading) to bring back Now Reading and Stop.",
             "- Before the game starts, any newer saves from the other device are downloaded. When the game "
             "closes, your saves are uploaded and your playtime is updated.",
             "- It never matters which device added a game first. The first time a game syncs on a device, the "
@@ -137,6 +139,7 @@ GUIDE = {
             "- ゲームを選んで「読む」を押します（ダブルクリックやEnterキーでも起動できます）。",
             "- ゲームの実行中、「読む」ボタンは「終了」になります。押すと、ゲームの×ボタンと同じようにゲームを閉じます（ゲーム側で確認が表示される場合があります）。"
             "閉じない場合は、強制終了を選べます。",
+            "- 読んでいる間も、ほかのゲームを選ぶと下部にその情報が表示されます。空いている場所（または読んでいるゲーム）をクリックすると、「読書中」と「終了」ボタンに戻ります。",
             "- 起動前に、もう一方の端末の新しいセーブがあればダウンロードします。ゲームを終了すると、セーブをアップロードしてプレイ時間を記録します。",
             "- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
             "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"

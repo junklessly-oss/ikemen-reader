@@ -917,7 +917,8 @@ class LiveRefresh(unittest.TestCase):
 
 
 class BottomBarWhilePlaying(unittest.TestCase):
-    """While a game runs, the bottom bar stays on it: clicking elsewhere must not hide Stop."""
+    """While a game runs: selecting another game shows that game; selecting nothing (or the running game)
+    shows the running one with Stop."""
 
     def test_stop_stays_when_clicking_elsewhere(self):
         import threading
@@ -953,9 +954,16 @@ class BottomBarWhilePlaying(unittest.TestCase):
                     if w.grid.item(i).data(app.GAME_ID_ROLE) == other.game_id:
                         w.grid.setCurrentItem(w.grid.item(i))
                 self.assertEqual(w.selected_id(), other.game_id)
+                self.assertEqual(bar(), ("Something Else", "Read", False))  # its own details; Read waits
+                w.play_btn.click()
+                self.assertFalse(w.worker.stop_pressed.is_set())
+                w.clear_selection()                                         # click off again
                 self.assertEqual(bar(), ("Reading Now", "Stop", True))
                 w.play_btn.click()                                          # Stop acts on the running game
                 self.assertTrue(w.worker.stop_pressed.is_set())
+                for i in range(w.grid.count()):                             # select the other game again
+                    if w.grid.item(i).data(app.GAME_ID_ROLE) == other.game_id:
+                        w.grid.setCurrentItem(w.grid.item(i))
                 w.worker, w.playing_id, w.play_phase = None, None, "done"   # it closed
                 w._update_details()
                 self.assertEqual(bar(), ("Something Else", "Read", True))  # back to the selection

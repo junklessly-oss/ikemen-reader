@@ -4041,14 +4041,15 @@ class MainWindow(TaskOwner, QMainWindow):
         return self.games.get(self.selected_id() or "")
 
     def bar_game(self) -> Optional[Game]:
-        """The game the bottom bar shows and acts on: while a game runs, always that one (so Stop never
-        disappears when you click elsewhere); otherwise the selected game."""
-        if self.worker is not None and self.playing_id in self.games:
+        """The game the bottom bar shows and acts on: the selected one; but while a game runs and nothing
+        (or that game) is selected, the running game - so Now Reading and Stop come back by clicking off."""
+        if self._bar_shows_running():
             return self.games[self.playing_id]
         return self.selected()
 
     def _bar_shows_running(self) -> bool:
-        return self.worker is not None and self.playing_id in self.games
+        return (self.worker is not None and self.playing_id in self.games
+                and self.selected_id() in (None, self.playing_id))
 
     def open_folder(self, fid: str) -> None:
         self.current_folder = fid

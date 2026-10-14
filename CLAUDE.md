@@ -215,7 +215,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   (launcher._ask_to_close, like its X; the game may ask "Quit?"); still open after STOP_PATIENCE_MS (6 s) ->
   "Force Close / Keep Open" (launcher._force_close = kill; Keep Open re-enables Stop). Saves sync as usual after.
   Verified on 大穢: closes on the first request.
-- Tests: 108.
+- Bottom bar while a game runs (MainWindow.bar_game / _bar_shows_running): nothing or the running game selected
+  -> running game (Now Reading, Stop); another game selected -> that game (Read greyed, "Another game is running");
+  bar buttons act on bar_game(). test_features.BottomBarWhilePlaying.
+- Tests: 109.
 - Wording (owner, 2026-10-14): the interface never names one cloud service; it says "a cloud service of your
   choice" / "your cloud service's app" (guide lists Google Drive, Dropbox, OneDrive only as examples). Code that
   handles OneDrive specifically (duplicate names, refused folders, save search) stays. Guide now also covers: what
