@@ -970,3 +970,118 @@ class BottomBarWhilePlaying(unittest.TestCase):
             finally:
                 w.worker = None
                 w.close()
+
+
+class SaveFolderSuggestions(unittest.TestCase):
+    """Adding a game: its save folder is suggested straight away when it can be known without a session."""
+
+    def setUp(self):
+        import detect
+        self.detect = detect
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.appdata = self.root / "AppData" / "Roaming"
+        self.appdata.mkdir(parents=True)
+        self.game = self.root / "D" / "Slow Damage JP" / "スロウ・ダメージ"
+        self.game.mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def suggest(self, other=None, names=("スロウ・ダメージ", "slowdamage"), usable=lambda p: True):
+        return self.detect.suggest_save_folder(str(self.game), list(names), other, usable,
+                                               home=self.root, roots=[self.game, self.appdata])
+
+    def test_other_devices_folder_under_this_users_profile(self):
+        s = self.suggest((r"C:\Users\doge_\VN\slowdamage.exe",
+                          r"C:\Users\doge_\AppData\Roaming\NITRO CHiRAL\slowdamage 普及版\1.10"))
+        self.assertEqual((s.path, s.reason),
+                         (str(self.appdata / "NITRO CHiRAL" / "slowdamage 普及版" / "1.10"), "other_device"))
+
+    def test_other_devices_folder_inside_its_game_folder(self):
+        s = self.suggest((r"C:\Users\doge_\BL\Ooe\大穢.exe", r"C:\Users\doge_\BL\Ooe\savedata"))
+        self.assertEqual(s.path, str(self.game / "savedata"))       # this device's game folder, not C:\Users\...
+
+    def test_other_devices_exact_path_outside_any_profile(self):
+        s = self.suggest((r"E:\VN\game.exe", r"C:\ProgramData\Maker\Saves"))
+        self.assertEqual(s.path, r"C:\ProgramData\Maker\Saves")
+
+    def test_existing_folder_named_after_the_game(self):
+        saves = self.appdata / "NITRO CHiRAL" / "slowdamage 普及版" / "1.10"
+        (saves / "0001").mkdir(parents=True)
+        (saves / "system.dat").write_bytes(b"x")
+        s = self.suggest()
+        self.assertEqual((s.path, s.reason), (str(saves), "existing"))   # down to 1.10, like the other device
+
+    def test_save_folder_inside_the_game_folder(self):
+        (self.game / "savedata").mkdir()
+        (self.game / "savedata" / "save01.dat").write_bytes(b"x")
+        self.assertEqual(self.suggest().path, str(self.game / "savedata"))
+
+    def test_generic_exe_names_and_empty_folders_suggest_nothing(self):
+        (self.appdata / "Start Menu").mkdir()
+        (self.appdata / "Start Menu" / "x.lnk").write_bytes(b"x")
+        (self.appdata / "スロウ・ダメージ").mkdir()                      # named after it, but empty
+        self.assertIsNone(self.suggest(names=("Start",)))
+        self.assertIsNone(self.suggest())
+
+    def test_unsafe_places_are_never_suggested(self):
+        self.assertIsNone(self.suggest((r"C:\Users\doge_\VN\game.exe", r"C:\Users\doge_\Documents"),
+                                       usable=lambda p: False))
+
+
+class SaveFolderSuggestionsInTheWindow(unittest.TestCase):
+    def _wait(self, cond, seconds=10):
+        from PySide6.QtWidgets import QApplication
+        end = time.time() + seconds
+        while time.time() < end and not cond():
+            QApplication.processEvents()
+            time.sleep(0.02)
+        return cond()
+
+    def test_game_window_and_read_button(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            import i18n
+            from library import Library
+            QApplication.instance() or QApplication([])
+            i18n.set_language("en")
+            tmp = Path(tmp)
+            cloud = tmp / "cloud"
+            cloud.mkdir()
+            game_dir = tmp / "games" / "Ooe"
+            game_dir.mkdir(parents=True)
+            exe = game_dir / "ooe.exe"
+            exe.write_bytes(b"")
+            lib = Library(cloud)
+            g = lib.add_game("大穢", "Laptop", exe=r"C:\Users\doge_\BL\Ooe\ooe.exe", save_dir=r"C:\Users\doge_\BL\Ooe\savedata")
+            lib.set_paths(g.game_id, "PC", exe=str(exe))
+            settings = LocalSettings("PC", str(cloud))
+            want = str(game_dir / "savedata")
+
+            # the game window fills in the other device's location, translated to this device
+            d = app.GameDialog(lib, settings, lib.get(g.game_id))
+            save_e = d.fields["PC"][1]
+            self.assertTrue(self._wait(lambda: save_e.text() == want))
+            self.assertIn("other device", d.save_hint.text())
+            d.reject()
+
+            # Read with no save folder: offered first; "Use This Folder" saves it, then the game starts
+            w = app.MainWindow(settings)
+            started = []
+            fake = mock.MagicMock()
+            fake.return_value.start.side_effect = lambda: started.append(True)
+            try:
+                w.refresh()
+                with mock.patch.object(app, "message", return_value="use") as asked, \
+                        mock.patch.object(app, "PlayWorker", fake):
+                    w.play_selected(gid=g.game_id)
+                    self.assertTrue(self._wait(lambda: started))
+                self.assertIn(want, asked.call_args[0][1])
+                self.assertEqual(lib.get(g.game_id).paths_for("PC").save_dir, want)
+            finally:
+                w.worker = None
+                w.close()

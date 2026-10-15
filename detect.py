@@ -176,6 +176,172 @@ def find_folders(game_dir: str, since: float, names: list[str], skip: Iterable[s
     return sorted(out, key=lambda c: c.score, reverse=True)[:5]
 
 
+# --------------------------------------------------------------------------- before the first session
+# When a game is added, its save folder can often be found straight away - no session needed: the other
+# device already knows it (same place, other user name / game folder), or the game was played here before
+# and its save folder exists. Only a suggestion: the owner sees it in the game window and saves it.
+
+# .exe / folder names too generic to recognise a game's folders by ("Start.exe" must not match "Start Menu")
+_GENERIC = {"start", "launcher", "launch", "game", "setup", "config", "play", "main", "bgi", "system", "data",
+            "update", "patch", "program", "app", "siglusengine", "nscripter", "kirikiri", "krkr", "tyrano",
+            "renpy", "player", "visual", "novel", "novels", "users", "documents", "games", "install", "runtime"}
+_PROFILE = re.compile(r"^[a-z]:\\users\\[^\\]+\\(.+)$", re.IGNORECASE)
+
+
+@dataclass
+class Suggestion:
+    path: str
+    reason: str               # "other_device" / "existing"
+
+
+def _under(path: str, folder: str) -> Optional[str]:
+    """path relative to folder, or None if it isn't inside it."""
+    p, f = os.path.normcase(os.path.normpath(path)), os.path.normcase(os.path.normpath(folder)).rstrip("\\/")
+    if p.startswith(f + os.sep):
+        return os.path.normpath(path)[len(f) + 1:]
+    return None
+
+
+def from_other_device(game_dir: str, other_exe: str, other_save: str, home: Optional[Path] = None) -> list[Path]:
+    """Where the other device's save folder would be on this device, most likely first: the same place
+    inside this device's game folder; the same place in this user's profile (C:\\Users\\<other name>\\...
+    -> this user); the very same path (e.g. C:\\ProgramData\\..., D:\\Saves\\...)."""
+    if not other_save.strip():
+        return []
+    home = home or Path.home()
+    out: list[Path] = []
+    if other_exe.strip():
+        rel = _under(other_save, os.path.dirname(os.path.normpath(other_exe)))
+        if rel is not None:
+            out.append(Path(game_dir) / rel)
+    m = _PROFILE.match(os.path.normpath(other_save))
+    if m:
+        out.append(home / m.group(1))
+    elif not out:
+        out.append(Path(os.path.normpath(other_save)))
+    return out
+
+
+def _name_tokens(names: Iterable[str]) -> set[str]:
+    return {t for t in _tokens(*names) if t not in _GENERIC and (len(t) >= 4 or not t.isascii())}
+
+
+def _has_files(folder: Path, limit: int = 2000) -> bool:
+    stack, seen = [folder], 0
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    seen += 1
+                    if seen > limit:
+                        return False
+                    if e.is_file(follow_symlinks=False):
+                        return True
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(Path(e.path))
+        except OSError:
+            continue
+    return False
+
+
+def _settle(folder: Path) -> Path:
+    """Go down through folders that hold nothing but one sub-folder (Maker\\Game\\1.10 -> 1.10)."""
+    for _ in range(4):
+        try:
+            entries = list(os.scandir(folder))
+        except OSError:
+            return folder
+        if len(entries) == 1 and entries[0].is_dir(follow_symlinks=False):
+            folder = Path(entries[0].path)
+        else:
+            return folder
+    return folder
+
+
+def _newest(folder: Path, limit: int = 2000) -> float:
+    newest, stack, seen = 0.0, [folder], 0
+    while stack and seen < limit:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    seen += 1
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(Path(e.path))
+                        else:
+                            newest = max(newest, e.stat(follow_symlinks=False).st_mtime)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return newest
+
+
+def existing_save_folders(game_dir: str, names: Iterable[str], skip: Iterable[str] = (),
+                          roots: Optional[list[Path]] = None) -> list[Path]:
+    """Save folders that already exist, best first: a save-named folder inside the game folder, then
+    folders named after the game in the usual save places (AppData, Documents, Saved Games...)."""
+    tokens = _name_tokens(names)
+    skip_n = {os.path.normcase(os.path.abspath(s)) for s in skip if s}
+    game_dir_n = os.path.normcase(os.path.abspath(game_dir))
+    roots = roots if roots is not None else default_roots(game_dir)
+    inside, named = [], []
+    for root in roots:
+        is_game = os.path.normcase(os.path.abspath(root)) == game_dir_n
+        level = [Path(root)]
+        for depth in range(2 if is_game else 3):
+            nxt = []
+            for d in level:
+                try:
+                    entries = [e for e in os.scandir(d) if e.is_dir(follow_symlinks=False)]
+                except OSError:
+                    continue
+                for e in entries:
+                    n = os.path.normcase(e.path)
+                    if e.name.casefold() in _NOISE_DIRS or n in skip_n or (not is_game and n == game_dir_n):
+                        continue
+                    if is_game:
+                        if any(w in e.name.casefold() for w in _SAVE_WORDS) and _has_files(Path(e.path)):
+                            inside.append(Path(e.path))
+                            continue
+                    else:
+                        flat = re.sub(r"[\s\-_・]", "", unicodedata.normalize("NFKC", e.name).casefold())
+                        if tokens and any(t in flat for t in tokens) and _has_files(Path(e.path)):
+                            named.append(_settle(Path(e.path)))
+                            continue
+                    nxt.append(Path(e.path))
+            level = nxt
+    named.sort(key=_newest, reverse=True)            # several (e.g. two editions): the one used last
+    seen, out = set(), []
+    for p in inside + named:
+        k = os.path.normcase(str(p))
+        if k not in seen:
+            seen.add(k)
+            out.append(p)
+    return out
+
+
+def suggest_save_folder(game_dir: str, names: Iterable[str], other: Optional[tuple[str, str]] = None,
+                        usable=lambda p: True, skip: Iterable[str] = (), home: Optional[Path] = None,
+                        roots: Optional[list[Path]] = None) -> Optional[Suggestion]:
+    """The save folder to suggest for a game on this device, or None. other = (exe, save folder) on the
+    other device. usable(path) -> False for folders that may not be synced (see save_folder_problem).
+    The other device's location wins (both devices must sync the same folder level); a translated path
+    that exists here comes first, but one that doesn't exist yet is still right for a game never run here
+    (the first sync creates it with the other device's saves)."""
+    if other:
+        places = [p for p in from_other_device(game_dir, other[0], other[1], home) if usable(p)]
+        for p in places:
+            if p.is_dir():
+                return Suggestion(str(p), "other_device")
+        if places:
+            return Suggestion(str(places[0]), "other_device")
+    for p in existing_save_folders(game_dir, names, skip, roots):
+        if usable(p):
+            return Suggestion(str(p), "existing")
+    return None
+
+
 def find_registry(since: float, names: list[str]) -> list[Candidate]:
     """HKCU\\Software\\<Maker>\\<Game> keys written since `since` that are named after the game."""
     if sys.platform != "win32":

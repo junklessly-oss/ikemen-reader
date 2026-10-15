@@ -41,6 +41,7 @@ import luna
 import regsync
 import vndb
 from i18n import tr
+import detect
 from launcher import PlayResult, finish_first_play, play, warm_up
 from library import (SLOT_NUMBER, SLOTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
                      default_app_dir, load_local_settings, other_slot, save_local_settings,
@@ -631,6 +632,19 @@ QSlider::handle:horizontal {{ background: {c['select']}; width: 14px; height: 14
 QToolTip {{ background: {c['input']}; color: {c['text']}; border: 1px solid {c['border']}; padding: 4px; }}
 QMessageBox QLabel {{ min-width: 320px; }}
 """
+
+
+def suggest_save(settings: LocalSettings, exe: str, title: str,
+                 other: Optional[tuple[str, str]]) -> Optional[detect.Suggestion]:
+    """Where this game probably saves on This Device (see detect.suggest_save_folder). Slow-ish: run it
+    in the background."""
+    if not exe.strip():
+        return None
+    game_dir = str(Path(exe).parent)
+    skip = [settings.cloud_root, str(default_app_dir())] + [str(Path(p).parent) for p in (settings.luna_path, settings.le_path) if p]
+    usable = lambda p: save_folder_problem(str(p), settings.cloud_root) is None and not any(
+        os.path.normcase(str(p)).startswith(os.path.normcase(s)) for s in skip if s)
+    return detect.suggest_save_folder(game_dir, [title, Path(exe).stem, Path(game_dir).name], other, usable, skip)
 
 
 def open_folder(path: str) -> None:
@@ -3116,6 +3130,11 @@ class GameDialog(TaskOwner, QDialog):
                 bs.clicked.connect(lambda _=False, s=save_e: self._pick_save(s))
                 g.addWidget(be, 0, 2)
                 g.addWidget(bs, 1, 2)
+                self.save_hint = hint("")               # "Suggested: ..." under the save folder
+                self.save_hint.hide()
+                g.addWidget(self.save_hint, 2, 1)
+                save_e.textEdited.connect(lambda _t: self.save_hint.hide())
+                exe_e.editingFinished.connect(self._suggest_save)
             else:
                 for e in (exe_e, save_e):
                     e.setProperty("secondary", True)
@@ -3149,6 +3168,27 @@ class GameDialog(TaskOwner, QDialog):
         # adding with "fetch covers from VNDB" on: look it up straight away
         if not game and settings.vndb and self.title.text().strip():
             self._auto_vndb(self.title.text().strip())
+        self._suggest_save()
+
+    # -- save folder
+    def _suggest_save(self):
+        """Save folder still empty: look for where this game saves (the other device's location, or an
+        existing save folder) and fill it in as a suggestion; the owner checks it and saves."""
+        exe_e, save_e = self.fields[self.machine]
+        exe = exe_e.text().strip()
+        if save_e.text().strip() or not exe:
+            return
+        o = self.game.paths_for(other_slot(self.machine)) if self.game else None
+        other = (o.exe, o.save_dir) if o and o.save_dir else None
+        title = self.title.text().strip()
+
+        def done(s):
+            if s is None or save_e.text().strip() or exe_e.text().strip() != exe:
+                return                              # nothing found, or the owner changed things meanwhile
+            save_e.setText(s.path)
+            self.save_hint.setText(tr("game.saves_from_other" if s.reason == "other_device" else "game.saves_found"))
+            self.save_hint.show()
+        self._run(lambda: suggest_save(self.settings, exe, title, other), done)
 
     def done(self, r):
         super().done(r)          # (background tasks finish on their own; see TaskOwner)
@@ -3266,6 +3306,8 @@ class GameDialog(TaskOwner, QDialog):
             edit.setText(str(Path(exe)))
             if not self.title.text().strip() or not self.title_locked:
                 self.title.setText(guess_title(exe))
+            if edit is self.fields[self.machine][0]:
+                self._suggest_save()
 
     def _pick_save(self, edit: QLineEdit):
         exe = self.fields[self.machine][0].text()
@@ -3569,6 +3611,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self._first_check = True
         self.playing_id: Optional[str] = None
         self.stop_pending = False            # Stop was pressed; waiting for the game to close
+        self.looking_for_saves = False       # Read pressed: checking for a likely save folder first
         self.play_phase = "done"
         self.current_folder: Optional[str] = None     # folder id being viewed, None = the library
         self.folder_names: dict[str, str] = {}
@@ -4777,12 +4820,17 @@ class MainWindow(TaskOwner, QMainWindow):
             self.statusBar().showMessage(tr("restore.done"), 8000)
             self.refresh()
 
-    def play_selected(self, without: tuple[str, ...] = (), watch: bool = False) -> None:
-        g = self.selected()
-        if g is None or self.worker is not None:
+    def play_selected(self, without: tuple[str, ...] = (), watch: bool = False,
+                      gid: Optional[str] = None, asked: bool = False) -> None:
+        g = self.games.get(gid) if gid else self.selected()
+        if g is None or self.worker is not None or self.looking_for_saves:
             return
-        if not g.paths_for(self.settings.machine_name).exe:
+        mine = g.paths_for(self.settings.machine_name)
+        if not mine.exe:
             self.edit_selected()
+            return
+        if not mine.save_dir and not watch and not asked:
+            self._offer_save_folder(g, without)     # comes back here (asked=True) when done
             return
         self.playing_id = g.game_id
         self.stop_pending = False
@@ -4794,6 +4842,41 @@ class MainWindow(TaskOwner, QMainWindow):
         self.worker.phase.connect(self._on_phase)
         self.worker.start()
         self._update_details()
+
+    def _offer_save_folder(self, g: Game, without: tuple[str, ...]) -> None:
+        """No save folder on This Device yet: if we can tell where it saves (the other device's location,
+        or an existing save folder), ask to use it before starting - then the other device's saves come
+        across now instead of after a first session without them."""
+        o = g.paths_for(other_slot(self.settings.machine_name))
+        other = (o.exe, o.save_dir) if o.save_dir else None
+        exe = g.paths_for(self.settings.machine_name).exe
+        self.looking_for_saves = True
+
+        def go_on(s):
+            self.looking_for_saves = False
+            fresh = self.library.get(g.game_id)
+            if fresh is None or self.worker is not None:
+                return
+            if s is not None and not fresh.paths_for(self.settings.machine_name).save_dir:
+                why = tr("play.suggest_other" if s.reason == "other_device" else "play.suggest_found")
+                choice = message(self, tr("play.suggest_body", title=fresh.title, path=s.path, why=why),
+                                 tr("play.suggest_title"),
+                                 [("use", tr("play.suggest_use")), ("skip", tr("play.suggest_skip")),
+                                  ("cancel", tr("game.cancel"))], dismiss="cancel")
+                if choice == "cancel":
+                    return
+                if choice == "use":
+                    try:
+                        self.library.set_paths(g.game_id, self.settings.machine_name, save_dir=s.path)
+                    except (OSError, KeyError) as e:
+                        report_failure(self, e)
+                        return
+                    self.refresh()
+            self.play_selected(without, gid=g.game_id, asked=True)
+
+        def failed(_e):
+            go_on(None)                             # the search itself failed: just play as before
+        self._run(lambda: suggest_save(self.settings, exe, g.title, other), go_on, failed)
 
     def _play_status(self, key: str) -> None:
         if key == "status.launching":
