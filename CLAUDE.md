@@ -84,6 +84,17 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   every frame (~580/s with 20 covers) -> lag at launch, laggy drags, dropped drags, a 7 s delay on the sort
   drop-down's tick. Now MainWindow.art() + CoverCache._mtimes remember them until refresh() (_forget_files).
   Drops/rearranging update memory and write once (_reshow(changed ids) / in-memory order), no full reload.
+- Animation pass (2026-10-15, measured under the real event loop; frames are a steady 16.0 ms there):
+  CoverCache.prepare/accept: MainWindow._prefetch_covers decodes covers (shown order, then the rest of each
+  folder) + checks artwork files in a background task after every _rebuild -> first scroll 84 -> 5 ms, first
+  folder open 180 -> 20 ms. LibraryGrid.visible_range() (binary search) for the per-frame loops (_tick,
+  _drop_spot): tick cost no longer grows with the library. DragGhost shrinks its window after the lift.
+  Trash/bookmark icons brighten with their growth (no opacity jump); Read pulse settles by time.
+  Additions: search/filter changes glide like sorts (_apply_filter: _positions incl. glide offsets, new covers
+  fade in = appearing/appear_fade, removed ones fade out from a _grid_snapshot = _leaving/leaving_frame, ~8 ms
+  per keystroke); bookmarks fade on toggle (bookmark_alpha); a game's light cross-fades when its colour
+  changes (CardDelegate._light_fx, LIGHT_FADE_S 0.45, only while lights pulse). Bench scripts must call
+  app.wait_for_tasks() before exiting (else exit code 127 at shutdown - not a program bug).
 - Performance (older): the animation timer only redraws what moves (hovered tile + shadow; small squares around
   each visible light), covers without art are cached pixmaps (CardDelegate._placeholder). Measured ~62 fps,
   ~2 ms/frame with 120 games + background. warm_up() sleeps 10 ms per process so startup stays smooth

@@ -344,12 +344,35 @@ class LibraryGrid(QListWidget):
 
     bare = False              # True while taking a snapshot of the covers alone (folder animation)
 
+    def visible_range(self) -> range:
+        """The items in view. They're laid out in reading order, so two binary searches find them: the
+        animations ask every frame, and walking all of a big library each time cost ~4 ms at 600 games."""
+        n, view = self.count(), self.viewport().rect()
+        rect = lambda i: self.visualRect(self.model().index(i, 0))
+        lo, hi = 0, n
+        while lo < hi:                                  # the first item reaching into view
+            mid = (lo + hi) // 2
+            lo, hi = (mid + 1, hi) if rect(mid).bottom() < view.top() else (lo, mid)
+        first, hi = lo, n
+        while lo < hi:                                  # the first item below the view
+            mid = (lo + hi) // 2
+            lo, hi = (mid + 1, hi) if rect(mid).top() <= view.bottom() else (lo, mid)
+        return range(first, lo)
+
     def paintEvent(self, ev) -> None:
         backdrop = getattr(self.w, "backdrop", None)
         if backdrop is not None and not self.bare:
             p = QPainter(self.viewport())
             origin = self.viewport().mapTo(backdrop, QPoint(0, 0)) - backdrop.library_area().topLeft()
             backdrop.paint_into(p, ev.rect(), origin)
+            leaving = self.w.leaving_frame()
+            if leaving is not None:                     # covers a search / filter took away, fading out
+                pm, rects, opacity = leaving
+                dpr = pm.devicePixelRatio()
+                p.setOpacity(opacity)
+                for r in rects:
+                    if r.intersects(ev.rect()):
+                        p.drawPixmap(QRectF(r), pm, QRectF(r.x() * dpr, r.y() * dpr, r.width() * dpr, r.height() * dpr))
             p.end()
         super().paintEvent(ev)
         if self.marker is not None and not self.bare:
@@ -577,6 +600,7 @@ SLIDE_S = 0.22                       # covers sliding aside into their new place
 FOLDER_ANIM_MS = 280                 # opening / closing a folder: its games grow out of (or back into) its tile
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
+LIGHT_FADE_S = 0.45                  # a light changing colour cross-fades this long
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
 RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
 STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
@@ -1005,6 +1029,7 @@ class CoverCache:
         # a cover file's modified time, remembered: covers are drawn dozens of times a second, and asking
         # the cloud drive (Google Drive's G:) each time made everything lag, badly while it was busy
         self._mtimes: dict[str, Optional[float]] = {}
+        self._ready: dict[tuple, QImage] = {}      # decoded in the background, not yet on screen
 
     def forget_files(self) -> None:
         """The library was reloaded: look at the cover files again (a cover may have been changed)."""
@@ -1022,22 +1047,81 @@ class CoverCache:
         mtime = self._mtimes[sp]
         if mtime is None:
             return None
-        src_key = (sp, mtime)
-        key = src_key + tuple(round(v, 4) for v in crop)
+        key = self._key(sp, mtime, crop)
         if key in self._cache:
             self._cache.move_to_end(key)
         else:
-            img = self._load(path, crop[0])
-            if img is None:
-                return None
-            rect, _, _ = crop_rect(img.width(), img.height(), *crop)
-            # extra resolution so it stays sharp when the cover grows on hover
-            w, h = int(COVER_W * 2.2), int(COVER_H * 2.2)
-            part = img.copy(rect.toAlignedRect()).scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            part = self._ready.pop(key, None)          # prepared in the background (see prepare)
+            if part is None:
+                img = self._load(path, crop[0])
+                if img is None:
+                    return None
+                part = self._cut(img, crop)
             self._cache[key] = QPixmap.fromImage(part)
             while len(self._cache) > self.MAX_COVERS:
                 self._cache.popitem(last=False)
         return self._cache[key]
+
+    @staticmethod
+    def _key(sp: str, mtime: float, crop) -> tuple:
+        return (sp, mtime) + tuple(round(v, 4) for v in crop)
+
+    @staticmethod
+    def _cut(img: QImage, crop) -> QImage:
+        rect, _, _ = crop_rect(img.width(), img.height(), *crop)
+        # extra resolution so it stays sharp when the cover grows on hover
+        w, h = int(COVER_W * 2.2), int(COVER_H * 2.2)
+        return img.copy(rect.toAlignedRect()).scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+
+    def cached(self) -> frozenset:
+        return frozenset(self._cache) | frozenset(self._ready)
+
+    @classmethod
+    def prepare(cls, wanted: list, skip: frozenset = frozenset()) -> list:
+        """In a background thread: decode, crop and scale covers [(path, crop)] -> [(path, mtime, crop, QImage)]
+        (those in skip = cached() are ready already).
+        Scrolling to covers not seen yet then costs only the upload to the screen, not a decode (~80 ms froze
+        the first scroll). Touches nothing shared: hand the result to accept() on the window's thread."""
+        out = []
+        for path, crop in wanted:
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if cls._key(str(path), mtime, crop) in skip:
+                continue
+            img = cls._decode(path, crop[0])
+            if img is not None:
+                out.append((path, mtime, crop, cls._cut(img, crop)))
+        return out
+
+    def accept(self, prepared: list) -> None:
+        for path, mtime, crop, part in prepared:
+            sp = str(path)
+            if self._mtimes.setdefault(sp, mtime) != mtime:
+                continue                               # the file changed meanwhile: decoded again when drawn
+            key = self._key(sp, mtime, crop)
+            if key not in self._cache:
+                self._ready[key] = part
+        while len(self._ready) > self.MAX_COVERS:
+            self._ready.pop(next(iter(self._ready)))
+
+    @staticmethod
+    def _decode(path: Path, zoom: float) -> Optional[QImage]:
+        """Read the image only as large as needed for this zoom (big JPEGs decode much faster scaled down)."""
+        from PySide6.QtGui import QImageReader
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        full = reader.size()
+        if not full.isValid() or full.isEmpty():
+            img = QImage(str(path))
+            return None if img.isNull() else img
+        base_h = min(full.height(), full.width() * COVER_H / COVER_W)    # height of the zoom-1 frame
+        scale = min(1.0, COVER_H * 2.2 * max(1.0, zoom) / base_h)
+        if scale < 1.0:
+            reader.setScaledSize(QSize(max(1, round(full.width() * scale)), max(1, round(full.height() * scale))))
+        img = reader.read()
+        return None if img.isNull() else img
 
     def _load(self, path: Path, zoom: float) -> Optional[QImage]:
         """Decode the image only as large as needed for this zoom (big JPEGs decode much faster
@@ -1175,6 +1259,7 @@ class CardDelegate(QStyledItemDelegate):
         self.shadow = make_shadow(COVER_W, COVER_H)
         self._tiles: dict = {}             # rumbling (easter egg): each tile drawn upright once, then only turned
         self._skip_light = False           # (the lights stay live on top, so they keep breathing)
+        self._light_fx: dict = {}          # game id -> (old colour, new colour, since): lights cross-fading
 
     def sizeHint(self, option, index) -> QSize:
         return QSize(round(GRID["cover_w"]) + 2 * CARD_PAD_X, round(GRID["cover_h"]) + CARD_PAD_TOP + CARD_PAD_BOTTOM)
@@ -1334,8 +1419,10 @@ class CardDelegate(QStyledItemDelegate):
                     grad.setColorAt(1, QColor(COLORS["placeholder_bottom"]))
                     q.fillRect(r, grad)
                 q.restore()
-                if self.w.settings.show_bookmarks:
+                if self.w.bookmark_alpha > 0:
+                    q.setOpacity(ease(self.w.bookmark_alpha))
                     paint_bookmark(q, r, g.status, 5)
+                    q.setOpacity(1.0)
             if e > 0.01:
                 n = len(games)
                 count = tr("folder.count_one") if n == 1 else tr("folder.count_many", n=n)
@@ -1357,6 +1444,9 @@ class CardDelegate(QStyledItemDelegate):
             if self._tiles:
                 self._tiles.clear()
             self._paint_item(p, option, index)
+            fade = self.w.appear_fade(index.data(GAME_ID_ROLE))
+            if fade > 0:                                 # just came into view (search / filter): fading in
+                self._fade_into_background(p, option.rect.adjusted(-2, -2, 2, 2), fade)
             return
         # the easter egg's rocking box is hovered: every tile rocks around its own centre, each in its own
         # rhythm (a phase and a slightly different speed of its own, from its id)
@@ -1400,7 +1490,7 @@ class CardDelegate(QStyledItemDelegate):
         if is_folder(iid):
             paint_light(p, centre, self.w.folder_colours(iid[len(FOLDER_PREFIX):]), "calm", self.w.settings.pulse)
         elif iid in self.w.games:
-            self._paint_light(p, centre, self.w.light_state(iid))
+            self._paint_light(p, centre, self.w.light_state(iid), iid)
         p.restore()
 
     def _paint_item(self, p: QPainter, option: QStyleOptionViewItem, index) -> None:
@@ -1445,12 +1535,14 @@ class CardDelegate(QStyledItemDelegate):
                 self._overlay(q, option, rect, e, game.title if pm else "", play_line)
 
         self._clipped(p, cover, e, draw)
-        if self.w.settings.show_bookmarks:
+        if self.w.bookmark_alpha > 0:                    # (fades when the bookmark button is pressed)
+            p.setOpacity(ease(self.w.bookmark_alpha))
             paint_bookmark(p, cover, game.status, width=GRID["cover_w"])
+            p.setOpacity(1.0)
         if selected:
             self._ring(p, cover)
         if not self._skip_light:
-            self._paint_light(p, self.light_center(cover), self.w.light_state(gid))
+            self._paint_light(p, self.light_center(cover), self.w.light_state(gid), gid)
         if gid == self.w._dim_gid and self.w.drag_dim > 0:
             # only over the cover itself (not its whole cell: a neighbour may be sliding past through the gap)
             self._fade_into_background(p, cover.adjusted(-3, -3, 3, 3).toAlignedRect(), 0.75 * self.w.drag_dim)
@@ -1473,12 +1565,31 @@ class CardDelegate(QStyledItemDelegate):
         """Wrap to max_lines, ellipsis on overflow. See wrap_title."""
         return wrap_title(text, fm, width, max_lines)
 
-    def _paint_light(self, p: QPainter, c: QPointF, state: str) -> None:
+    def _paint_light(self, p: QPainter, c: QPointF, state: str, gid: str = "") -> None:
+        """A game's light. When its colour changes (blue while syncing -> green when done) it cross-fades
+        instead of switching (while the lights pulse: then they're redrawn every frame anyway)."""
         colour_key, pulse, _ = STATE_LOOK.get(state, STATE_LOOK["checking"])
-        paint_light(p, c, colour_key, pulse, self.w.settings.pulse)
+        on = self.w.settings.pulse
+        if gid and on:
+            now = time.monotonic()
+            old, new, t0 = self._light_fx.get(gid, (colour_key, colour_key, 0.0))
+            if new != colour_key:
+                old, new, t0 = new, colour_key, now
+            self._light_fx[gid] = (old, new, t0)
+            a = (now - t0) / LIGHT_FADE_S
+            if old != new and a < 1:
+                a = ease(a)
+                paint_light(p, c, old, pulse, on, halo=1 - a)     # the old colour underneath...
+                p.save()
+                p.setOpacity(a)                                    # ...the new one coming up over it
+                paint_light(p, c, new, pulse, on)
+                p.restore()
+                return
+        paint_light(p, c, colour_key, pulse, on)
 
 
-def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: bool, r: float = LIGHT_R) -> None:
+def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: bool, r: float = LIGHT_R,
+                halo: float = 1.0) -> None:
     """A sync light: a dot with a soft halo that breathes. All lights share one clock, so they pulse
     in step. pulse: "calm" / "busy" (quicker) / "steady" (no pulse). colour_key may also be a list of
     colours (a folder): the light is then split into equal slices, the first at 12 o'clock and the rest
@@ -1494,7 +1605,7 @@ def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: boo
     for i, key in enumerate(keys):
         g = QRadialGradient(c, halo_r)
         hc = QColor(LIGHTS[key])
-        hc.setAlpha(int(40 + 90 * s))
+        hc.setAlpha(int((40 + 90 * s) * halo))
         g.setColorAt(0, hc)
         hc.setAlpha(0)
         g.setColorAt(1, hc)
@@ -1892,8 +2003,11 @@ class DragGhost(QWidget):
         return self._drag_rect()
 
     def _place(self) -> None:
-        """While lifting / dragging: a window round the mouse, big enough for the full-size cover."""
-        w, h = int(self.full.width() * 2.2), int(self.full.height() * 2.2)
+        """A window round the mouse: while lifting, big enough for the full-size cover on its way; once it's
+        dragging size, just that (+ a margin) - Windows recomposites the whole see-through window on every
+        mouse move, and most of the lifting-size one would be empty."""
+        k = 2.2 if self._mode == "lift" else self.SMALL + 0.1
+        w, h = int(self.full.width() * k), int(self.full.height() * k)
         self.setGeometry(int(self.cursor.x()) - w // 2, int(self.cursor.y()) - h // 2, w, h)
 
     def follow(self, global_pos: QPoint) -> None:
@@ -1947,6 +2061,7 @@ class DragGhost(QWidget):
                 self.opacity = self.target
             if self._mode == "lift" and now - self._t0 >= self.LIFT_S:
                 self._mode = "drag"
+                self._place()                                # (the smaller window)
             if self._mode == "drag" and self.opacity == self.target:
                 self._timer.stop()                           # still: redrawn when the mouse moves
         if now - self._last_frame >= 0.007:
@@ -1993,7 +2108,9 @@ class PulseButton(QPushButton):
         self._hover = False
         self._scale = 1.0
         self._since = 0.0
+        self._t = time.monotonic()
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.PreciseTimer)                   # even frames (see EasterEgg._rumble)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
 
@@ -2003,7 +2120,7 @@ class PulseButton(QPushButton):
     def enterEvent(self, ev) -> None:
         super().enterEvent(ev)
         self._hover = True
-        self._since = time.monotonic()
+        self._since = self._t = time.monotonic()
         self._timer.start()
 
     def leaveEvent(self, ev) -> None:
@@ -2018,11 +2135,13 @@ class PulseButton(QPushButton):
             self._timer.start()
 
     def _step(self) -> None:
+        now = time.monotonic()
+        dt, self._t = min(0.1, now - self._t), now
         if self._pulsing():
-            t = time.monotonic() - self._since
+            t = now - self._since
             self._scale = 1 + self.PULSE * (1 - math.cos(2 * math.pi * t / self.PERIOD)) / 2
         else:
-            self._scale += (1.0 - self._scale) * 0.25          # settle back
+            self._scale += (1.0 - self._scale) * min(1.0, dt * 16)    # settle back (~0.2 s, at any frame rate)
             if abs(self._scale - 1.0) < 0.001:
                 self._scale = 1.0
                 self._timer.stop()
@@ -2140,8 +2259,9 @@ class TrashButton(QPushButton):
         p.setRenderHint(QPainter.Antialiasing)
         if not self._live():
             p.setOpacity(0.3)
-        elif not (self._hot or self._hover):
-            p.setOpacity(self._rest_opacity())
+        else:                                                   # brightens as it grows (no sudden jump)
+            rest = self._rest_opacity()
+            p.setOpacity(rest + (1 - rest) * max(0.0, min(1.0, (self._scale - 1.0) / (self.HOVER_SCALE - 1.0))))
         s = self.ICON * self._scale
         lift = (self._scale - 1.0) * 10                         # rises a little as it grows
         base = QPointF(self.width() / 2, (self.height() + self.ICON) / 2 - lift)
@@ -4632,6 +4752,9 @@ class MainWindow(TaskOwner, QMainWindow):
         self._dragging: Optional[str] = None
         self._landing: Optional[DragGhost] = None     # a dropped cover gliding into place
         self.slides: dict[str, tuple] = {}            # item id -> (dx, dy): sliding from its old place
+        self.appearing: set = set()                    # item ids fading in (search / filter let them in)
+        self.bookmark_alpha = 1.0 if settings.show_bookmarks else 0.0   # bookmarks shown 0..1 (they fade)
+        self._leaving = None                           # (snapshot, rects, start): covers fading out
         self._slide_t0 = 0.0
         self._dim_gid: Optional[str] = None           # the picked-up game, faded in its place
         self.drag_dim = 0.0                           # 0..1 how far it has faded
@@ -4916,6 +5039,7 @@ class MainWindow(TaskOwner, QMainWindow):
     # ------------------------------------------------------------------ data
     def apply_settings(self, settings: LocalSettings) -> None:
         self.settings = settings
+        self.bookmark_alpha = 1.0 if settings.show_bookmarks else 0.0   # (a new setting shows at once)
         i18n.set_language(settings.language)
         set_qt_language(settings.language)
         apply_background(settings.bg_image, settings.bg_opacity, settings.bg_zoom, settings.bg_x, settings.bg_y)
@@ -5198,6 +5322,53 @@ class MainWindow(TaskOwner, QMainWindow):
         else:
             self._mark_sort()                           # (folders may have come or gone: greyed or not)
         self._update_details()
+        self._prefetch_covers(entries)
+
+    def _prefetch_covers(self, entries) -> None:
+        """Prepare the covers of what's shown (in order; a folder's first four for its mosaic) in the background,
+        so scrolling to them later never waits for a decode - and the cover files are looked up there too, not
+        on the cloud drive while drawing. One task at a time; a newer request replaces a waiting one."""
+        games = []
+        for kind, obj in entries:
+            games += [obj] if kind == "game" else self.folder_games.get(obj, [])[:4]
+        for kind, obj in entries:                        # then the rest of each folder, so opening one is instant
+            games += self.folder_games.get(obj, [])[4:] if kind == "folder" else []
+        todo = [(g.game_id, g.artwork, (g.crop_zoom, g.crop_x, g.crop_y))
+                for g in games if g.artwork][:CoverCache.MAX_COVERS]
+        if getattr(self, "_prefetching", False):
+            self._prefetch_next = entries
+            return
+        if not todo:
+            return
+        self._prefetching, self._prefetch_next = True, None
+        art_dir, known, skip = self.library.art_dir, dict(self._art), self.covers.cached()
+
+        def work():
+            arts, wanted = {}, []
+            for gid, artwork, crop in todo:
+                key = (gid, artwork)
+                if key in known:
+                    path = known[key]
+                else:
+                    f = art_dir / artwork
+                    path = arts[key] = f if f.is_file() else None
+                if path:
+                    wanted.append((path, crop))
+            return arts, CoverCache.prepare(wanted, skip)
+
+        def done(result):
+            self._prefetching = False
+            if result:
+                arts, prepared = result
+                for key, path in arts.items():
+                    self._art.setdefault(key, path)
+                self.covers.accept(prepared)
+            if self._prefetch_next is not None:
+                self._prefetch_covers(self._prefetch_next)
+
+        def failed(_):
+            self._prefetching = False
+        self._run(work, done, failed)
 
     @staticmethod
     def _entry_id(entry) -> str:
@@ -5476,7 +5647,57 @@ class MainWindow(TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ sort / filter
     def _apply_filter(self) -> None:
+        """Search / filter: the covers that stay glide to their new places, the ones let in fade in and the
+        ones taken away fade out where they were (drawn from a picture of the grid taken just before)."""
+        before = self._positions() if self.isVisible() else {}
+        snap = self._grid_snapshot() if before else None
+        rects = {}
+        if snap is not None:
+            view = self.grid.viewport().rect()
+            for i in self.grid.visible_range():
+                it = self.grid.item(i)
+                iid = it.data(GAME_ID_ROLE)
+                rects[iid] = QRect(before[iid], self.grid.visualItemRect(it).size()).adjusted(-2, -2, 2, 2) & view
         self._rebuild()
+        if before:
+            self._slide_from(before, appear=True)
+            kept = {self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
+            gone = [r for iid, r in rects.items() if iid not in kept and not r.isEmpty()]
+            self._leaving = (snap, gone, time.monotonic()) if gone else None
+            if gone:
+                if not self.slides:                      # nothing else moving: run the frame clock for the fade
+                    self.slides[""] = (0, 0)
+                    self._slide_t0 = self._leaving[2]
+                self._update_anim()
+
+    def _grid_snapshot(self) -> Optional[QPixmap]:
+        """The grid's covers as they are on screen now, without the background."""
+        vp = self.grid.viewport()
+        if vp.width() <= 0 or vp.height() <= 0:
+            return None
+        dpr = self.devicePixelRatioF()
+        pm = QPixmap(round(vp.width() * dpr), round(vp.height() * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        self.grid.bare = True
+        try:
+            vp.render(p, QPoint(0, 0), QRegion(), QWidget.DrawChildren)
+        finally:
+            self.grid.bare = False
+            p.end()
+        return pm
+
+    def leaving_frame(self):
+        """(snapshot, rects, opacity) for covers fading out after a search / filter, or None."""
+        lv = self._leaving
+        if lv is None:
+            return None
+        t = (time.monotonic() - lv[2]) / (SLIDE_S * 0.8)
+        if t >= 1:
+            self._leaving = None
+            return None
+        return lv[0], lv[1], (1 - t) ** 2
 
     def _toggle_stats(self) -> None:
         """Hide Statistics / Show Statistics: playtime and last played, on the covers and the bottom bar."""
@@ -5492,7 +5713,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self.bookmark_btn.set_on(self.settings.show_bookmarks)
         self.bookmark_btn.setToolTip(tr("bar.bookmarks_hide" if self.settings.show_bookmarks else "bar.bookmarks_show"))
         self._save_view_choice()                 # remembered for next time (and shared by Ikemen Sync)
-        self.grid.viewport().update()
+        self._update_anim()                      # the bookmarks fade in / out (see _tick)
 
     def _save_view_choice(self) -> None:
         try:
@@ -5895,7 +6116,7 @@ class MainWindow(TaskOwner, QMainWindow):
         dragged = self._dragging
         visible = []
         view = self.grid.viewport().rect()
-        for i in range(self.grid.count()):
+        for i in self.grid.visible_range():
             r = self.grid.visualItemRect(self.grid.item(i))
             if r.intersects(view):
                 visible.append((i, self.grid.item(i).data(GAME_ID_ROLE), CardDelegate.cover_rect(r, 0)))
@@ -5991,22 +6212,40 @@ class MainWindow(TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ covers sliding into new places
     def _positions(self) -> dict:
-        return {self.grid.item(i).data(GAME_ID_ROLE): self.grid.visualItemRect(self.grid.item(i)).topLeft()
-                for i in range(self.grid.count())}
+        """Where each cover is drawn now (mid-glide too, so a new change carries on from there, no jump)."""
+        out = {}
+        for i in range(self.grid.count()):
+            iid = self.grid.item(i).data(GAME_ID_ROLE)
+            pos = self.grid.visualItemRect(self.grid.item(i)).topLeft()
+            off = self.slide_offset(iid)
+            out[iid] = pos + off if off is not None else pos
+        return out
 
-    def _slide_from(self, before: dict, skip: Optional[str] = None) -> None:
-        """After the grid changed: every cover that moved slides from where it was to its new place."""
+    def _slide_from(self, before: dict, skip: Optional[str] = None, appear: bool = False) -> None:
+        """After the grid changed: every cover that moved slides from where it was to its new place.
+        appear: covers that weren't there before (a search / filter let them in) fade in meanwhile."""
         self.grid.doItemsLayout()
-        now = self._positions()
-        self.slides = {}
+        now = {self.grid.item(i).data(GAME_ID_ROLE): self.grid.visualItemRect(self.grid.item(i)).topLeft()
+               for i in range(self.grid.count())}             # (the new places themselves, no glide offsets)
+        self.slides, self.appearing = {}, set()
         for iid, p in now.items():
             old = before.get(iid)
             if old is not None and iid != skip and old != p:
                 self.slides[iid] = (old.x() - p.x(), old.y() - p.y())
-        if self.slides:
+            elif old is None and appear and before:
+                self.appearing.add(iid)
+        if self.slides or self.appearing:
+            self.slides.setdefault("", (0, 0))           # (keeps the clock running for covers only fading in)
             self._slide_t0 = time.monotonic()
             self.grid.viewport().update()
             self._update_anim()
+
+    def appear_fade(self, iid: str) -> float:
+        """How much of the background still covers a cover that's fading in (1 = hidden, 0 = fully there)."""
+        if iid not in self.appearing:
+            return 0.0
+        t = (time.monotonic() - self._slide_t0) / SLIDE_S
+        return 0.0 if t >= 1 else (1 - t) ** 2
 
     def slide_offset(self, iid: str) -> Optional[QPoint]:
         d = self.slides.get(iid)
@@ -6184,7 +6423,8 @@ class MainWindow(TaskOwner, QMainWindow):
         needed = (self.settings.pulse or self.hovered is not None or bool(self.hover)
                   or self.sb_alpha > 0 or self._sb_target() > 0   # keep ticking until it has faded out
                   or self._ghost is not None or self.drag_dim > 0
-                  or self._landing is not None or bool(self.slides))
+                  or self._landing is not None or bool(self.slides)
+                  or self.bookmark_alpha != (1.0 if self.settings.show_bookmarks else 0.0))
         if needed and not self.anim.isActive():
             self._last_tick = time.monotonic()
             self.anim.start()
@@ -6219,6 +6459,12 @@ class MainWindow(TaskOwner, QMainWindow):
             changed = True
         elif self.drag_dim == 0 and self._ghost is None:
             self._dim_gid = None
+        mark = 1.0 if self.settings.show_bookmarks else 0.0
+        if self.bookmark_alpha != mark:
+            d = step * HOVER_MS / 180                     # ~0.18 s
+            self.bookmark_alpha = min(mark, self.bookmark_alpha + d) if mark > self.bookmark_alpha                 else max(mark, self.bookmark_alpha - d)
+            self.grid.viewport().update()
+            changed = True
         target = self._sb_target()
         if self.sb_alpha != target:
             d = step * HOVER_MS / SCROLLBAR_FADE_MS
@@ -6230,11 +6476,9 @@ class MainWindow(TaskOwner, QMainWindow):
         from PySide6.QtGui import QRegion
         region = QRegion()
         view = self.grid.viewport().rect()
-        for i in range(self.grid.count()):
+        for i in self.grid.visible_range():
             it = self.grid.item(i)
             r = self.grid.visualItemRect(it)
-            if not r.intersects(view):
-                continue
             iid = it.data(GAME_ID_ROLE)
             if iid in moving:
                 region += r.adjusted(-30, -30, 30, 36)
@@ -6244,7 +6488,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 region += QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
         if self.slides:                                   # covers sliding: the whole grid moves
             if time.monotonic() - self._slide_t0 >= SLIDE_S:
-                self.slides = {}
+                self.slides, self.appearing = {}, set()
             region = QRegion(view)
             changed = True
         if not region.isEmpty() and not self.backdrop.findChildren(FolderTransition):

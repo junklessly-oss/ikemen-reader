@@ -1931,3 +1931,126 @@ class AnkiButton(unittest.TestCase):
             egg._open_anki()
             start.assert_called_once()
         w.close()
+
+
+class SmoothAnimations(unittest.TestCase):
+    """The animation work of 2026-10-15: only covers in view are walked each frame, covers are prepared in the
+    background, search / filter changes glide (new covers fade in, removed ones fade out), bookmarks fade."""
+
+    def _window(self, tmp, n=40, art_every=2):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtGui import QImage, QColor
+        import app
+        import i18n
+        QApplication.instance() or QApplication([])
+        i18n.set_language("en")
+        cloud = Path(tmp) / "cloud"
+        cloud.mkdir()
+        lib = Library(cloud)
+        exe = Path(tmp) / "game.exe"
+        exe.write_bytes(b"")
+        for i in range(n):
+            g = lib.add_game(f"Game {i:02d}" + (" Alpha" if i % 3 == 0 else ""), "PC", exe=str(exe))
+            if i % art_every == 0:
+                img = QImage(300, 420, QImage.Format_RGB32)
+                img.fill(QColor(i * 5, 100, 150))
+                f = Path(tmp) / f"c{i}.png"
+                img.save(str(f))
+                lib.set_artwork(g.game_id, str(f))
+        w = app.MainWindow(LocalSettings("PC", str(cloud)))
+        w.resize(1200, 833)
+        w.show()
+        w.refresh()
+        QApplication.processEvents()
+        return app, w, lib
+
+    def test_visible_range_matches_a_full_scan(self):
+        with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w, _ = self._window(tmp)
+            try:
+                sb = w.grid.verticalScrollBar()
+                for value in (0, 1, sb.maximum() // 3, sb.maximum() // 2, sb.maximum()):
+                    sb.setValue(value)
+                    view = w.grid.viewport().rect()
+                    full = [i for i in range(w.grid.count())
+                            if w.grid.visualItemRect(w.grid.item(i)).intersects(view)]
+                    self.assertEqual(list(w.grid.visible_range()), full, value)
+                    self.assertTrue(full)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_prepared_covers_are_used_and_match(self):
+        from PySide6.QtCore import QRectF
+        with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w, lib = self._window(tmp, n=6, art_every=1)
+            try:
+                g = lib.list_games()[0]
+                path, crop = lib.artwork_path(g), (1.3, 0.4, 0.6)
+                prepared = app.CoverCache.prepare([(path, crop)])
+                self.assertEqual(len(prepared), 1)
+                cache = app.CoverCache()
+                cache.accept(prepared)
+                self.assertEqual(len(cache._ready), 1)
+                fast = cache.get(path, crop).toImage()
+                self.assertEqual(cache._ready, {})               # used, not kept twice
+                slow = app.CoverCache().get(path, crop).toImage()
+                self.assertEqual(fast, slow)                     # the same picture as decoding on the spot
+                self.assertEqual(app.CoverCache.prepare([(path, crop)], cache.cached()), [])   # ready: skipped
+                self.assertEqual(app.CoverCache.prepare([(Path(tmp) / "gone.png", crop)]), [])
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_search_glides_fades_in_and_out(self):
+        import time as _t
+        from PySide6.QtWidgets import QApplication
+        with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w, _ = self._window(tmp, n=12)
+            try:
+                w.search.setText("alpha")                         # 4 of 12 stay
+                self.assertEqual(w.grid.count(), 4)
+                self.assertIsNotNone(w._leaving)                  # the other visible ones fade out
+                self.assertTrue(w._leaving[1])
+                self.assertEqual(w.appearing, set())
+                self.assertTrue(w.anim.isActive())
+                lf = w.leaving_frame()
+                self.assertTrue(0 < lf[2] <= 1)
+                w.search.setText("")                              # back: the 8 others fade in
+                self.assertEqual(w.grid.count(), 12)
+                self.assertEqual(len(w.appearing), 8)
+                some = next(iter(w.appearing))
+                self.assertGreater(w.appear_fade(some), 0.5)
+                end = _t.monotonic() + app.SLIDE_S + 0.3
+                while _t.monotonic() < end:
+                    QApplication.processEvents()
+                    _t.sleep(0.01)
+                self.assertEqual(w.appear_fade(some), 0.0)        # fully there
+                self.assertEqual(w.slides, {})
+                self.assertIsNone(w.leaving_frame())
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_bookmarks_fade_and_settings_apply_at_once(self):
+        import time as _t
+        from PySide6.QtWidgets import QApplication
+        with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w, _ = self._window(tmp, n=3)
+            try:
+                self.assertEqual(w.bookmark_alpha, 1.0)
+                w._toggle_bookmarks()
+                self.assertFalse(w.settings.show_bookmarks)
+                end = _t.monotonic() + 0.5
+                while _t.monotonic() < end and w.bookmark_alpha > 0:
+                    QApplication.processEvents()
+                    _t.sleep(0.01)
+                self.assertEqual(w.bookmark_alpha, 0.0)
+                s = w.settings
+                s.show_bookmarks = True
+                w.apply_settings(s)
+                self.assertEqual(w.bookmark_alpha, 1.0)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
