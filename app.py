@@ -1652,6 +1652,36 @@ class StarButton(QPushButton):
         p.end()
 
 
+class _SeparatorDelegate(QStyledItemDelegate):
+    """Draws a drop-down's dividers as a thin line (Qt draws them with a style our style sheet doesn't support,
+    so they came out invisible); every other item is drawn by Qt's own delegate, unchanged."""
+
+    def __init__(self, inner, parent):
+        super().__init__(parent)
+        self.inner = inner
+
+    @staticmethod
+    def _is_separator(index) -> bool:
+        return index.data(Qt.AccessibleDescriptionRole) == "separator"
+
+    def paint(self, p: QPainter, option, index) -> None:
+        if not self._is_separator(index):
+            self.inner.paint(p, option, index)
+            return
+        r = option.rect
+        line = QColor(COLORS["muted"])
+        line.setAlphaF(0.45)
+        p.save()
+        p.fillRect(r, QColor(COLORS["input"]))
+        p.fillRect(QRect(r.left() + 8, r.center().y(), r.width() - 16, 1), line)
+        p.restore()
+
+    def sizeHint(self, option, index) -> QSize:
+        if self._is_separator(index):
+            return QSize(0, 9)
+        return self.inner.sizeHint(option, index)
+
+
 class ThemedCombo(QComboBox):
     """A drop-down whose list opens without a white flash. Windows puts a newly shown ordinary window on
     screen before the program has drawn it, white, for a frame - and Qt's slide-open effect even makes an
@@ -1664,6 +1694,7 @@ class ThemedCombo(QComboBox):
         super().__init__(*args, **kwargs)
         QApplication.setEffectEnabled(Qt.UI_AnimateCombo, False)     # (Qt's slide: its extra window flashes)
         self._box().setAttribute(Qt.WA_TranslucentBackground, True)    # before its window first exists
+        self.view().setItemDelegate(_SeparatorDelegate(self.view().itemDelegate(), self))   # visible dividers
         self._t0 = 0.0
         self._down = True
         self._last = 0.0
