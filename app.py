@@ -5830,6 +5830,10 @@ class MainWindow(TaskOwner, QMainWindow):
             self.play_btn.setText(tr("bar.play"))
             self.play_btn.setToolTip("")
             self.d_status.setVisible(True)
+            if self.d_status.currentIndex() != 0 and not self.d_status.view().isVisible():
+                self.d_status.blockSignals(True)       # (greyed, showing no game's status - not the last one's)
+                self.d_status.setCurrentIndex(0)
+                self.d_status.blockSignals(False)
             return
         self.d_title.setText(g.title)
         parts = [tr("bar.played", time=i18n.playtime(g.total_playtime)) if g.total_playtime else tr("card.never")]
