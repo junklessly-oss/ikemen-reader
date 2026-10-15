@@ -93,12 +93,13 @@ GUIDE = {
             "Error to jump to those games).",
         ]),
         ("Your Library", [
-            "- Search by title, sort by Recently Played, Most Played, Title or Custom, and filter by reading status.",
-            "- Below the sorts in the same menu, choose where folders go: Mixed (your own arrangement, "
-            "starting from exactly what's on screen, where you can move anything), Folders First, or Folders Last.",
-            "- Custom is your own order: drag a cover into the gap between two others to move it there (a thin "
-            "line shows where it will land). Doing that switches to Custom and Mixed, starting from the order "
-            "you were looking at. New games go at the end. Folders can be dragged the same way.",
+            "- Search by title, sort by Recently Played, Most Played, Title or My Arrangement, and filter by reading status.",
+            "- Below the sorts in the same menu, choose where folders go in those sorts: Folders Mixed (among the "
+            "games, in the same order), Folders First, or Folders Last.",
+            "- My Arrangement is your own order: drag a cover into the gap between two others to move it there (a "
+            "thin line shows where it will land). Doing that switches to My Arrangement, starting from exactly what "
+            "you were looking at. Peeked at another sort? Pick My Arrangement to get yours back. New games go at the "
+            "end; folders are dragged the same way (so the folder choices rest while it's selected).",
             "- Each folder has its own sort, found in the same menu while the folder is open. It starts as Same as "
             "Library and follows the main page until you pick something else for it. A folder's own order and "
             "sort are shared with the other device.",
@@ -201,10 +202,9 @@ GUIDE = {
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
         ("ライブラリ", [
-            "- タイトルで検索、「最近プレイした順」「プレイ時間が長い順」「タイトル順」「カスタム」で並べ替え、プレイ状況で絞り込みができます。",
-            "- 同じメニューの下の方で、フォルダーの位置を選べます。「混在」（今表示されている並びから始まる自分だけの並びで、何でも自由に動かせます）、「フォルダーを先に」、「フォルダーを後に」。",
-            "- 「カスタム」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。"
-            "これを行うと、表示していた順番のまま「カスタム」と「混在」に切り替わります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。",
+            "- タイトルで検索、「最近プレイした順」「プレイ時間が長い順」「タイトル順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。",
+            "- 同じメニューの下の方で、それらの並び順でのフォルダーの位置を選べます。「フォルダーを混在」（ゲームと同じ順番で混ぜる）、「フォルダーを先に」、「フォルダーを後に」。",
+            "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順を見たあとは、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます（そのため、選んでいる間はフォルダーの位置の選択は使えません）。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではメインページに合わせます。"
             "フォルダーの並び順はもう一方の端末とも共有されます。",
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーのプレイ時間と最終プレイ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",

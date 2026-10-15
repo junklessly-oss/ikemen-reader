@@ -4855,14 +4855,14 @@ class MainWindow(TaskOwner, QMainWindow):
 
         top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
         top += [("folder", fid) for fid in self.folder_games]
-        if sort == "custom":
+        if sort == "custom":                             # My Arrangement: exactly your order
             top = in_order(top, self._entry_id, self.library_order)
         else:
             top.sort(key=lambda e: self._sort_key(e))
-        if self.settings.folder_place != "mixed":       # folders first / last (each side keeps its order)
-            folders = [e for e in top if e[0] == "folder"]
-            loose = [e for e in top if e[0] == "game"]
-            top = folders + loose if self.settings.folder_place == "first" else loose + folders
+            if self.settings.folder_place != "mixed":   # folders first / last (each side keeps the sort)
+                folders = [e for e in top if e[0] == "folder"]
+                loose = [e for e in top if e[0] == "game"]
+                top = folders + loose if self.settings.folder_place == "first" else loose + folders
         self._top_ids = [self._entry_id(e) for e in top]   # the main page as arranged now (Mixed starts from it)
         if self.current_folder:
             entries = [("game", g) for g in self.folder_games[self.current_folder] if keep(g)]
@@ -4953,10 +4953,12 @@ class MainWindow(TaskOwner, QMainWindow):
         place = place or self.settings.folder_place
         inside = self.current_folder is not None
         c.blockSignals(True)
+        arranged = self.settings.sort == "custom" and not inside
         for i in range(c.count()):
             d = c.itemData(i)
             if d and d.startswith("place:"):
                 c.setItemIcon(i, tick_icon() if d == "place:" + place else blank_icon())
+                c.model().item(i).setEnabled(not arranged)  # in My Arrangement you place folders by dragging
         if select:                # (not while the list is open: Qt picks the highlighted item on release)
             current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
             c.setCurrentIndex(max(0, c.findData(current)))
@@ -5197,15 +5199,7 @@ class MainWindow(TaskOwner, QMainWindow):
         if not d:
             return
         before = self._positions()                   # every change glides: covers slide to their new places
-        if d == "place:mixed":
-            # Mixed = your own arrangement, starting fresh from exactly what's on screen now (never an older
-            # one); from here anything can be moved. (It's the Custom sort, folders where they are.)
-            if (self.settings.sort, self.settings.folder_place) != ("custom", "mixed"):
-                self.library.set_library_order(list(getattr(self, "_top_ids", [])))
-                self.settings.sort, self.settings.folder_place = "custom", "mixed"
-                self._read_orders()
-                self._own_change()
-        elif d.startswith("place:"):                 # Folders First / Folders Last: the rest keeps its order
+        if d.startswith("place:"):                   # Folders Mixed / First / Last (the automatic sorts)
             self.settings.folder_place = d[len("place:"):]
         elif self.current_folder:                    # this folder's own sort ("follow" = the library's)
             self.library.set_folder_sort(self.current_folder, "" if d == "follow" else d)
@@ -5721,14 +5715,9 @@ class MainWindow(TaskOwner, QMainWindow):
         else:
             self.library.set_library_order(ids)
             self.library_order = list(ids)
-            changed = False
-            if self.settings.sort != "custom":
+            if self.settings.sort != "custom":           # My Arrangement, starting from what was on screen
                 self.settings.sort = "custom"
-                changed = switched = True
-            if self.settings.folder_place != "mixed":
-                self.settings.folder_place = "mixed"     # you're arranging things yourself now
-                changed = True
-            if changed:
+                switched = True
                 self._save_view_choice()
         self._mark_sort()
         self._rebuild()

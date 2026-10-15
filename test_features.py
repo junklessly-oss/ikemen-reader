@@ -1657,17 +1657,18 @@ class SortingAndCustomOrder(unittest.TestCase):
                 self.assertEqual(w.sort.currentData(), "recent")                   # the sort itself stays
                 w.choose_sort("place:last")
                 self.assertEqual(shown()[-1], f)
-                # drag C between A and B: switches to Custom, starting from what was shown
+                # drag C between A and B: My Arrangement, starting from what was shown
                 w._dragging = ids["C"]
                 w._move_to(ids["C"], 1)
                 w._dragging = None
                 self.assertEqual(w.settings.sort, "custom")
                 self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
                 self.assertEqual(lib.library_order(), shown())                    # stored in the cloud folder
-                w.choose_sort("place:first")                                       # usable in Custom too
-                self.assertEqual(shown()[0], f)
-                w.choose_sort("place:mixed")                                       # fresh from what's shown
-                self.assertEqual(lib.library_order()[0], f)
+                model = w.sort.model()
+                self.assertFalse(model.item(w.sort.findData("place:first")).isEnabled())   # you place folders yourself
+                w.choose_sort("hours")                                             # peek at another sort...
+                w.choose_sort("custom")                                            # ...and your arrangement is back
+                self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
                 new = lib.add_game("New", "PC")
                 w.refresh()
                 self.assertEqual(shown()[-1], new.game_id)                          # new games at the end
@@ -1723,10 +1724,10 @@ class SortingAndCustomOrder(unittest.TestCase):
 
 
 class DragAndDropFeel(unittest.TestCase):
-    """Moving a folder while Folders First / Last puts the tick on Mixed; drops glide into place and the
-    other covers slide aside (state is clean afterwards)."""
+    """Moving something switches to My Arrangement starting from exactly what was shown; drops glide into
+    place and the other covers slide aside (state is clean afterwards)."""
 
-    def test_moving_a_folder_switches_to_mixed_and_drops_land(self):
+    def test_moving_a_folder_keeps_what_was_shown_and_drops_land(self):
         from PySide6.QtCore import QEventLoop, QPoint, QTimer
         t = SortingAndCustomOrder()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
@@ -1740,8 +1741,11 @@ class DragAndDropFeel(unittest.TestCase):
                     loop.exec()
                 w.choose_sort("place:first")
                 f = app.FOLDER_PREFIX + fid
-                w._move_to(f, 3)
-                self.assertEqual((w.settings.sort, w.settings.folder_place), ("custom", "mixed"))
+                shown = [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+                self.assertEqual(shown[0], f)
+                w._move_to(ids["C"], 1)                    # (folder first on screen: it stays first)
+                self.assertEqual(w.settings.sort, "custom")
+                self.assertEqual(lib.library_order()[0], f)
                 # a real drop: lift, move between two covers, let go
                 w._start_game_drag(ids["A"])
                 w._drag_watch.stop()                          # (no real mouse button in a test)
@@ -1775,14 +1779,10 @@ class SortDropDownClicks(unittest.TestCase):
                     w.sort.activated.emit(w.sort.findData(data))
                     for _ in range(3):
                         QApplication.processEvents()
-                for place in ("first", "last", "first"):
+                for place in ("first", "last", "mixed", "first"):
                     click("place:" + place)
                     self.assertEqual(w.settings.folder_place, place)
                     self.assertEqual(w.sort.currentData(), "recent")     # the shown sort stays
-                shown = [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
-                click("place:mixed")                                     # Mixed: your arrangement, from what's shown
-                self.assertEqual((w.settings.sort, w.settings.folder_place), ("custom", "mixed"))
-                self.assertEqual([w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())], shown)
                 click("title")
                 click("place:last")
                 self.assertEqual((w.settings.sort, w.settings.folder_place), ("title", "last"))
