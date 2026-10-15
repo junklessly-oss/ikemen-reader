@@ -1710,6 +1710,10 @@ class ThemedCombo(QComboBox):
         box = self._box()
         box.setMask(QRegion(0, 0, 1, 1))             # hidden until the slide reveals it
         super().showPopup()
+        # a layered window shows the last picture it was given: draw the list afresh now, or a list that changed
+        # while it was closed (e.g. the tick moved to another choice) is shown as it was until something redraws
+        self.view().viewport().repaint()
+        box.repaint()
         self._down = box.mapToGlobal(QPoint(0, 0)).y() >= self.mapToGlobal(QPoint(0, 0)).y()
         self._t0 = self._last = time.monotonic()
         self._slide()
@@ -1726,10 +1730,14 @@ class ThemedCombo(QComboBox):
         if not box.isVisible() or t >= 1:
             self._slide_timer.stop()
             box.clearMask()
+            box.repaint()
             return
         e = 1 - (1 - t) ** 2.2                       # ease out
         h = max(1, round(box.height() * e))
         box.setMask(QRegion(0, 0 if self._down else box.height() - h, box.width(), h))
+        # drawn afresh every frame: the first redraw, right as the window appears, doesn't reach the screen
+        # (a layered window keeps showing its last picture - an old tick - until it's drawn again)
+        box.repaint()
 
 
 class DragGhost(QWidget):
@@ -4379,6 +4387,7 @@ class MainWindow(TaskOwner, QMainWindow):
         tl.addWidget(self.search)
         self.sort = ThemedCombo()
         self.sort.activated.connect(self._sort_picked)
+        self.sort.view().pressed.connect(self._sort_pressed)
         tl.addWidget(self.sort)
         self.filter = ThemedCombo()
         self.filter.currentIndexChanged.connect(self._filter_changed)
@@ -4934,8 +4943,23 @@ class MainWindow(TaskOwner, QMainWindow):
             if data.startswith("place:"):
                 i = c.count() - 1
                 c.setItemIcon(i, tick_icon() if data == "place:" + self.settings.folder_place else blank_icon())
-        current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
-        c.setCurrentIndex(max(0, c.findData(current)))
+        c.blockSignals(False)
+        self._mark_sort()
+
+    def _mark_sort(self, place: Optional[str] = None, select: bool = True) -> None:
+        """Move the tick and the selection to the current choices without rebuilding the list (rebuilding it
+        on every pick made it slow to reopen). place: the folder choice to tick (default: the setting)."""
+        c = self.sort
+        place = place or self.settings.folder_place
+        inside = self.current_folder is not None
+        c.blockSignals(True)
+        for i in range(c.count()):
+            d = c.itemData(i)
+            if d and d.startswith("place:"):
+                c.setItemIcon(i, tick_icon() if d == "place:" + place else blank_icon())
+        if select:                # (not while the list is open: Qt picks the highlighted item on release)
+            current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
+            c.setCurrentIndex(max(0, c.findData(current)))
         c.blockSignals(False)
 
     def _sort_key(self, entry) -> tuple:
@@ -5153,6 +5177,14 @@ class MainWindow(TaskOwner, QMainWindow):
             return              # locked for a moment: it's saved with the next change anyway
         self.share_settings()
 
+    def _sort_pressed(self, index) -> None:
+        """An item pressed in the open list: tick it at once, so the list is right while Qt blinks it and
+        closes (only then does Qt report the pick; see _sort_picked)."""
+        d = index.data(Qt.UserRole)
+        if isinstance(d, str) and d.startswith("place:"):
+            self._mark_sort(d[len("place:"):], select=False)
+            self.sort.view().viewport().repaint()
+
     def _sort_picked(self, index: int) -> None:
         """A choice in the sort drop-down. Acted on just after the click: rebuilding the drop-down's list
         while Qt is still handling the click left it unsure what was selected (the next pick was ignored)."""
@@ -5182,7 +5214,7 @@ class MainWindow(TaskOwner, QMainWindow):
         else:
             self.settings.sort = d
         self._save_view_choice()
-        self._fill_sort()
+        self._mark_sort()
         self._rebuild()                              # (no reload or save check: only the order changed)
         self._slide_from(before)
 
@@ -5698,7 +5730,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 changed = True
             if changed:
                 self._save_view_choice()
-        self._fill_sort()
+        self._mark_sort()
         self._rebuild()
         self._own_change()
         self._select_item(iid)
@@ -6417,6 +6449,39 @@ class MainWindow(TaskOwner, QMainWindow):
         e.accept()                        # other background work: see wait_for_tasks() in main()
 
 
+_DIAG: dict = {}
+
+
+def _install_stall_log() -> None:
+    """Diagnostics, only with IKEMEN_DEBUG_STALLS=1: whenever the window freezes for more than half a second,
+    what every thread was doing is written to %APPDATA%\\IkemenReader\\stalls.log (and sort picks are timed)."""
+    if os.environ.get("IKEMEN_DEBUG_STALLS") != "1":
+        return
+    import faulthandler
+    f = open(default_app_dir() / "stalls.log", "a", encoding="utf-8", buffering=1)
+    f.write(f"\n===== started {time.strftime('%H:%M:%S')} =====\n")
+    _DIAG["file"] = f
+    t = QTimer(QApplication.instance())
+    t.setInterval(100)
+    last = [time.monotonic()]
+
+    def beat():
+        now = time.monotonic()
+        if now - last[0] > 0.5:
+            f.write(f"{time.strftime('%H:%M:%S')} the window was frozen for {now - last[0]:.2f} s\n")
+        last[0] = now
+        faulthandler.dump_traceback_later(0.5, repeat=False, file=f)
+    t.timeout.connect(beat)
+    t.start()
+    _DIAG["timer"] = t
+
+
+def diag(text: str) -> None:
+    f = _DIAG.get("file")
+    if f is not None:
+        f.write(f"{time.strftime('%H:%M:%S')}.{int(time.time() * 1000) % 1000:03d} {text}\n")
+
+
 def user_fonts_dir() -> Path:
     return default_app_dir() / "fonts"
 
@@ -6541,6 +6606,7 @@ def main() -> None:
     if hand_over_to_running_copy():
         return                                  # already open: that window comes to the front instead
     install_error_net()
+    _install_stall_log()
     load_fonts()
     startup.refresh()          # if it starts with Windows, keep that entry pointing at this copy
     settings = load_local_settings()

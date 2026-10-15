@@ -310,6 +310,11 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    through activated -> choose_sort (deferred) and glide (_positions/_slide_from); no refresh/save check.
    Drop-downs are ThemedCombo (layered popup + own mask slide: no white first frame). Top-bar status label has
    a fixed width (longest of Synced/Syncing/Error) so the bar never shifts.
+   ThemedCombo's layered popup keeps showing its LAST picture: it repaints every slide frame (the repaint at
+   show time doesn't reach the screen). Sort picks only move marks (_mark_sort; list rebuilt only for folder
+   in/out + language); the tick moves on view.pressed (Qt blinks + closes before activated), without moving
+   the highlight (Qt picks the highlighted row on release). Diagnostics: IKEMEN_DEBUG_STALLS=1 writes freezes
+   > 0.5 s (all threads' stacks) to %APPDATA%\IkemenReader\stalls.log; diag(text) adds lines there.
 
 - Folder open/close animation (owner's request, 2026-10-15): FolderTransition overlays the library area with two
   snapshots of the covers alone (LibraryGrid.bare = no backdrop); opening = library fades out fully while a

@@ -1790,3 +1790,33 @@ class SortDropDownClicks(unittest.TestCase):
                 self.assertFalse(QApplication.isEffectEnabled(QtNS.UI_AnimateCombo))
             finally:
                 w.close()
+
+
+class SortDropDownRealClicks(unittest.TestCase):
+    """A real mouse press + release on a choice in the open list picks that choice (the tick moves on press,
+    without moving the highlight Qt uses on release)."""
+
+    def test_press_and_release(self):
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QEventLoop, QTimer
+        from PySide6.QtTest import QTest
+        from PySide6.QtCore import Qt as QtNS
+        t = SortingAndCustomOrder()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            w, lib, ids, fid = t._window(tmp, ["A", "B"], ["F1"])
+            try:
+                def wait(ms):
+                    loop = QEventLoop()
+                    QTimer.singleShot(ms, loop.quit)
+                    loop.exec()
+                for place in ("first", "last", "first"):
+                    w.sort.showPopup()
+                    wait(250)
+                    view = w.sort.view()
+                    rect = view.visualRect(w.sort.model().index(w.sort.findData("place:" + place), 0))
+                    QTest.mouseClick(view.viewport(), QtNS.LeftButton, QtNS.NoModifier, rect.center())
+                    wait(250)
+                    self.assertEqual(w.settings.folder_place, place)
+                    self.assertFalse(view.isVisible())
+            finally:
+                w.close()
