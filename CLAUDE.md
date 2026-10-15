@@ -393,6 +393,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   swap rehearsed on the 134 MB build (updated, previous kept, extra files kept, restarted). Tests: 161.
 
 ## Ideas for later (owner interested, not scheduled)
+- Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
+  direction) instead of one flat colour (owner's idea, 2026-10-15).
 - macOS / Linux support: UI, sync engine, library already portable; games would run through Wine (start/track via
   wine, save paths inside the Wine prefix + translation between devices), Wine registry for registry saves,
   LE/Luna don't apply, startup/.lnk/window titles/playtime need equivalents, build per OS (Mac signing ~$99/yr).
