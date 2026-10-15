@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QAp
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                                QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
-                               QStyledItemDelegate, QStyleOptionViewItem, QVBoxLayout, QWidget)
+                               QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QVBoxLayout,
+                               QWidget)
 
 import i18n
 import lnk
@@ -502,7 +503,7 @@ PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
 RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
 STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
-SCROLLBAR_LINGER_S = 1.2             # stays visible this long after scrolling / leaving the edge
+SCROLLBAR_LINGER_S = 0.6             # stays visible this long after scrolling / leaving the edge
 SCROLLBAR_EDGE_PX = 36               # mouse this close to the right edge shows it
 LIGHT_R = 5.5
 LOGO_H = 30
@@ -575,13 +576,14 @@ QComboBox {{ padding-right: 26px; }}
 QComboBox::drop-down {{ border: none; width: 26px; subcontrol-origin: padding; subcontrol-position: center right; }}
 QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; }}
 QComboBox::down-arrow:on {{ top: 1px; }}
+QComboBoxPrivateContainer {{ background: {c['input']}; border: none; }}
 QComboBox QAbstractItemView {{ background: {c['input']}; border: 1px solid {c['border']};
                                selection-background-color: {c['button_hover']}; outline: none; }}
 QPushButton {{ background: {c['button']}; border: 1px solid {c['button']}; border-radius: 6px; padding: 6px 14px; }}
 QPushButton:hover {{ background: {c['button_hover']}; border-color: {c['button_hover']}; }}
 QPushButton:disabled {{ color: {c['other_text']}; background: {c['other_bg']}; border-color: {c['other_bg']}; }}
 QPushButton#play {{ background: {c['play']}; color: {c['play_text']}; border: none; font-size: 14pt;
-                    padding: 8px 30px; border-radius: 8px; }}
+                    padding: 5px 27px; margin: 3px; border-radius: 8px; }}
 QPushButton#play:hover {{ background: {c['play_hover']}; }}
 QPushButton#play:disabled {{ background: {c['play_disabled']}; color: {c['play_disabled_text']}; }}
 QPushButton#danger {{ color: {c['danger']}; }}
@@ -661,6 +663,9 @@ def dot(colour_key: str) -> str:
     return f'<span style="color:{LIGHTS[colour_key]}">●</span>'
 
 
+_BACK_KEYS = ("cancel", "no", "later")          # "don't do it" buttons: always on the far left
+
+
 def message(parent, text: str, title: str = "", buttons=(("ok", "OK"),), icon=None, dismiss: str = "",
             rich: bool = False) -> str:
     """A message with our own (translated) buttons. Returns the chosen key; closing the window counts
@@ -681,11 +686,14 @@ def message(parent, text: str, title: str = "", buttons=(("ok", "OK"),), icon=No
     row = QHBoxLayout()
     row.addStretch()
     chosen = {"key": dismiss or buttons[-1][0]}     # closing the window = `dismiss` (or the last button)
-    for i, (key, label) in enumerate(buttons):
+    # buttons are listed most important first; shown Cancel far left, the main action far right
+    backs = [b for b in buttons if b[0] in _BACK_KEYS]
+    shown = backs + [b for b in reversed(buttons) if b[0] not in _BACK_KEYS]
+    for key, label in shown:
         b = QPushButton(label)
         b.clicked.connect(lambda _=False, k=key: (chosen.update(key=k), d.accept()))
-        if i == 0:
-            b.setDefault(True)
+        if key == buttons[0][0]:
+            b.setDefault(True)                     # Enter = the first one listed
         row.addWidget(b)
     lay.addLayout(row)
     d.setFixedSize(d.sizeHint())              # sized to the wrapped text
@@ -1494,6 +1502,68 @@ class EscWatcher(QObject):
             ev.accept()
             return True
         return False
+
+
+class PulseButton(QPushButton):
+    """The Read / Stop button: while the mouse is over it (and it can be pressed) it swells and settles
+    slowly, like breathing. A 3 px margin round the button leaves room to grow without being cut off."""
+    PULSE, PERIOD = 0.03, 1.6           # grows up to 3 %, one beat every 1.6 s
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._hover = False
+        self._scale = 1.0
+        self._since = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._step)
+
+    def _pulsing(self) -> bool:
+        return self._hover and self.isEnabled()
+
+    def enterEvent(self, ev) -> None:
+        super().enterEvent(ev)
+        self._hover = True
+        self._since = time.monotonic()
+        self._timer.start()
+
+    def leaveEvent(self, ev) -> None:
+        super().leaveEvent(ev)
+        self._hover = False
+        self._timer.start()
+
+    def changeEvent(self, ev) -> None:
+        super().changeEvent(ev)
+        if ev.type() == QEvent.EnabledChange:
+            self._since = time.monotonic()
+            self._timer.start()
+
+    def _step(self) -> None:
+        if self._pulsing():
+            t = time.monotonic() - self._since
+            self._scale = 1 + self.PULSE * (1 - math.cos(2 * math.pi * t / self.PERIOD)) / 2
+        else:
+            self._scale += (1.0 - self._scale) * 0.25          # settle back
+            if abs(self._scale - 1.0) < 0.001:
+                self._scale = 1.0
+                self._timer.stop()
+        self.update()
+
+    def paintEvent(self, ev) -> None:
+        if self._scale == 1.0:
+            super().paintEvent(ev)
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        c = QRectF(self.rect()).center()
+        p.translate(c)
+        p.scale(self._scale, self._scale)
+        p.translate(-c)
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        self.style().drawControl(QStyle.CE_PushButton, opt, p, self)
+        p.end()
 
 
 class TrashButton(QPushButton):
@@ -2329,7 +2399,38 @@ class BackgroundDialog(QDialog):
         super().done(r)
 
 
-class SettingsDialog(QDialog):
+class FitsScreen:
+    """For dialogs laid out as [scroll area holding self._content, button row]: as tall as the contents
+    need, but never taller than the screen; then the contents scroll and the buttons stay in view."""
+
+    @staticmethod
+    def _screen_room(widget: QWidget) -> QRect:
+        screen = widget.screen() or QApplication.primaryScreen()
+        return screen.availableGeometry()
+
+    def _fit_height(self) -> None:
+        """As tall as the contents need (with the hint texts wrapped at the real width), but never
+        taller than the screen: then the contents scroll and Cancel / Save stay in view."""
+        width = max(self.width(), self.minimumWidth())
+        content = self._content.layout().totalHeightForWidth(width)
+        buttons = self.layout().itemAt(1).sizeHint().height()
+        room = self._screen_room(self)
+        frame = self.frameGeometry().height() - self.geometry().height() if self.isVisible() else 32
+        h = min(content + buttons, room.height() - max(frame, 32) - 8)
+        self.setMinimumHeight(min(320, h))
+        self.resize(width, h)
+        if self.isVisible():                    # keep the whole window on the screen
+            top = self.frameGeometry().top()
+            bottom = top + h + max(frame, 32)
+            if bottom > room.bottom() or top < room.top():
+                self.move(self.x(), max(room.top(), room.bottom() - h - max(frame, 32)))
+
+    def showEvent(self, ev) -> None:
+        super().showEvent(ev)
+        self._fit_height()
+
+
+class SettingsDialog(FitsScreen, QDialog):
     def __init__(self, current: Optional[LocalSettings], parent=None, welcome: bool = False):
         super().__init__(parent)
         self._i18n: list[Callable] = []          # re-applies every text when the language is switched
@@ -2517,32 +2618,6 @@ class SettingsDialog(QDialog):
         if hasattr(main, "preview_language"):
             main.preview_language()
         self.adjustSize()
-        self._fit_height()
-
-    @staticmethod
-    def _screen_room(widget: QWidget) -> QRect:
-        screen = widget.screen() or QApplication.primaryScreen()
-        return screen.availableGeometry()
-
-    def _fit_height(self) -> None:
-        """As tall as all the settings need (with the hint texts wrapped at the real width), but never
-        taller than the screen: then the settings scroll and Cancel / Save stay in view."""
-        width = max(self.width(), self.minimumWidth())
-        content = self._content.layout().totalHeightForWidth(width)
-        buttons = self.layout().itemAt(1).sizeHint().height()
-        room = self._screen_room(self)
-        frame = self.frameGeometry().height() - self.geometry().height() if self.isVisible() else 32
-        h = min(content + buttons, room.height() - max(frame, 32) - 8)
-        self.setMinimumHeight(min(320, h))
-        self.resize(width, h)
-        if self.isVisible():                    # keep the whole window on the screen
-            top = self.frameGeometry().top()
-            bottom = top + h + max(frame, 32)
-            if bottom > room.bottom() or top < room.top():
-                self.move(self.x(), max(room.top(), room.bottom() - h - max(frame, 32)))
-
-    def showEvent(self, ev) -> None:
-        super().showEvent(ev)
         self._fit_height()
 
     def _preview(self, theme: str, custom: dict) -> None:
@@ -3048,7 +3123,7 @@ class VndbDialog(TaskOwner, QDialog):
         self.accept()
 
 
-class GameDialog(TaskOwner, QDialog):
+class GameDialog(FitsScreen, TaskOwner, QDialog):
     """Add or edit a game: title, cover, launch options, reading status, and paths for This Device
     (with Browse) and the Other Device (greyed, text only)."""
 
@@ -3069,9 +3144,20 @@ class GameDialog(TaskOwner, QDialog):
         self.manual_title = game.manual_title if game else ""      # restored when Automatic is turned off
         self._suggestion: Optional[tuple] = None
 
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(20, 18, 20, 18)
+        # the contents scroll when the screen is too short for them; the buttons stay fixed below
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self._content = QWidget(objectName="settings_content")
+        outer = QHBoxLayout(self._content)
+        outer.setContentsMargins(20, 18, 20, 4)
         outer.setSpacing(20)
+        scroll = QScrollArea(objectName="settings_scroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(self._content)
+        root.addWidget(scroll, 1)
         # -- cover on the left
         left = QVBoxLayout()
         self.cover = CropView()
@@ -3202,8 +3288,9 @@ class GameDialog(TaskOwner, QDialog):
         save.clicked.connect(self._save)
         row.addWidget(cancel)
         row.addWidget(save)
-        lay.addSpacing(8)
-        lay.addLayout(row)
+        # under the right-hand column, as before (the cover column's width + the gaps on its left)
+        row.setContentsMargins(20 + left.sizeHint().width() + 20, 8, 20, 18)
+        root.addLayout(row)
 
         # adding with "fetch covers from VNDB" on: look it up straight away
         if not game and settings.vndb and self.title.text().strip():
@@ -3780,7 +3867,7 @@ class MainWindow(TaskOwner, QMainWindow):
         # that so they sit centred in the whole band (14 + 11 above, 14 - 11 below)
         dl.setContentsMargins(22, 25, 22, 3)
         dl.setSpacing(12)
-        self.play_btn = QPushButton(objectName="play")
+        self.play_btn = PulseButton(objectName="play")
         self.play_btn.clicked.connect(self._play_button)
         dl.addWidget(self.play_btn)
         dl.addSpacing(10)
@@ -4353,10 +4440,14 @@ class MainWindow(TaskOwner, QMainWindow):
         self.d_sync.setText(main + extra)
         tip = text_key.replace("sync.state.", "sync.tip.")
         self.d_sync.setToolTip(tr(tip) if tip in i18n.S else "")
-        self.d_status.setVisible(not quiet)
-        self.d_status.blockSignals(True)
-        self.d_status.setCurrentIndex(max(0, self.d_status.findData(g.status)))
-        self.d_status.blockSignals(False)
+        # leave the drop-down alone while its list is open (a background refresh mustn't redraw or close it)
+        if not self.d_status.view().isVisible():
+            self.d_status.setVisible(not quiet)
+            want = max(0, self.d_status.findData(g.status))
+            if self.d_status.currentIndex() != want:
+                self.d_status.blockSignals(True)
+                self.d_status.setCurrentIndex(want)
+                self.d_status.blockSignals(False)
 
         mine = g.paths_for(self.settings.machine_name)
         ready = bool(mine.exe)
@@ -5112,12 +5203,12 @@ class MainWindow(TaskOwner, QMainWindow):
         a = m.addAction(tr("menu.sync_now"), lambda: self.sync_now([g]))
         a.setEnabled(self.light_state(g.game_id) in ("push", "pull", "conflict") and self.worker is None
                      and self.syncer is None)
-        a = m.addAction(tr("menu.restore"), self.restore_selected)
-        a.setEnabled(bool(mine.save_dir) and self.worker is None)
         a = m.addAction(tr("menu.open_saves"), lambda: open_folder(mine.save_dir))
         a.setEnabled(bool(mine.save_dir))
         a = m.addAction(tr("menu.open_game"), lambda: open_folder(str(Path(mine.exe).parent)))
         a.setEnabled(bool(mine.exe))
+        a = m.addAction(tr("menu.restore"), self.restore_selected)
+        a.setEnabled(bool(mine.save_dir) and self.worker is None)
         m.addSeparator()
         a = m.addAction(tr("game.remove"), lambda: self.remove_game(g.game_id))
         a.setEnabled(self.worker is None)             # not while a game is running or syncing

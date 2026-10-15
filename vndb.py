@@ -13,6 +13,7 @@ import queue
 import re
 import ssl
 import threading
+import time
 import unicodedata
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -36,6 +37,7 @@ HEADERS = {"Content-Type": "application/json", "User-Agent": "IkemenReader/1.0 (
 _IDLE: dict[str, "queue.LifoQueue"] = {}
 _IDLE_LOCK = threading.Lock()
 _CONTEXT = ssl.create_default_context()
+_IDLE_MAX_S = 20.0                       # older idle connections aren't trusted
 _BYTES: dict[str, bytes] = {}           # url -> picture, for this session
 _BYTES_SIZE = [0]
 _BYTES_LIMIT = 40 * 1024 * 1024
@@ -48,20 +50,39 @@ def _idle(host: str) -> "queue.LifoQueue":
         return _IDLE.setdefault(host, queue.LifoQueue(maxsize=6))
 
 
+def _drop_idle(pool: "queue.LifoQueue") -> None:
+    """Close every kept-open connection to a server (after a pause the server has closed them all)."""
+    while True:
+        try:
+            conn, _ = pool.get_nowait()
+        except queue.Empty:
+            return
+        conn.close()
+
+
 def _request(method: str, url: str, body: Optional[bytes] = None, headers: Optional[dict] = None,
              timeout: float = 15.0) -> bytes:
-    """One HTTPS request over a kept-open connection (a stale one is replaced and tried once more)."""
+    """One HTTPS request over a kept-open connection. Connections left unused for a while are dropped
+    (the server will have closed them); if a reused one fails anyway, all the idle ones are dropped and a
+    fresh connection is tried, and a fresh one that fails is tried once more after a short pause."""
     u = urllib.parse.urlsplit(url)
     path = u.path + (f"?{u.query}" if u.query else "")
     hdrs = {"User-Agent": HEADERS["User-Agent"], "Connection": "keep-alive", **(headers or {})}
     pool = _idle(u.netloc)
-    for attempt in (1, 2):
+    fresh_failures = 0
+    while True:
+        conn = None
         try:
-            conn = pool.get_nowait()
-            fresh = False
+            conn, since = pool.get_nowait()
+            if time.monotonic() - since > _IDLE_MAX_S:
+                conn.close()
+                _drop_idle(pool)
+                conn = None
         except queue.Empty:
+            pass
+        fresh = conn is None
+        if fresh:
             conn = http.client.HTTPSConnection(u.netloc, timeout=timeout, context=_CONTEXT)
-            fresh = True
         conn.timeout = timeout
         try:
             conn.request(method, path, body=body, headers=hdrs)
@@ -69,20 +90,24 @@ def _request(method: str, url: str, body: Optional[bytes] = None, headers: Optio
             data = r.read()
         except (http.client.HTTPException, OSError):
             conn.close()
-            if fresh or attempt == 2:
+            if not fresh:
+                _drop_idle(pool)        # the server closed the idle connections: start over with a fresh one
+                continue
+            fresh_failures += 1
+            if fresh_failures >= 2:
                 raise
-            continue                    # the server had closed an idle connection: try a fresh one
+            time.sleep(0.5)             # e.g. the network was just waking up
+            continue
         if r.will_close:
             conn.close()
         else:
             try:
-                pool.put_nowait(conn)
+                pool.put_nowait((conn, time.monotonic()))
             except queue.Full:
                 conn.close()
         if r.status >= 400:
             raise OSError(f"VNDB answered {r.status} for {url}")
         return data
-    raise OSError("unreachable")
 
 
 def fetch(url: str, timeout: float = 20.0) -> bytes:

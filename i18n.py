@@ -180,17 +180,17 @@ S: dict[str, tuple[str, str]] = {
     "bar.open":                 ("Open", "開く"),
     "bar.rename":               ("Rename", "名前を変更"),
     "menu.open_folder_tile":    ("Open", "開く"),
-    "menu.rename_folder":       ("Rename...", "名前を変更…"),
+    "menu.rename_folder":       ("Rename", "名前を変更"),
     "menu.remove_folder":       ("Remove Folder", "フォルダーを解除"),
     "menu.add_to_folder":       ("Add to Folder", "フォルダーに追加"),
-    "menu.new_folder":          ("New Folder...", "新しいフォルダー…"),
+    "menu.new_folder":          ("New Folder", "新しいフォルダー"),
     "menu.remove_from_folder":  ("Remove From Folder", "フォルダーから出す"),
 
     # ------------------------------------------------------------------ context menu
     "menu.play":                ("Read", "読む"),
-    "menu.edit":                ("Edit...", "編集…"),
+    "menu.edit":                ("Edit", "編集"),
     "menu.status":              ("Reading Status", "プレイ状況"),
-    "menu.restore":             ("Restore an Earlier Save...", "以前のセーブを復元…"),
+    "menu.restore":             ("Restore an Earlier Save", "以前のセーブを復元"),
     "menu.open_saves":          ("Open Save Folder", "セーブフォルダーを開く"),
     "menu.open_game":           ("Open Game Folder", "ゲームフォルダーを開く"),
 

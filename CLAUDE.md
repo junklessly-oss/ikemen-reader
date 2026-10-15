@@ -242,7 +242,48 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   to pick after a blank-save-folder first session, games that make files on install, game waits for the choice,
   closing only uploads.
 
+## Version 1.0.1 plan (agreed 2026-10-15; work through in this order, owner tests each step)
+1. Quick fixes: right-click menu: "Restore an Earlier Save" below Open Save Folder + Open Game Folder; remove
+   "..." from menu items / buttons (done); progress + status texts KEEP theirs ("Searching...", "Now Reading...",
+   "Search..." placeholder) - owner's call. Button order: Cancel
+   always far left, main action far right (ask() helper + multi-choice pop-ups put Cancel last today). Read /
+   Stop button: slow slight rhythmic pulse on hover (~3%, ~1.6 s), nothing when greyed. Library scrollbar
+   fades sooner (~0.6 s). Edit window scrolls like Settings. VNDB "not connected" on first try: retry once
+   on a fresh connection. Drop-down flicker (laptop only): owner thinks it was a one-off glitch;
+   keep Qt's own style + the sliding-open animation (owner likes it). Forcing windowsvista + no animation was
+   tried and reverted. Applied: QComboBoxPrivateContainer gets the input colour (no pale frame while
+   sliding open); the bottom-bar status drop-down isn't touched by refreshes while its list is open.
+2. Grid: Steam-style covers - today's size = minimum, covers stretch to fill each row, a new column when
+   one more fits at minimum, equal gaps left/right, crops unchanged. Drag auto-scroll near top/bottom edge,
+   faster the further you push. Background picture: KEEP as before (pinned-crop trial rejected: laggy,
+   disorienting). Cover-size slider: not now (future idea).
+3. Titles: hover titles - English breaks only between words; Japanese shrinks one font size when it
+   overflows by 1-2 characters, else wraps (kinsoku: no line starts with 。、ー」 etc.). Added-game title:
+   ignore engine names (AdvGame Module, codeX RScript, TVP(KIRIKIRI)..., Stuff スクリプトエンジン, AVGEngineV2,
+   words engine/エンジン/module/script/platform/core), then best of folder/exe name (prefer Japanese,
+   prefer the fuller one: Reli vs Relirium), strip edition tags and 『』 around the whole title.
+4. Lights + bookmarks: new LAVENDER light (~#A98BD9) = synced, set up on this device, not yet on the other
+   (top bar still "Synced"; Custom Theme + guide). Folder light = pie with EQUAL slices, one per colour
+   present (max 6), most important first from 12 o'clock clockwise; whole pie breathes at the normal calm
+   pace (no busy/steady per slice); each slice's glow in its own colour. Bookmarks: ribbon in the shape of
+   assets/Bookmark.png, solid colour, no outline, top-right corner starting exactly at the cover's top edge
+   (not above: clashes with the selection outline); no reading status = no bookmark; also on covers inside
+   folders and in the folder mosaic. Colours (Custom Theme): Finished muted gold, Reading muted silver,
+   Plan to Read muted bronze, Dropped muted rose. Toggle: bare icon button (Bookmark.png recoloured) between
+   Edit and the trash can, like show_stats (setting at END of LocalSettings); hover: off = one nudge,
+   on = steady rocking (TrashButton motions). In the guide.
+5. Detection: save-folder suggestion must match the WHOLE title / full exe name / game folder name (not one
+   word: "black" matched Documents\BLACKcyc\SaDisticBlooD_savefiles for Black Sheep Town), folder must hold
+   save-like files, more than one candidate or any doubt -> suggest nothing. Other-device translation stays.
+   Registry: key clearly named after the game/maker/exe -> filled in automatically, not asked; obvious noise
+   ignored; unsure -> the pop-up gets separate "Save Folder" and "Registry" sections (unsure keys unticked).
+6. Folder sorting: in the sort drop-down under a divider: Folders First / Mixed / Folders Last (independent of
+   the sort; folders sorted by the same rule: latest game / total hours / name). Custom order inside folders:
+   drag to rearrange (drop marker), synced, new games go last, "Custom" in the sort drop-down inside a folder
+   (starts from the order being viewed); mosaic shows the first four.
+
 ## Ideas for later (owner interested, not scheduled)
+- Cover size changer (Ctrl+wheel and/or slider in Settings → Display).
 - Theme editor (low priority): Settings → "Customise Theme..." window listing every colour in COLORS/LIGHTS
   under friendly grouped names, swatch + hex box each, Qt colour picker (styled), live preview through
   apply_theme, start from Dark/Light, per-colour + full reset, optional "Simple" mode (3-4 base colours →

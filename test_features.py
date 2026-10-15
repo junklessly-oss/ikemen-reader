@@ -1160,3 +1160,65 @@ class SilentSyncInTheWindow(unittest.TestCase):
                 self.assertEqual((pc_saves / "0001" / "frames.npf").read_text("utf-8"), "pc route")   # untouched
             finally:
                 w.close()
+
+
+class Version101QuickFixes(unittest.TestCase):
+    """1.0.1: no "..." on menu items, Cancel always on the far left, VNDB survives closed connections."""
+
+    def test_no_trailing_dots_on_menu_items(self):
+        import i18n                 # (progress texts like "Searching..." keep theirs)
+        for key, pair in i18n.S.items():
+            if not key.startswith("menu."):
+                continue
+            for text in pair:
+                self.assertFalse(text.rstrip().endswith(("...", "…")), f"{key}: {text}")
+
+    def test_cancel_on_the_left_main_action_on_the_right(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+        import app
+        QApplication.instance() or QApplication([])
+        cases = [([("yes", "Remove"), ("no", "Cancel")], ["Cancel", "Remove"], "Remove"),
+                 ([("no", "Cancel"), ("yes", "Confirm")], ["Cancel", "Confirm"], "Cancel"),
+                 ([("setup", "Set Up"), ("new", "Add as New"), ("cancel", "Cancel")],
+                  ["Cancel", "Add as New", "Set Up"], "Set Up"),
+                 ([("now", "Choose Now"), ("later", "Later")], ["Later", "Choose Now"], "Choose Now")]
+        for buttons, order, default in cases:
+            seen = {}
+
+            def fake_exec(d):
+                d.layout().activate()
+                bs = sorted(d.findChildren(QPushButton), key=lambda b: b.geometry().x())
+                seen["order"] = [b.text() for b in bs]
+                seen["default"] = [b.text() for b in bs if b.isDefault()]
+                return 0
+            with mock.patch.object(QDialog, "exec", fake_exec):
+                app.message(None, "text", buttons=buttons)
+            self.assertEqual(seen["order"], order)
+            self.assertEqual(seen["default"], [default])
+
+    def test_vndb_replaces_every_closed_connection(self):
+        import queue
+        from unittest import mock
+        import vndb
+
+        class Dead:
+            timeout = 1
+            def request(self, *a, **k): raise ConnectionResetError("closed by the server")
+            def close(self): pass
+
+        class Alive:
+            timeout = 1
+            def request(self, *a, **k): pass
+            def getresponse(self):
+                return mock.Mock(status=200, will_close=True, read=lambda: b"ok")
+            def close(self): pass
+
+        pool = queue.LifoQueue(maxsize=6)
+        for _ in range(6):
+            pool.put((Dead(), time.monotonic()))
+        with mock.patch.object(vndb, "_idle", lambda host: pool), \
+                mock.patch.object(vndb.http.client, "HTTPSConnection", lambda *a, **k: Alive()):
+            self.assertEqual(vndb._request("GET", "https://api.vndb.org/x"), b"ok")
+        self.assertTrue(pool.empty())
