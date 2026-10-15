@@ -40,7 +40,10 @@ _WEAK_WORDS = ("データ", "data", "user", "system")                     # weak
 
 _REG_NOISE = {"microsoft", "classes", "policies", "wow6432node", "google", "mozilla", "nvidia corporation",
               "intel", "amd", "valve", "discord", "spotify", "registeredapplications", "clients",
-              "appdatalow", "oem", "python", "7-zip", "winrar", "jetbrains", "adobe", "zoom"}
+              "appdatalow", "oem", "python", "7-zip", "winrar", "jetbrains", "adobe", "zoom",
+              # our own and the tools we start: never a game's saves
+              "ikemenreader", "ikemen reader", "vnlauncher", "lunatranslator", "lunahook", "locale emulator",
+              "localeemulator", "qtproject", "trolltech"}
 
 
 @dataclass
@@ -50,6 +53,7 @@ class Candidate:
     score: float
     files: int = 0            # changed files (folder) / changed keys (registry)
     reasons: list[str] = field(default_factory=list)
+    sure: bool = False        # registry: the key is plainly this game's (stored without asking)
 
 
 def default_roots(game_dir: str) -> list[Path]:
@@ -444,13 +448,28 @@ def suggest_save_folder(game_dir: str, names: Iterable[str], other: Optional[tup
     return None
 
 
+def registry_confidence(maker: str, game: str, names: Iterable[str]) -> Optional[str]:
+    """How plainly HKCU\\Software\\<maker>\\<game> belongs to this game: "sure" when the key itself is named
+    after the whole game (Software\\WillPlus\\CROSS†CHANNEL); "maybe" when only part of a name matches, or
+    only the maker's; None when nothing ties it to the game (or it's Windows' / a program's own)."""
+    if maker.casefold() in _REG_NOISE or game.casefold() in _REG_NOISE:
+        return None
+    whole = _whole_names(names)
+    if whole and _same_game(game, whole):
+        return "sure"
+    tokens = _tokens(*names)
+    if _matches(game, tokens) or _matches(maker, tokens) or (whole and _same_game(maker, whole)):
+        return "maybe"
+    return None
+
+
 def find_registry(since: float, names: list[str]) -> list[Candidate]:
-    """HKCU\\Software\\<Maker>\\<Game> keys written since `since` that are named after the game."""
+    """HKCU\\Software\\<Maker>\\<Game> keys written since `since` that are tied to the game by name, the
+    plainly-this-game ones (sure) first."""
     if sys.platform != "win32":
         return []
     import winreg
 
-    tokens = _tokens(*names)
     # FILETIME (100ns since 1601) for `since`
     since_ft = int((since + 11644473600) * 10_000_000)
     found: list[Candidate] = []
@@ -482,10 +501,11 @@ def find_registry(since: float, names: list[str]) -> list[Candidate]:
                                 written = winreg.QueryInfoKey(gk)[2]
                         except OSError:
                             continue
-                        if written >= since_ft and (_matches(game, tokens) or _matches(maker, tokens)):
+                        how = registry_confidence(maker, game, names) if written >= since_ft else None
+                        if how:
                             found.append(Candidate(f"HKEY_CURRENT_USER\\Software\\{maker}\\{game}",
-                                                   "registry", 3 + (1 if _matches(game, tokens) else 0), 1,
-                                                   ["named after the game"]))
+                                                   "registry", 5 if how == "sure" else 3, 1,
+                                                   ["named after the game"], sure=how == "sure"))
             except OSError:
                 continue
     return sorted(found, key=lambda c: c.score, reverse=True)[:3]

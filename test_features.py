@@ -1523,3 +1523,43 @@ class StricterSaveSuggestions(unittest.TestCase):
         write(self.docs / "Indigo", "config.ini", "x")
         write(self.docs / "Indigo", "error.log", "x")
         self.assertIsNone(self.suggest(self.root / "D" / "Indigo", ["Indigo"]))
+
+
+class RegistryConfidence(unittest.TestCase):
+    """1.0.1: a key named after the whole game is stored without asking; part of a name / only the maker's
+    name = offered unticked; Windows', programs' and our own keys never."""
+
+    def test_levels(self):
+        import detect
+        names = ["CROSS†CHANNEL", "CROSSCHANNEL", "CROSS†CHANNEL"]
+        self.assertEqual(detect.registry_confidence("WillPlus", "CROSS†CHANNEL", names), "sure")
+        self.assertEqual(detect.registry_confidence("WillPlus", "CrossChannel_Config", names), "maybe")
+        self.assertEqual(detect.registry_confidence("CROSSCHANNEL", "Settings", names), "maybe")   # maker only
+        bst = ["BLACK SHEEP TOWN", "Bst", "BLACK SHEEP TOWN"]
+        self.assertEqual(detect.registry_confidence("MoralityLine", "Bst", bst), "sure")
+        self.assertEqual(detect.registry_confidence("BLACKcyc", "SaDisticBlooD", bst), "maybe")  # one shared word
+        self.assertIsNone(detect.registry_confidence("Microsoft", "Black Sheep Town", bst))
+        self.assertIsNone(detect.registry_confidence("IkemenReader", "BLACK SHEEP TOWN", bst))
+        self.assertIsNone(detect.registry_confidence("Valve", "Steam", bst))
+
+    def test_window_sections(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        import detect
+        QApplication.instance() or QApplication([])
+        game = app.Game(game_id="g", title="CROSS†CHANNEL")
+        folder = detect.Candidate(r"C:\Saves\CROSS", "folder", 5, 3)
+        sure = detect.Candidate(r"HKEY_CURRENT_USER\Software\WillPlus\CROSS†CHANNEL", "registry", 5, 1, sure=True)
+        maybe = detect.Candidate(r"HKEY_CURRENT_USER\Software\CROSSCHANNEL\Settings", "registry", 3, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            d = app.DetectDialog(game, [folder, sure, maybe], Path(tmp))
+            self.assertEqual(d._registry_choice(), sure.path)           # stored without asking
+            self.assertTrue(all(b.isHidden() for b in d.reg_boxes))
+            d = app.DetectDialog(game, [folder, maybe], Path(tmp))
+            self.assertEqual(d._registry_choice(), "")                  # not sure: offered, unticked
+            d.reg_boxes[0].setChecked(True)
+            self.assertEqual(d._registry_choice(), maybe.path)
+            d = app.DetectDialog(game, [maybe], Path(tmp))
+            self.assertEqual(d._registry_choice(), maybe.path)          # the only lead: ticked

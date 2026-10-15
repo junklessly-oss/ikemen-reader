@@ -3955,11 +3955,17 @@ class DetectDialog(QDialog):
         lay.setContentsMargins(20, 18, 20, 18)
         folders = [c for c in candidates if c.kind == "folder"]
         regs = [c for c in candidates if c.kind == "registry"]
+        sure = [c for c in regs if c.sure]
+        maybe = [c for c in regs if not c.sure][:3]
+        self._sure_key = sure[0].path if sure else ""      # plainly this game's: stored without asking
         n_options = len(folders) if folders else (1 if regs else 0)
         key = "detect.none_body" if not candidates else ("detect.body_one" if n_options == 1 else "detect.body_many")
         body = QLabel(tr(key, title=html.escape(game.title)))
         body.setWordWrap(True)
         lay.addWidget(body)
+        if regs:                                           # two sections: never a choice between the two
+            lay.addSpacing(4)
+            lay.addWidget(section(tr("detect.section_saves")))
         self.group = QButtonGroup(self)
         for i, c in enumerate(folders):
             rb = QRadioButton(f"{c.path}\n{tr('detect.files', n=c.files)}")
@@ -3973,13 +3979,25 @@ class DetectDialog(QDialog):
             rb.setChecked(True)
             self.group.addButton(rb)
             lay.addWidget(rb)
-        self.reg_box = None
+        self.reg_boxes: list[QCheckBox] = []
         if regs:
-            self.reg_box = QCheckBox(tr("detect.registry", key=regs[0].path))
-            self.reg_box.setToolTip(tr("detect.registry_tip"))
-            self.reg_box.setChecked(not folders)
-            self.reg_box.setProperty("key", regs[0].path)
-            lay.addWidget(self.reg_box)
+            lay.addSpacing(6)
+            lay.addWidget(section(tr("detect.section_registry")))
+            if self._sure_key:
+                lay.addWidget(hint(tr("detect.registry_auto", key=self._sure_key)))
+            for c in maybe:                                 # not sure: offered, unticked
+                b = QCheckBox(c.path)                           # (under the Registry heading)
+                b.setToolTip(tr("detect.registry_tip"))
+                b.setProperty("key", c.path)
+                if self._sure_key:
+                    b.hide()                                # one registry key per game: the sure one is used
+                self.reg_boxes.append(b)
+                lay.addWidget(b)
+            if not self._sure_key and not folders and self.reg_boxes:
+                self.reg_boxes[0].setChecked(True)          # nothing else changed: it's the only lead
+            if not self._sure_key and len(maybe) > 1:       # one key per game: ticking one unticks the others
+                for b in self.reg_boxes:
+                    b.toggled.connect(lambda on, me=b: on and [o.setChecked(False) for o in self.reg_boxes if o is not me])
         row = QHBoxLayout()
         other = QPushButton(tr("detect.browse"))
         other.clicked.connect(self._browse)
@@ -3997,7 +4015,9 @@ class DetectDialog(QDialog):
         lay.addLayout(row)
 
     def _registry_choice(self) -> str:
-        return self.reg_box.property("key") if self.reg_box and self.reg_box.isChecked() else ""
+        if self._sure_key:
+            return self._sure_key
+        return next((b.property("key") for b in self.reg_boxes if b.isChecked()), "")
 
     def _ok(self, path: str) -> bool:
         problem = save_folder_problem(path, self.cloud_root)

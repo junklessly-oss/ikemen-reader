@@ -284,6 +284,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    save-like files, more than one candidate or any doubt -> suggest nothing. Other-device translation stays.
    Registry: key clearly named after the game/maker/exe -> filled in automatically, not asked; obvious noise
    ignored; unsure -> the pop-up gets separate "Save Folder" and "Registry" sections (unsure keys unticked).
+   DONE: detect._whole_names/_same_game/_looks_like_saves/_save_subfolder (engine clutter -> the one save-named
+   folder below), 2+ candidates -> nothing (PC check: 12/14 exact, 2 ambiguous empty, 0 wrong).
+   detect.registry_confidence: "sure" (key named after the whole game) -> stored, shown as a note;
+   "maybe" -> unticked checkbox (ticked when no folder changed at all); our own / Luna / LE keys ignored.
 6. Folder sorting: in the sort drop-down under a divider: Folders First / Mixed / Folders Last (independent of
    the sort; folders sorted by the same rule: latest game / total hours / name). Custom order inside folders:
    drag to rearrange (drop marker), synced, new games go last, "Custom" in the sort drop-down inside a folder
