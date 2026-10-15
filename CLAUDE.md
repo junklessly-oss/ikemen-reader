@@ -289,6 +289,13 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    drag to rearrange (drop marker), synced, new games go last, "Custom" in the sort drop-down inside a folder
    (starts from the order being viewed); mosaic shows the first four.
 
+- Folder open/close animation (owner's request, 2026-10-15): FolderTransition overlays the library area with two
+  snapshots of the covers alone (LibraryGrid.bare = no backdrop); opening = library fades out fully while a
+  tile-shaped rounded window opens out of the folder tile with the folder view inside growing 0.5 -> 1; closing
+  reverses into the tile. FOLDER_ANIM_MS 280, ease-out 2.2, clock starts on the first frame, frames paced by a
+  0 ms timer (>= 7 ms apart; Windows' 15.6 ms timer steps made 16/31 ms judder), the light pulse's grid updates
+  pause while it runs (they forced out-of-step repaints). Read button: only the bevel scales, the label stays.
+
 ## Ideas for later (owner interested, not scheduled)
 - Cover size changer (Ctrl+wheel and/or slider in Settings → Display).
 - Theme editor (low priority): Settings → "Customise Theme..." window listing every colour in COLORS/LIGHTS

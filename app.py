@@ -25,7 +25,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import (QSizeF, QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
                             QTimer, Signal)
 from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QDrag, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
-                           QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
+                           QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRegion,
                            QRadialGradient)
 from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -339,9 +339,11 @@ class LibraryGrid(QListWidget):
         self.viewport().setAutoFillBackground(False)
         self.viewport().setAttribute(Qt.WA_OpaquePaintEvent, True)   # we paint every pixel ourselves
 
+    bare = False              # True while taking a snapshot of the covers alone (folder animation)
+
     def paintEvent(self, ev) -> None:
         backdrop = getattr(self.w, "backdrop", None)
-        if backdrop is not None:
+        if backdrop is not None and not self.bare:
             p = QPainter(self.viewport())
             origin = self.viewport().mapTo(backdrop, QPoint(0, 0)) - backdrop.library_area().topLeft()
             backdrop.paint_into(p, ev.rect(), origin)
@@ -519,6 +521,7 @@ GRID = {"cover_w": float(COVER_W), "cover_h": float(COVER_H)}
 HOVER_LIFT = 6                       # px the cover rises on hover
 HOVER_GROW = 0.03                    # 3% bigger on hover
 HOVER_MS = 150                       # ease in/out time
+FOLDER_ANIM_MS = 280                 # opening / closing a folder: its games grow out of (or back into) its tile
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
@@ -1712,16 +1715,20 @@ class PulseButton(QPushButton):
         if self._scale == 1.0:
             super().paintEvent(ev)
             return
+        # only the button itself grows; its text stays exactly where it is (scaled text shimmers)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
         c = QRectF(self.rect()).center()
+        p.save()
         p.translate(c)
         p.scale(self._scale, self._scale)
         p.translate(-c)
-        opt = QStyleOptionButton()
-        self.initStyleOption(opt)
-        self.style().drawControl(QStyle.CE_PushButton, opt, p, self)
+        self.style().drawControl(QStyle.CE_PushButtonBevel, opt, p, self)
+        p.restore()
+        self.style().drawControl(QStyle.CE_PushButtonLabel, opt, p, self)
         p.end()
 
 
@@ -1916,6 +1923,87 @@ class WobbleBox(TrashButton):
         p.setPen(QColor(COLORS["text"]))
         p.setFont(self.box_font)
         p.drawText(r, Qt.AlignCenter, self.text_)
+        p.end()
+
+
+class FolderTransition(QWidget):
+    """Opening a folder: the library fades away while the folder's games grow out of the folder's tile.
+    Closing: the folder's games shrink back into the tile while the library fades in. Drawn over the library
+    area from two snapshots of the covers alone (the background picture stays perfectly still); the real
+    grid is already in place underneath and takes over when it ends. Clicks go straight through."""
+
+    def __init__(self, window: "MainWindow", before: QPixmap, after: QPixmap, tile: QRectF, opening: bool):
+        super().__init__(window.backdrop)
+        self.w, self.before, self.after, self.tile, self.opening = window, before, after, tile, opening
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setGeometry(window.backdrop.library_area())
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)     # we paint every pixel: nothing underneath is redrawn
+        self._start: Optional[float] = None                 # the clock starts with the first frame on screen
+        # Windows' timers tick in 15.6 ms steps, so a "16 ms" timer gives uneven 16 / 31 ms frames. Instead a
+        # new frame is drawn whenever ~7 ms have passed; Windows shows the newest one at each screen refresh
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.setInterval(0)
+        self._timer.timeout.connect(self._step)
+        self._last_frame = 0.0
+        self._done = False
+        self.show()
+        self.raise_()
+        self._timer.start()
+
+    def finish(self) -> None:
+        if not self._done:
+            self._done = True
+            self._timer.stop()
+            self.hide()
+            self.deleteLater()
+
+    def _step(self) -> None:
+        now = time.monotonic()
+        if self._start is not None and now - self._start >= FOLDER_ANIM_MS / 1000:
+            self.finish()
+            return
+        if now - self._last_frame >= 0.007:
+            self._last_frame = now
+            self.repaint()                                  # drawn now, not whenever Windows gets round to it
+
+    def _draw_scaled(self, p: QPainter, pm: QPixmap, e: float, opacity: float) -> None:
+        """The folder's view seen through a window that opens out of the tile: at e=0 the window is the tile
+        (its rounded corners too) with the view inside at half size; at e=1 the window is the whole area and
+        the view is full size and in place."""
+        full = QRectF(self.rect())
+        tile = self.tile
+        win = QRectF(tile.x() + (full.x() - tile.x()) * e, tile.y() + (full.y() - tile.y()) * e,
+                     tile.width() + (full.width() - tile.width()) * e, tile.height() + (full.height() - tile.height()) * e)
+        s = 0.5 + 0.5 * e
+        c = win.center()
+        target = QRectF(c.x() - full.width() * s / 2, c.y() - full.height() * s / 2, full.width() * s, full.height() * s)
+        radius = 8 * (1 - e)
+        clip = QPainterPath()
+        clip.addRoundedRect(win, radius, radius)
+        p.save()
+        p.setClipPath(clip)
+        p.setOpacity(max(0.0, min(1.0, opacity)))
+        p.drawPixmap(target, pm, QRectF(pm.rect()))
+        p.restore()
+
+    def paintEvent(self, _ev) -> None:
+        if self._start is None:
+            self._start = time.monotonic()
+        t = min(1.0, (time.monotonic() - self._start) / (FOLDER_ANIM_MS / 1000))
+        e = 1 - (1 - t) ** 2.2                             # ease out: quick start, gentle (not sticky) landing
+        p = QPainter(self)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        self.w.backdrop.paint_into(p, self.rect(), QPoint(0, 0))
+        full = QRectF(self.rect())
+        if self.opening:
+            p.setOpacity(max(0.0, 1 - t / 0.7))            # the library fades away completely
+            p.drawPixmap(full, self.before, QRectF(self.before.rect()))
+            self._draw_scaled(p, self.after, e, t / 0.45)  # the folder's games grow out of its tile
+        else:
+            p.setOpacity(min(1.0, t / 0.6))                # the library comes back
+            p.drawPixmap(full, self.after, QRectF(self.after.rect()))
+            self._draw_scaled(p, self.before, 1 - e, 1 - t / 0.75)   # the games shrink into the tile
         p.end()
 
 
@@ -4480,12 +4568,68 @@ class MainWindow(TaskOwner, QMainWindow):
                 and self.selected_id() in (None, self.playing_id))
 
     def open_folder(self, fid: str) -> None:
+        tile = self._tile_rect(FOLDER_PREFIX + fid)
+        before = self._covers_snapshot()
         self.current_folder = fid
         self.search.blockSignals(True)
         self.search.clear()
         self.search.blockSignals(False)
         self._rebuild()
         self.grid.scrollToTop()
+        self._animate_folder(before, tile, opening=True)
+
+    def _covers_snapshot(self) -> Optional[QPixmap]:
+        """The library area's covers (and the folder bar) without the background, for FolderTransition."""
+        if not self.isVisible() or not self.grid.isVisible():
+            return None
+        area = self.backdrop.library_area()
+        if area.isEmpty():
+            return None
+        self.backdrop.layout() and self.backdrop.layout().activate()
+        dpr = self.devicePixelRatioF()
+        pm = QPixmap(round(area.width() * dpr), round(area.height() * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        self.grid.bare = True
+        try:
+            for w in ((self.folderbar,) if self.folderbar.isVisible() else ()) + (self.grid.viewport(),):
+                offset = w.mapTo(self.backdrop, QPoint(0, 0)) - area.topLeft()
+                w.render(p, offset, QRegion(), QWidget.DrawChildren)
+        finally:
+            self.grid.bare = False
+            p.end()
+        return pm
+
+    def _tile_rect(self, iid: str) -> Optional[QRectF]:
+        """Where an item's cover is, in the library area's coordinates (None when it's off screen)."""
+        for i in range(self.grid.count()):
+            it = self.grid.item(i)
+            if it.data(GAME_ID_ROLE) == iid:
+                r = self.grid.visualItemRect(it)
+                if not r.intersects(self.grid.viewport().rect()):
+                    return None
+                cover = CardDelegate.cover_rect(r, 0)
+                off = self.grid.viewport().mapTo(self.backdrop, QPoint(0, 0)) - self.backdrop.library_area().topLeft()
+                return cover.translated(off.x(), off.y())
+        return None
+
+    def _animate_folder(self, before: Optional[QPixmap], tile: Optional[QRectF], opening: bool) -> None:
+        if before is None:
+            return
+        for old in self.backdrop.findChildren(FolderTransition):
+            old.finish()
+        self.backdrop.layout() and self.backdrop.layout().activate()
+        QApplication.sendPostedEvents(self.grid, QEvent.LayoutRequest)
+        self.grid.doItemsLayout()
+        after = self._covers_snapshot()
+        if after is None:
+            return
+        if tile is None:                                   # the tile is off screen: grow from / shrink to the middle
+            area = QRectF(QPointF(0, 0), QSizeF(self.backdrop.library_area().size()))
+            w, h = GRID["cover_w"], GRID["cover_h"]
+            tile = QRectF(area.center().x() - w / 2, area.center().y() - h / 2, w, h)
+        FolderTransition(self, before, after, tile, opening)
 
     def close_folder(self) -> None:
         egg = self.findChild(EasterEgg)
@@ -4496,8 +4640,13 @@ class MainWindow(TaskOwner, QMainWindow):
             self._end_game_drag(QCursor.pos(), drop=False)
             return
         if self.current_folder:
+            before = self._covers_snapshot()
             fid, self.current_folder = self.current_folder, None
             self._rebuild(select=FOLDER_PREFIX + fid)
+            self.backdrop.layout() and self.backdrop.layout().activate()
+            self.grid.doItemsLayout()
+            self.grid.scrollToItem(self.grid.currentItem()) if self.grid.currentItem() else None
+            self._animate_folder(before, self._tile_rect(FOLDER_PREFIX + fid), opening=False)
         else:
             self.clear_selection()
 
@@ -5117,7 +5266,9 @@ class MainWindow(TaskOwner, QMainWindow):
                 c = CardDelegate.light_center(CardDelegate.cover_rect(r, self.hover.get(iid, 0.0)))
                 rad = int(LIGHT_R * 2.9) + 2
                 region += QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
-        if not region.isEmpty():
+        if not region.isEmpty() and not self.backdrop.findChildren(FolderTransition):
+            # (not while a folder opens / closes: the animation covers the grid, and each of these little
+            # updates would make it redraw out of step)
             self.grid.viewport().update(region)
         if self.settings.pulse:
             self.sync_light.update()
