@@ -604,6 +604,7 @@ LIGHT_FADE_S = 0.45                  # a light changing colour cross-fades this 
 PREFETCH_QUIET_MS = 500              # covers are prepared in the background once nothing has changed this long
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
 RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
+BUTTON_GAP = 8                       # between the buttons at the bottom of every window
 STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
 SCROLLBAR_LINGER_S = 0.6             # stays visible this long after scrolling / leaving the edge
 SCROLLBAR_EDGE_PX = 36               # mouse this close to the right edge shows it
@@ -793,6 +794,7 @@ def message(parent, text: str, title: str = "", buttons=(("ok", "OK"),), icon=No
     lab.setMaximumWidth(480)
     lay.addWidget(lab)
     row = QHBoxLayout()
+    row.setSpacing(BUTTON_GAP)
     row.addStretch()
     chosen = {"key": dismiss or buttons[-1][0]}     # closing the window = `dismiss` (or the last button)
     # buttons are listed most important first; shown Cancel far left, the main action far right
@@ -2604,6 +2606,7 @@ class UpdateDialog(QDialog):
         self.bar.setFixedHeight(8)
         lay.addWidget(self.bar)
         row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
         row.addWidget(cancel)
@@ -2838,6 +2841,7 @@ class ThemeDialog(QDialog):
         self.warning.setStyleSheet(f"color: {COLORS['danger']};")
         lay.addWidget(self.warning)
         btns = QHBoxLayout()
+        btns.setSpacing(BUTTON_GAP)
         btns.addStretch()
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
@@ -3045,6 +3049,7 @@ class FontDialog(QDialog):
         self.sample = FontSample()
         lay.addWidget(self.sample)
         btns = QHBoxLayout()
+        btns.setSpacing(BUTTON_GAP)
         btns.addStretch()
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
@@ -3278,6 +3283,7 @@ class BackgroundDialog(QDialog):
         grid.setColumnStretch(1, 1)
         lay.addWidget(self.sliders)
         btns = QHBoxLayout()
+        btns.setSpacing(BUTTON_GAP)
         btns.addStretch()
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
@@ -3551,6 +3557,7 @@ class SettingsDialog(FitsScreen, QDialog):
         self.theme_btns[self.theme].setChecked(True)
 
         row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
         row.addStretch()
         cancel = self._tx(QPushButton(), "settings.cancel")
         cancel.clicked.connect(self.reject)
@@ -3560,7 +3567,6 @@ class SettingsDialog(FitsScreen, QDialog):
         row.addWidget(cancel)
         row.addWidget(save)
         row.setContentsMargins(22, 10, 22, 18)
-        row.setSpacing(lay.spacing())          # the usual gap between the two buttons
         outer.addLayout(row)
         self.current = current
         self.sort_filter = (current.sort, current.status_filter) if current else ("recent", "all")
@@ -3936,6 +3942,7 @@ class CoverPickerDialog(TaskOwner, QDialog):
         self.list.setCurrentRow(0)
         lay.addWidget(self.list, 1)
         row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
         row.addStretch()
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
@@ -4256,6 +4263,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
         lay.addStretch()
 
         row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
         if game:
             rm = QPushButton(tr("game.remove"), objectName="danger")
             rm.clicked.connect(self._remove)
@@ -4504,6 +4512,7 @@ class NameDialog(QDialog):
         self.edit.selectAll()
         lay.addWidget(self.edit)
         row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
         row.addStretch()
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
@@ -4691,6 +4700,7 @@ class RestoreDialog(QDialog):
         if not backups:
             lay.addWidget(hint(tr("restore.none")))
         row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
         row.addStretch()
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
