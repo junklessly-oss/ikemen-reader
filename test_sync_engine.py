@@ -324,3 +324,36 @@ class Attacks(unittest.TestCase):
         other = SyncEngine(self.cloud, self.root / "pc_state")
         self.assertIs(self.pc._lock(GAME), other._lock(GAME))
         self.assertIsNot(self.pc._lock(GAME), self.pc._lock("Another Game"))
+
+
+class SilentSync(unittest.TestCase):
+    """sync_if_safe: background sync without a launch. Uploads or downloads only when one side changed."""
+    setUp, tearDown = TwoMachines.setUp, TwoMachines.tearDown
+
+    def test_downloads_when_only_the_other_device_changed(self):
+        write(self.pc_saves, "slot1.sav", "chapter 1")
+        self.pc.before_launch(GAME, self.pc_saves)
+        self.laptop.before_launch(GAME, self.laptop_saves)
+        write(self.laptop_saves, "slot1.sav", "chapter 2")
+        self.assertEqual(self.laptop.sync_if_safe(GAME, self.laptop_saves), Action.PUSHED)   # laptop uploads
+        self.assertEqual(self.pc.sync_if_safe(GAME, self.pc_saves), Action.PULLED)           # PC downloads
+        self.assertEqual(read_all(self.pc_saves), {"slot1.sav": "chapter 2"})
+        self.assertEqual(self.pc.list_backups(GAME)[0].reason, "local-before-pull")         # old one kept
+        self.assertEqual(self.pc.sync_if_safe(GAME, self.pc_saves), Action.NOTHING)
+
+    def test_changed_on_both_sides_is_left_alone(self):
+        write(self.pc_saves, "slot1.sav", "chapter 1")
+        self.pc.before_launch(GAME, self.pc_saves)
+        self.laptop.before_launch(GAME, self.laptop_saves)
+        write(self.laptop_saves, "slot1.sav", "laptop route")
+        self.laptop.sync_if_safe(GAME, self.laptop_saves)
+        write(self.pc_saves, "slot1.sav", "pc route")
+        self.assertEqual(self.pc.sync_if_safe(GAME, self.pc_saves), Action.CONFLICT)
+        self.assertEqual(read_all(self.pc_saves), {"slot1.sav": "pc route"})
+        self.assertEqual(read_all(self.pc.cloud_dir(GAME)), {"slot1.sav": "laptop route"})
+
+    def test_download_can_be_held_back(self):
+        write(self.pc_saves, "slot1.sav", "chapter 1")
+        self.pc.before_launch(GAME, self.pc_saves)
+        self.assertEqual(self.laptop.sync_if_safe(GAME, self.laptop_saves, allow_pull=False), Action.NOTHING)
+        self.assertFalse(self.laptop_saves.exists())

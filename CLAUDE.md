@@ -218,7 +218,24 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Bottom bar while a game runs (MainWindow.bar_game / _bar_shows_running): nothing or the running game selected
   -> running game (Now Reading, Stop); another game selected -> that game (Read greyed, "Another game is running");
   bar buttons act on bar_game(). test_features.BottomBarWhilePlaying.
-- Tests: 109.
+- Save folder suggestions (2026-10-14, owner's request): detect.suggest_save_folder() - the other device's save
+  folder translated (inside its game folder -> this game folder; C:\Users\<other>\... -> this profile; else the
+  same path), existing or not (a game never run here gets the folder created by its first sync); otherwise an
+  existing save-named folder in the game folder, or a folder named after the game (title, exe stem, folder name;
+  _GENERIC names like Start/BGI ignored) in the usual roots, going down single-child chains (Maker\Game\1.10),
+  newest first. app.suggest_save() filters with save_folder_problem and skips cloud/app data/Luna/LE. GameDialog
+  fills the empty box + hint (game.saves_from_other / game.saves_found); Read with no save folder ->
+  _offer_save_folder() asks (Use This Folder / Find It While Reading / Cancel). Matches every hand-set folder.
+- Silent sync (2026-10-14; owner chose silent over a Sync Now/Later pop-up): StatusChecker syncs on every check via
+  SyncEngine.sync_if_safe (push when only this side changed, pull when only the cloud did; backups as usual); never
+  the game being read (skip), never pulls into a game open outside us (launcher.already_running -> stays "pull").
+  Checks: refresh / live change / after play, plus quiet re-checks from _live_poll (every poll while a "pull" waits,
+  else every RECHECK_POLLS=15 polls, ~1 min; _quiet_check keeps the top bar from flashing Syncing). Status line:
+  status.startup_uploaded / status.auto_downloaded. Conflicts: _offer_conflicts() pop-up (Choose Now / Later) when
+  idle; games asked about go into _conflicts_snoozed until _live_poll sees a new remote change. SyncWorker runs
+  before_launch with ConflictDialog (Choose Now, and right-click "Sync Now" for push/pull/conflict); Read and
+  closing wait for it.
+- Tests: 121.
 - Wording (owner, 2026-10-14): the interface never names one cloud service; it says "a cloud service of your
   choice" / "your cloud service's app" (guide lists Google Drive, Dropbox, OneDrive only as examples). Code that
   handles OneDrive specifically (duplicate names, refused folders, save search) stays. Guide now also covers: what

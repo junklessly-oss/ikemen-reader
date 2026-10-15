@@ -524,6 +524,24 @@ class SyncEngine:
                 return True
             return False
 
+    def sync_if_safe(self, game_id: str, local_dir: str | Path, registry_key: str = "",
+                     allow_pull: bool = True) -> Action:
+        """Background sync (no game launch): upload when only this device changed, download when only the
+        other one did (what's replaced is backed up, as always). Never asks: saves changed on both sides
+        are left alone and reported as CONFLICT for the owner to decide. Returns what it did."""
+        local_dir = _check_local_dir(local_dir, self.cloud_root)
+        with self._lock(game_id):
+            local = self._local_files(game_id, local_dir, registry_key)
+            action = self.decide(_fingerprint_map(local), _fingerprint_map(self._cloud_files(game_id)),
+                                 self._load_base(game_id))
+            if action is Action.PUSHED:
+                self._push(game_id, local_dir, registry_key, local)
+            elif action is Action.PULLED:
+                if not allow_pull:
+                    return Action.NOTHING
+                self._pull(game_id, local_dir, registry_key, local)
+            return action
+
     # -- backups
     def list_backups(self, game_id: str) -> list[Backup]:
         """Newest first."""

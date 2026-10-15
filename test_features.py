@@ -1085,3 +1085,78 @@ class SaveFolderSuggestionsInTheWindow(unittest.TestCase):
             finally:
                 w.worker = None
                 w.close()
+
+
+class SilentSyncInTheWindow(unittest.TestCase):
+    """With Ikemen Reader open, saves the other device uploads arrive without pressing Read."""
+
+    def test_downloads_skips_open_games_and_asks_once_about_conflicts(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            import i18n
+            from library import Library
+            from sync_engine import SyncEngine
+            QApplication.instance() or QApplication([])
+            i18n.set_language("en")
+            tmp = Path(tmp)
+            cloud = tmp / "cloud"
+            cloud.mkdir()
+            exe = tmp / "game" / "game.exe"
+            exe.parent.mkdir()
+            exe.write_bytes(b"")
+            pc_saves, laptop_saves = tmp / "pc_saves", tmp / "laptop_saves"
+            lib = Library(cloud)
+            g = lib.add_game("Slow Damage", "PC", exe=str(exe), save_dir=str(pc_saves))
+            laptop = SyncEngine(cloud, tmp / "laptop_state")
+            (laptop_saves / "0001").mkdir(parents=True)
+            (laptop_saves / "0001" / "frames.npf").write_text("laptop progress", "utf-8")
+            laptop.before_launch(g.game_id, laptop_saves)                  # the laptop uploads
+
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+
+            def checked():
+                """Refresh, then wait until every check (including re-checks it triggers) has finished."""
+                w.refresh()
+                end, quiet_since = time.time() + 20, None
+                while time.time() < end:
+                    QApplication.processEvents()
+                    busy = w.checker is not None and w.checker.isRunning() or w._recheck
+                    quiet_since = None if busy else (quiet_since or time.time())
+                    if quiet_since and time.time() - quiet_since > 0.4:
+                        break
+                    time.sleep(0.02)
+            try:
+                # a game open outside Ikemen Reader: nothing is downloaded underneath it
+                with mock.patch.object(app.launcher, "already_running", return_value=True):
+                    checked()
+                self.assertFalse((pc_saves / "0001" / "frames.npf").exists())
+                self.assertEqual(w.sync_states[g.game_id], "pull")
+
+                # closed: the routine poll (no refresh, nothing new in the cloud) brings it in by itself
+                w._live_poll()
+                end = time.time() + 20
+                while time.time() < end and w.sync_states.get(g.game_id) != "synced":
+                    QApplication.processEvents()
+                    time.sleep(0.02)
+                self.assertEqual((pc_saves / "0001" / "frames.npf").read_text("utf-8"), "laptop progress")
+                self.assertEqual(w.sync_states[g.game_id], "synced")
+                self.assertIn("Downloaded newer saves for: Slow Damage", w.statusBar().currentMessage())
+
+                # changed on both devices: asked once; Later holds until the other device changes again
+                (pc_saves / "0001" / "frames.npf").write_text("pc route", "utf-8")
+                (laptop_saves / "0001" / "frames.npf").write_text("laptop route", "utf-8")
+                laptop.sync_if_safe(g.game_id, laptop_saves)
+                with mock.patch.object(app, "message", return_value="later") as asked:
+                    checked()
+                    checked()
+                    self.assertEqual(asked.call_count, 1)
+                    self.assertIn("Slow Damage", asked.call_args[0][1])
+                    w._conflicts_snoozed = set()                            # (what new news from the laptop does)
+                    checked()
+                    self.assertEqual(asked.call_count, 2)
+                self.assertEqual((pc_saves / "0001" / "frames.npf").read_text("utf-8"), "pc route")   # untouched
+            finally:
+                w.close()

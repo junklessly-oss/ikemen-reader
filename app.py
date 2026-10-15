@@ -42,6 +42,7 @@ import regsync
 import vndb
 from i18n import tr
 import detect
+import launcher
 from launcher import PlayResult, finish_first_play, play, warm_up
 from library import (SLOT_NUMBER, SLOTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
                      default_app_dir, load_local_settings, other_slot, save_local_settings,
@@ -499,6 +500,7 @@ HOVER_MS = 150                       # ease in/out time
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
+RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
 STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
 SCROLLBAR_LINGER_S = 1.2             # stays visible this long after scrolling / leaving the edge
 SCROLLBAR_EDGE_PX = 36               # mouse this close to the right edge shows it
@@ -774,28 +776,66 @@ def sync_state(engine: SyncEngine, game: Game, machine: str) -> str:
 
 
 class StatusChecker(QThread):
-    """Fingerprints every game's saves off the UI thread. On the first run after opening, it also
-    uploads saves made outside Ikemen Reader (only when that's safe: the cloud hasn't changed)."""
-    done = Signal(dict, list)
+    """Fingerprints every game's saves off the UI thread, and syncs what can be synced without asking
+    (silent sync): uploads saves only this device changed, downloads saves only the other device changed.
+    Saves changed on both sides are left for the owner. Never touches the game being read (skip), and
+    never downloads into a game that is open outside Ikemen Reader (it would write its old saves back)."""
+    done = Signal(dict, list, list)
 
-    def __init__(self, engine: SyncEngine, games: list[Game], machine: str, upload: bool):
+    def __init__(self, engine: SyncEngine, games: list[Game], machine: str, skip: set):
         super().__init__()
-        self.engine, self.games, self.machine, self.upload = engine, games, machine, upload
+        self.engine, self.games, self.machine, self.skip = engine, games, machine, set(skip)
 
     def run(self) -> None:
-        states, uploaded = {}, []
+        states, uploaded, downloaded = {}, [], []
         for g in self.games:
             try:
                 s = sync_state(self.engine, g, self.machine)
-                if s == "push" and self.upload:
+                if s in ("push", "pull") and g.game_id not in self.skip:
                     mine = g.paths_for(self.machine)
-                    if self.engine.push_if_safe(g.game_id, mine.save_dir, g.registry_key):
-                        uploaded.append(g.title)
-                        s = "synced"
+                    open_now = s == "pull" and launcher.already_running(Path(mine.exe).parent)
+                    if not open_now:
+                        did = self.engine.sync_if_safe(g.game_id, mine.save_dir, g.registry_key)
+                        if did is Action.PUSHED:
+                            uploaded.append(g.title)
+                        elif did is Action.PULLED:
+                            downloaded.append(g.title)
+                        s = sync_state(self.engine, g, self.machine)
                 states[g.game_id] = s
             except (OSError, ValueError):
                 states[g.game_id] = "unset"
-        self.done.emit(states, uploaded)
+        self.done.emit(states, uploaded, downloaded)
+
+
+class SyncWorker(QThread):
+    """Sync chosen games now, without launching them (saves changed on both devices: the owner picks
+    which to keep in the usual window, asked through a blocking signal like PlayWorker)."""
+    conflict = Signal(object)
+    finished_all = Signal(list)          # [(title, i18n key)]
+
+    def __init__(self, engine: SyncEngine, games: list[Game], machine: str):
+        super().__init__()
+        self.engine, self.games, self.machine = engine, games, machine
+        self.answer: Optional[str] = None
+
+    def _ask(self, info: ConflictInfo) -> Optional[str]:
+        self.answer = None
+        self.conflict.emit(info)         # BlockingQueuedConnection: returns once the window is closed
+        return self.answer
+
+    def run(self) -> None:
+        out = []
+        for g in self.games:
+            mine = g.paths_for(self.machine)
+            try:
+                if mine.exe and launcher.already_running(Path(mine.exe).parent):
+                    out.append((g.title, "sync.skipped_running"))
+                    continue
+                r = self.engine.before_launch(g.game_id, mine.save_dir, self._ask, g.registry_key)
+                out.append((g.title, r.message))
+            except (OSError, ValueError):
+                out.append((g.title, "sync.failed"))
+        self.finished_all.emit(out)
 
 
 class PlayWorker(QThread):
@@ -3607,9 +3647,12 @@ class MainWindow(TaskOwner, QMainWindow):
         self.hovered: Optional[str] = None
         self.worker: Optional[PlayWorker] = None
         self.checker: Optional[StatusChecker] = None
+        self.syncer: Optional[SyncWorker] = None      # Sync Now / Choose Now running
+        self._conflicts_snoozed: set = set()  # "both changed" games not to ask about until the other device changes something
         self._recheck = False
-        self._first_check = True
         self.playing_id: Optional[str] = None
+        self._quiet_polls = 0                # live polls since the last full save check
+        self._quiet_check = False            # the running check is a routine background one
         self.stop_pending = False            # Stop was pressed; waiting for the game to close
         self.looking_for_saves = False       # Read pressed: checking for a likely save folder first
         self.play_phase = "done"
@@ -3951,11 +3994,21 @@ class MainWindow(TaskOwner, QMainWindow):
 
         def done(sig) -> None:
             self._live_checking = False
-            if library is not self.library or sig == self._live_sig:
-                return                              # (settings changed meanwhile, or nothing new)
+            if library is not self.library:
+                return                              # (settings changed meanwhile)
+            if sig == self._live_sig:               # nothing new from the other device
+                self._quiet_polls += 1
+                # still re-check now and then: a held-back download whose game was closed (every poll),
+                # saves made on this device outside Ikemen Reader (about once a minute)
+                waiting = any(s == "pull" for s in self.sync_states.values())
+                if (waiting or self._quiet_polls >= RECHECK_POLLS) and not (self.checker and self.checker.isRunning()):
+                    self._quiet_polls = 0
+                    self._check_sync(quiet=True)
+                return
             if self._ghost is not None or self.worker is not None or QApplication.activePopupWidget() is not None \
                     or QApplication.activeModalWidget() is not None:
                 return                              # mid-drag / a game running / a menu or window open: next time
+            self._conflicts_snoozed = set()         # something new from the other device: ask again
             self.refresh()
             self.statusBar().showMessage(tr("status.live_update"), 6000)
 
@@ -3963,37 +4016,77 @@ class MainWindow(TaskOwner, QMainWindow):
             self._live_checking = False
         self._run(library.change_signature, done, failed)
 
-    def _check_sync(self) -> None:
+    def _check_sync(self, quiet: bool = False) -> None:
+        """quiet: a routine background re-check - the top bar doesn't flash "Syncing" for it."""
         if self.checker and self.checker.isRunning():
             self._recheck = True  # one at a time; check again when the running one finishes
             return
         self._recheck = False
+        self._quiet_check = quiet
         for gid in self.games:
             self.sync_states.setdefault(gid, "checking")
-        self.checker = StatusChecker(self.engine, list(self.games.values()), self.settings.machine_name,
-                                     upload=self._first_check)
-        self._first_check = False
+        skip = {self.playing_id} if self.worker is not None and self.playing_id else set()
+        self.checker = StatusChecker(self.engine, list(self.games.values()), self.settings.machine_name, skip)
         self.checker.done.connect(self._sync_checked)
         self.checker.finished.connect(self._update_sync_label)  # isRunning() is reliably False by then
         self.checker.start()
         self._update_details()
         self._update_sync_label()
 
-    def _sync_checked(self, states: dict, uploaded: list) -> None:
+    def _sync_checked(self, states: dict, uploaded: list, downloaded: list) -> None:
         self.sync_states = dict(states)
         if uploaded:                                # our own upload: not a change from the other device
             try:
                 self._live_sig = self.library.change_signature()
             except OSError:
                 pass
-        if uploaded:
-            sep = "、" if i18n.language() == "ja" else ", "
-            self.statusBar().showMessage(tr("status.startup_uploaded", games=sep.join(uploaded)), 10000)
+        sep = "、" if i18n.language() == "ja" else ", "
+        notes = ([tr("status.startup_uploaded", games=sep.join(uploaded))] if uploaded else []) + \
+                ([tr("status.auto_downloaded", games=sep.join(downloaded))] if downloaded else [])
+        if notes:
+            self.statusBar().showMessage("  ".join(notes), 10000)
         self.grid.viewport().update()
         self._update_details()
         self._update_sync_label()
         if self._recheck:
             self._check_sync()
+        else:
+            self._offer_conflicts()
+
+    def _offer_conflicts(self) -> None:
+        """Saves changed on both devices can't sync silently: ask once (Choose Now / Later). Later isn't
+        asked again for the same games until the other device changes something new."""
+        conflicts = [gid for gid, s in self.sync_states.items() if s == "conflict" and gid in self.games
+                     and gid != self.playing_id]
+        new = [gid for gid in conflicts if gid not in self._conflicts_snoozed]
+        if not new or self.worker is not None or self.syncer is not None or self._ghost is not None \
+                or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None:
+            return                                  # nothing new, or busy: asked again at the next check
+        games = [self.games[gid] for gid in conflicts]
+        listing = "\n".join("• " + g.title for g in games)
+        choice = message(self, tr("conflict.waiting_body", games=listing), tr("conflict.waiting_title"),
+                         [("now", tr("conflict.choose_now")), ("later", tr("conflict.later"))], dismiss="later")
+        self._conflicts_snoozed |= set(conflicts)   # asked: not again (Choose Now's own answers included)
+        if choice == "now":
+            self.sync_now(games)
+
+    def sync_now(self, games: list) -> None:
+        """Sync these games right away (right-click Sync Now, or Choose Now for saves changed on both)."""
+        if self.syncer is not None or self.worker is not None or not games:
+            return
+        s = SyncWorker(self.engine, games, self.settings.machine_name)
+        s.conflict.connect(lambda info: setattr(s, "answer", self._conflict_choice(info)), Qt.BlockingQueuedConnection)
+        s.finished_all.connect(self._synced_now)
+        self.syncer = s
+        self.statusBar().showMessage(tr("status.checking"))
+        s.start()
+
+    def _synced_now(self, results: list) -> None:
+        self.syncer.wait()
+        self._conflicts_snoozed |= {g.game_id for g in self.syncer.games}   # closed without choosing: not again
+        self.syncer = None
+        self.statusBar().showMessage("  ".join(f"{t}: {tr(k, title=t)}" for t, k in results), 10000)
+        self.refresh()
 
     def folder_name(self, fid: str) -> str:
         return self.folder_names.get(fid) or tr("folder.new_name")
@@ -4289,7 +4382,7 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _update_sync_label(self) -> None:
         """The one-line status in the top bar. Details (device, cloud folder) live in Settings."""
-        checking = self.checker is not None and self.checker.isRunning()
+        checking = self.checker is not None and self.checker.isRunning() and not self._quiet_check
         conflicts = sum(1 for s in self.sync_states.values() if s == "conflict")
         tip = ""
         if self.play_phase == "syncing" or checking:
@@ -4805,7 +4898,6 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         d = SettingsDialog(self.settings, self)
         if d.exec() and d.result_settings:
-            self._first_check = True
             self.apply_settings(d.result_settings)
 
     def restore_selected(self) -> None:
@@ -4823,7 +4915,7 @@ class MainWindow(TaskOwner, QMainWindow):
     def play_selected(self, without: tuple[str, ...] = (), watch: bool = False,
                       gid: Optional[str] = None, asked: bool = False) -> None:
         g = self.games.get(gid) if gid else self.selected()
-        if g is None or self.worker is not None or self.looking_for_saves:
+        if g is None or self.worker is not None or self.looking_for_saves or self.syncer is not None:
             return
         mine = g.paths_for(self.settings.machine_name)
         if not mine.exe:
@@ -5017,6 +5109,9 @@ class MainWindow(TaskOwner, QMainWindow):
         if g.folder:
             m.addAction(tr("menu.remove_from_folder"), lambda: self.move_to_folder(g.game_id, ""))
         m.addSeparator()
+        a = m.addAction(tr("menu.sync_now"), lambda: self.sync_now([g]))
+        a.setEnabled(self.light_state(g.game_id) in ("push", "pull", "conflict") and self.worker is None
+                     and self.syncer is None)
         a = m.addAction(tr("menu.restore"), self.restore_selected)
         a.setEnabled(bool(mine.save_dir) and self.worker is None)
         a = m.addAction(tr("menu.open_saves"), lambda: open_folder(mine.save_dir))
@@ -5044,7 +5139,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self.refresh()
 
     def closeEvent(self, e) -> None:
-        if self.worker and self.play_phase == "syncing":
+        if (self.worker and self.play_phase == "syncing") or self.syncer is not None:
             message(self, tr("close.syncing"))      # stopping mid-sync could leave saves half-uploaded
             e.ignore()
             return

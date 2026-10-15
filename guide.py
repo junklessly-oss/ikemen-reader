@@ -55,14 +55,20 @@ GUIDE = {
             "empty space (or the game you're reading) to bring back Now Reading and Stop.",
             "- Before the game starts, any newer saves from the other device are downloaded. When the game "
             "closes, your saves are uploaded and your playtime is updated.",
+            "- You don't need to start a game for its saves to sync. While Ikemen Reader is open, newer saves from "
+            "the other device are downloaded a few seconds after they arrive, and saves made on this device "
+            "without Ikemen Reader are uploaded. A game that's open outside Ikemen Reader is left alone until "
+            "you close it, so it can't overwrite what was downloaded.",
             "- It never matters which device added a game first. The first time a game syncs on a device, the "
             "other device's saves are downloaded if this one has none yet. If both have saves, you choose which "
             "to keep; the newer ones are marked, and the others are backed up first. (Some games create a save "
             "or settings file as soon as they're installed or first opened, so you may be asked even on a fresh "
             "setup. Choose the device you actually played on.)",
             "- If the saves changed on both devices since they last synced (for example, you read on both without "
-            "syncing in between), you'll be asked which ones to keep, and the game starts once you've chosen. "
+            "syncing in between), you'll be asked which ones to keep. Ikemen Reader asks as soon as it notices "
+            "(choose now, or Later), and again when you press Read; the game starts once you've chosen. "
             "Whatever gets replaced is backed up first.",
+            "- Right-click a game and choose Sync Now to sync it straight away.",
             "- Closing a game only ever uploads. If the other device uploaded newer saves while you were reading, "
             "you're asked which to keep instead of either being overwritten.",
             "- Right-click a game and choose Restore an Earlier Save to bring back one of the last 10 backups.",
@@ -72,9 +78,10 @@ GUIDE = {
         ("The Sync Lights", [
             "Each cover has a small light in its bottom-right corner:",
             "- {green} Saves are in sync.",
-            "- {amber} This device has newer saves. They upload the next time you play or open Ikemen Reader.",
-            "- {blue} Newer saves are in the cloud. They download when you press Read.",
-            "- {red} Saves changed on both devices. You'll choose which to keep when you press Read.",
+            "- {amber} This device has newer saves. They upload automatically.",
+            "- {blue} Newer saves are in the cloud. They download automatically (for a game that's open outside "
+            "Ikemen Reader, once you close it).",
+            "- {red} Saves changed on both devices. You'll be asked which to keep.",
             "- {grey} Not set up on this device yet, no saves yet, or still being checked.",
             "The top bar sums it all up: Synced, Syncing, or Error when saves changed on both devices (click "
             "Error to jump to those games).",
@@ -148,11 +155,14 @@ GUIDE = {
             "閉じない場合は、強制終了を選べます。",
             "- 読んでいる間も、ほかのゲームを選ぶと下部にその情報が表示されます。空いている場所（または読んでいるゲーム）をクリックすると、「読書中」と「終了」ボタンに戻ります。",
             "- 起動前に、もう一方の端末の新しいセーブがあればダウンロードします。ゲームを終了すると、セーブをアップロードしてプレイ時間を記録します。",
+            "- セーブを同期するためにゲームを起動する必要はありません。イケメンリーダーを開いている間は、もう一方の端末の新しいセーブが届いてから数秒でダウンロードされ、"
+            "イケメンリーダーを使わずにこの端末で作ったセーブはアップロードされます。イケメンリーダー以外から開いているゲームは、ダウンロードした内容を上書きされないよう、閉じるまでそのままにします。",
             "- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
             "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"
             "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。）",
-            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。選ぶとゲームが起動します。"
+            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／あとで）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。"
             "置き換えられる方は先にバックアップされます。",
+            "- ゲームを右クリックして「今すぐ同期」を選ぶと、すぐに同期できます。",
             "- ゲームを終了したときは、アップロードだけを行います。読んでいる間にもう一方の端末が新しいセーブをアップロードしていた場合は、どちらかを上書きせずに、どちらを残すか尋ねます。",
             "- ゲームを右クリックして「以前のセーブを復元」を選ぶと、直近10件のバックアップから戻せます。",
             "- ゲームの実行中は設定を開けません。プレイ中にイケメンリーダーを閉じようとすると、確認が表示されます。ゲームはそのまま動き続け、セーブは次にイケメンリーダーを起動したときにアップロードされます。",
@@ -160,9 +170,9 @@ GUIDE = {
         ("同期ランプ", [
             "各カバーの右下に小さなランプがあります：",
             "- {green} セーブは同期済みです。",
-            "- {amber} この端末のセーブの方が新しいです。次にプレイするか、イケメンリーダーを起動したときにアップロードされます。",
-            "- {blue} クラウドのセーブの方が新しいです。「読む」を押すとダウンロードされます。",
-            "- {red} 両方の端末でセーブが変更されています。「読む」を押したときに、どちらを残すか選びます。",
+            "- {amber} この端末のセーブの方が新しいです。自動でアップロードされます。",
+            "- {blue} クラウドのセーブの方が新しいです。自動でダウンロードされます（イケメンリーダー以外から開いているゲームは、閉じたあと）。",
+            "- {red} 両方の端末でセーブが変更されています。どちらを残すか尋ねます。",
             "- {grey} この端末ではまだ未設定、セーブがまだない、または確認中です。",
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
