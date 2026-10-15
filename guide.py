@@ -28,8 +28,12 @@ GUIDE = {
             "- Drag a game's .exe (or a shortcut to it) onto the window, or click Add Game.",
             "- Already added on the other device? Add it here the same way and choose Set Up on This Device: "
             "both devices then share one set of saves.",
-            "- In the game's settings, you can set its title (Automatic uses the title of the game's own "
-            "window), choose a cover (Choose Cover or Find on VNDB), and crop it by dragging and scrolling.",
+            "- The title is filled in from the game's folder or file name (engine names like KIRIKIRI are skipped). "
+            "In the game's settings, you can change it (Automatic uses the title of the game's own window), choose "
+            "a cover (Choose Cover or Find on VNDB), and crop it by dragging and scrolling.",
+            "- With automatic covers from VNDB turned on in Settings, a matching VNDB entry is suggested as you add "
+            "a game (Use This takes its cover). A game still without a cover after its first session gets one by "
+            "itself when VNDB has an exact title match.",
             "- This Device holds the .exe and save folder for the computer you're using. Other Device is greyed "
             "out, because it's filled in on the other computer.",
             "- The save folder is often filled in for you as a suggestion: the same place the other device uses "
@@ -93,20 +97,23 @@ GUIDE = {
             "Error to jump to those games).",
         ]),
         ("Your Library", [
-            "- Search by title, sort by Title, Most Played, Recently Played or My Arrangement, and filter by reading status.",
+            "- Search by title, sort by Title, Most Played, Recently Played or My Arrangement, and filter by reading "
+            "status. Searching and filtering also show the matching games inside folders.",
             "- Folders First / Folders Last / Folders Mixed (in the same menu) choose where folders go in Title, Most "
             "Played and Recently Played: grouped at the front or back, or among the games, always in that sort's order. "
             "Your choice stays until you press another one. With no folders, they're greyed out.",
             "- My Arrangement is your own order: drag a cover into the gap between two others to move it there (a "
             "thin line shows where it will land). Doing that switches to My Arrangement, starting from exactly what "
             "you were looking at. It's kept when you switch to another sort: pick My Arrangement to get it back. New "
-            "games go at the end; folders are dragged the same way.",
+            "games go at the end; folders are dragged the same way. While dragging, hold the cover near the top or "
+            "bottom edge to scroll (the closer to the edge, the faster).",
             "- In My Arrangement, the folder options re-place your folders, sorted by the sort you used last (Title, "
             "Most Played or Recently Played), while your games keep your order: First and Last group them, Mixed puts "
             "them in the spots that sort would give them. You can move them by hand afterwards.",
             "- Each folder has its own sort, found in the same menu while the folder is open. It starts as Same as "
-            "Library and follows the main page until you pick something else for it. A folder's own order and "
-            "sort are shared with the other device.",
+            "Library and follows the main page until you pick something else for it. Dragging a game to a new spot "
+            "inside the folder gives the folder its own My Arrangement. A folder's own order and sort are shared "
+            "with the other device.",
             "- Hide Statistics (next to the menus at the top) hides playtime and last-played dates on the covers "
             "and in the bottom bar. Press Show Statistics to bring them back; your choice is remembered.",
             "- Set a game's reading status (Reading, Finished, Plan to Read, Dropped) in the bottom bar or by "
@@ -130,10 +137,10 @@ GUIDE = {
             "In Settings:",
             "- Language switches the whole program at once.",
             "- Font: pick a separate font for English and for Japanese, or add your own with Add Font.",
-            "- Custom Library Background: choose a picture, set its opacity and zoom, and drag it into place.",
-            "- Theme: Dark, Light, or Custom, where you choose every colour yourself.",
             "- Accessibility: pulsing sync lights, launching on startup, automatic updates, automatic covers from "
             "VNDB, and safe covers only.",
+            "- Custom Library Background: choose a picture, set its opacity and zoom, and drag it into place.",
+            "- Theme: Dark, Light, or Custom, where you choose every colour yourself.",
             "- Updates: when a new version of Ikemen Reader is out, you're asked whether to update when Ikemen "
             "Reader opens. With Install Updates Automatically ticked, it downloads by itself and offers Restart Now "
             "(otherwise it's installed when you close Ikemen Reader). Updates never touch your library, saves or "
@@ -147,6 +154,7 @@ GUIDE = {
         ("Handy Shortcuts", [
             "- Enter: play the selected game, or open the selected folder.",
             "- Esc: leave a folder, deselect, or cancel a drag.",
+            "- Backspace: leave a folder.",
             "- F5: refresh the library.",
         ]),
     ],
@@ -164,8 +172,11 @@ GUIDE = {
         ("ゲームの追加", [
             "- ゲームの .exe（またはそのショートカット）をウィンドウにドラッグするか、「ゲームを追加」をクリックします。",
             "- もう一方の端末ですでに追加したゲームは、同じ方法で追加して「この端末で設定する」を選びます。両方の端末で同じセーブを共有できます。",
-            "- ゲームの設定画面では、タイトル（「自動」にするとゲーム画面のタイトルを使います）やカバー画像（「カバー画像を選択」または「VNDBで探す」）を設定できます。"
+            "- タイトルは、ゲームのフォルダー名やファイル名から自動で入力されます（KIRIKIRIなどのエンジン名は使われません）。"
+            "ゲームの設定画面では、タイトルの変更（「自動」にするとゲーム画面のタイトルを使います）やカバー画像の設定（「カバー画像を選択」または「VNDBで探す」）ができます。"
             "カバーはドラッグとスクロールで切り抜けます。",
+            "- 設定でVNDBからのカバー画像の自動取得をオンにしていると、ゲームの追加時にVNDBで見つかった候補が表示されます（「これを使う」でそのカバーを使います）。"
+            "初回プレイのあともカバーがないゲームは、VNDBにタイトルが完全に一致する作品があれば、自動でカバーが設定されます。",
             "- 「この端末」には、今使っているパソコンでの .exe とセーブフォルダーを入力します。「もう一方の端末」は灰色で表示され、もう一方のパソコンで入力します。",
             "- セーブフォルダーは、提案として自動で入力されることがあります（もう一方の端末と同じ場所をこのパソコン用に置き換えたもの、またはゲームがすでに作ったセーブフォルダー）。フォルダーは、明らかにそのゲームのもの（ゲーム名そのものの名前で、セーブファイルが入っている）ときだけ提案されます。少しでも迷う場合は空欄のままです。確認してから保存してください。",
             "- セーブフォルダーが未設定のゲームで「読む」を押したときも、先に同じ確認をして、見つかった場所を使うか尋ねます。これで、起動前にもう一方の端末のセーブを持ってこられます。",
@@ -206,12 +217,12 @@ GUIDE = {
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
         ("ライブラリ", [
-            "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。",
+            "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。検索や絞り込みでは、フォルダーの中にある該当ゲームも表示されます。",
             "- 同じメニューの「フォルダーを先に」「フォルダーを後に」「フォルダーを混在」で、タイトル順・プレイ時間順・最近プレイした順でのフォルダーの位置を選べます（前・後ろにまとめる、またはゲームの間に混ぜる。どれもその並び順で並びます）。別のものを押すまで保持されます。フォルダーがないときは選べません。",
-            "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。",
+            "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。ドラッグ中にカバーを上端や下端に近づけるとスクロールします（端に近いほど速くなります）。",
             "- 「自分の並び」でフォルダーの位置を押すと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先に」「後に」はまとめて、「混在」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではメインページに合わせます。"
-            "フォルダーの並び順はもう一方の端末とも共有されます。",
+            "フォルダーの中でゲームをドラッグして動かすと、そのフォルダー専用の「自分の並び」になります。フォルダーの並び順はもう一方の端末とも共有されます。",
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーのプレイ時間と最終プレイ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",
             "- プレイ状況（プレイ中・読了・積みゲー・中断）は、下部のバーか右クリックで設定します。",
             "- プレイ状況を設定したゲームには、カバーの右上にその状況の色のしおりが付きます（フォルダーの中やフォルダーのカバーにも表示されます）。"
@@ -229,9 +240,9 @@ GUIDE = {
             "設定画面で：",
             "- 言語：プログラム全体がすぐに切り替わります。",
             "- フォント：英語と日本語で別々のフォントを選べます。「フォントを追加」で自分のフォントも使えます。",
+            "- アクセシビリティ：同期ランプの点滅、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像の自動取得、安全なカバーのみの表示を設定できます。",
             "- ライブラリの背景をカスタマイズ：画像を選び、不透明度とズームを調整して、ドラッグで位置を合わせます。",
             "- テーマ：ダーク、ライト、またはすべての色を自分で選べるカスタムから選べます。",
-            "- アクセシビリティ：同期ランプの点滅、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像の自動取得、安全なカバーのみの表示を設定できます。",
             "- アップデート：イケメンリーダーの新しいバージョンが出ると、起動時にアップデートするか尋ねます。「アップデートを自動でインストール」をオンにすると、"
             "自動でダウンロードして「今すぐ再起動」を提案します（再起動しない場合は、イケメンリーダーを閉じたときにインストールされます）。"
             "アップデートでライブラリ・セーブ・設定が変わることはなく、ゲームの実行中に行われることもありません。",
@@ -243,6 +254,7 @@ GUIDE = {
         ("便利なキー操作", [
             "- Enter：選んだゲームをプレイ、または選んだフォルダーを開く。",
             "- Esc：フォルダーから戻る、選択を解除する、ドラッグをやめる。",
+            "- Backspace：フォルダーから戻る。",
             "- F5：ライブラリを再読み込みする。",
         ]),
     ],
