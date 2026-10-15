@@ -4889,12 +4889,12 @@ class MainWindow(TaskOwner, QMainWindow):
     # ------------------------------------------------------------------ the sort drop-down
     def _sort_choices(self, inside: bool) -> list:
         """(label, data) for the sort drop-down: the three automatic sorts, then under a divider Folders First,
-        Folders Last (actions: they move the folders) and My Arrangement. Inside a folder: Same as Library, the
-        three sorts, then My Arrangement."""
+        Folders Last (actions: they move the folders) and My Arrangement. Inside a folder: the three sorts, then
+        Same as Library and My Arrangement."""
         sorts = [(tr(f"sort.{s}"), s) for s in ("title", "hours", "recent")]
         mine = (tr("sort.custom"), "custom")
         if inside:
-            return [(tr("sort.follow"), "follow")] + sorts + [None, mine]
+            return sorts + [None, (tr("sort.follow"), "follow"), mine]
         return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("mixed", "first", "last")] + [mine]
 
     def _fill_sort(self) -> None:

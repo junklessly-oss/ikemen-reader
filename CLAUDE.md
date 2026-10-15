@@ -313,7 +313,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    switches to it from what's on screen. In My Arrangement the folder options re-place the folders by
    LocalSettings.last_sort (the automatic sort used last, default hours; set when picking a sort, dragging away
    from one, or picking My Arrangement), games keep your order: First/Last group them, Mixed puts them in the
-   exact slots that sort would give them (_place_folders). Inside a folder: Same as Library + 3 sorts | My Arrangement. Sort/placement picks go
+   exact slots that sort would give them (_place_folders). Inside a folder: 3 sorts | Same as Library / My Arrangement. Sort/placement picks go
    through activated -> choose_sort (deferred) and glide (_positions/_slide_from); no refresh/save check.
    Drop-downs are ThemedCombo (layered popup + own mask slide: no white first frame). Top-bar status label has
    a fixed width (longest of Synced/Syncing/Error) so the bar never shifts.
