@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
+from titles import clean_title
+
 # folders (by name, anywhere in the path) that never hold a VN's saves but change constantly
 _NOISE_DIRS = {
     "microsoft", "windows", "packages", "temp", "tmp", "cache", "caches", "code cache", "gpucache",
@@ -226,6 +228,67 @@ def _name_tokens(names: Iterable[str]) -> set[str]:
     return {t for t in _tokens(*names) if t not in _GENERIC and (len(t) >= 4 or not t.isascii())}
 
 
+# words a save folder's name may add to the game's name ("SaDisticBlooD_savefiles", "Game Saves", "Game2 data")
+_SAVE_AFFIX = re.compile(r"(?:savedata|savefiles?|savegames?|saves|save|userdata|data|"
+                         r"セーブデータ|セーブ|データ|\d+|ver|v)*")
+
+
+def _flat_name(name: str) -> str:
+    """A name reduced to its letters for comparing: edition / version tags gone ("slowdamage 普及版" ->
+    "slowdamage"), no spaces or punctuation, one case."""
+    t = unicodedata.normalize("NFKC", clean_title(name or "")).casefold()
+    return re.sub(r"[\W_]+", "", t)
+
+
+def _whole_names(names: Iterable[str]) -> set[str]:
+    """The game's names as wholes (title, .exe name, game folder name), minus ones that say nothing."""
+    out = set()
+    for n in names:
+        f = _flat_name(n)
+        if f and f not in _GENERIC and (len(f) >= 3 or not f.isascii()):
+            out.add(f)
+    return out
+
+
+def _same_game(folder_name: str, names: set[str]) -> bool:
+    """Is this folder named after the game as a WHOLE? Its name must be one of the game's names, at most with
+    save words, numbers or edition tags around it. One shared word is not enough: "BLACKcyc" is not
+    "Black Sheep Town"."""
+    f = _flat_name(folder_name)
+    if not f:
+        return False
+    for n in names:
+        if f == n:
+            return True
+        i = f.find(n)
+        if i >= 0 and _SAVE_AFFIX.fullmatch(f[:i]) and _SAVE_AFFIX.fullmatch(f[i + len(n):]):
+            return True
+    return False
+
+
+_NOT_SAVES = {".log", ".txt", ".ini", ".cfg", ".xml", ".lnk", ".url", ".exe", ".dll", ".tmp", ".md", ".html",
+              ".htm", ".pdf", ".ico", ".png", ".jpg", ".jpeg", ".bmp"}
+
+
+def _looks_like_saves(folder: Path, limit: int = 2000) -> bool:
+    """Something in it besides logs, settings, notes, pictures and programs."""
+    stack, seen = [folder], 0
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for e in it:
+                    seen += 1
+                    if seen > limit:
+                        return False
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(Path(e.path))
+                    elif e.is_file(follow_symlinks=False) and Path(e.name).suffix.lower() not in _NOT_SAVES:
+                        return True
+        except OSError:
+            continue
+    return False
+
+
 def _has_files(folder: Path, limit: int = 2000) -> bool:
     stack, seen = [folder], 0
     while stack:
@@ -277,11 +340,41 @@ def _newest(folder: Path, limit: int = 2000) -> float:
     return newest
 
 
+def _save_subfolder(folder: Path, depth: int = 3) -> Optional[Path]:
+    """Where in a folder named after the game its saves are. The folder itself, unless it also holds clutter
+    (logs, engine folders - Unity's Bst/Player.log, Bst/Unity, Bst/Utage/Savebst) and no save files of its
+    own: then the one save-named folder below it, or None when there isn't exactly one (not sure)."""
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return None
+    loose_saves = any(e.is_file(follow_symlinks=False) and Path(e.name).suffix.lower() not in _NOT_SAVES for e in entries)
+    clutter = any((e.is_file(follow_symlinks=False) and Path(e.name).suffix.lower() == ".log") or
+                  (e.is_dir(follow_symlinks=False) and not e.name.isdigit()
+                   and not any(w in e.name.casefold() for w in _SAVE_WORDS)) for e in entries)
+    if loose_saves or not clutter:
+        return folder
+    found: list[Path] = []
+    level = [folder]
+    for _ in range(depth):
+        nxt = []
+        for d in level:
+            try:
+                subs = [Path(e.path) for e in os.scandir(d) if e.is_dir(follow_symlinks=False)]
+            except OSError:
+                continue
+            for sub in subs:
+                (found if any(w in sub.name.casefold() for w in _SAVE_WORDS) else nxt).append(sub)
+        level = nxt
+    return found[0] if len(found) == 1 else None
+
+
 def existing_save_folders(game_dir: str, names: Iterable[str], skip: Iterable[str] = (),
                           roots: Optional[list[Path]] = None) -> list[Path]:
-    """Save folders that already exist, best first: a save-named folder inside the game folder, then
-    folders named after the game in the usual save places (AppData, Documents, Saved Games...)."""
-    tokens = _name_tokens(names)
+    """The save folder that already exists, when there's exactly one clear candidate: a save-named folder
+    inside the game folder, or else a folder named after the whole game in the usual save places (AppData,
+    Documents, Saved Games...) holding save files. Two or more candidates = not sure = nothing."""
+    whole = _whole_names(names)
     skip_n = {os.path.normcase(os.path.abspath(s)) for s in skip if s}
     game_dir_n = os.path.normcase(os.path.abspath(game_dir))
     roots = roots if roots is not None else default_roots(game_dir)
@@ -301,24 +394,33 @@ def existing_save_folders(game_dir: str, names: Iterable[str], skip: Iterable[st
                     if e.name.casefold() in _NOISE_DIRS or n in skip_n or (not is_game and n == game_dir_n):
                         continue
                     if is_game:
-                        if any(w in e.name.casefold() for w in _SAVE_WORDS) and _has_files(Path(e.path)):
+                        if any(w in e.name.casefold() for w in _SAVE_WORDS) and _looks_like_saves(Path(e.path)):
                             inside.append(Path(e.path))
                             continue
                     else:
-                        flat = re.sub(r"[\s\-_・]", "", unicodedata.normalize("NFKC", e.name).casefold())
-                        if tokens and any(t in flat for t in tokens) and _has_files(Path(e.path)):
-                            named.append(_settle(Path(e.path)))
+                        if whole and _same_game(e.name, whole) and _looks_like_saves(Path(e.path)):
+                            found = _save_subfolder(_settle(Path(e.path)))
+                            if found is not None:
+                                named.append(found)
+                            else:
+                                named.append(None)             # (named after the game, but which part?)
                             continue
                     nxt.append(Path(e.path))
             level = nxt
-    named.sort(key=_newest, reverse=True)            # several (e.g. two editions): the one used last
-    seen, out = set(), []
-    for p in inside + named:
-        k = os.path.normcase(str(p))
-        if k not in seen:
-            seen.add(k)
-            out.append(p)
-    return out
+    def distinct(paths: list[Path]) -> list[Path]:
+        seen, out = set(), []
+        for p in paths:
+            k = os.path.normcase(str(p))
+            if k not in seen:
+                seen.add(k)
+                out.append(p)
+        return out
+    if any(p is None for p in named):
+        return [] if not inside else (inside if len(distinct(inside)) == 1 else [])
+    inside, named = distinct(inside), distinct(named)
+    if inside:
+        return inside if len(inside) == 1 else []     # e.g. "save" and "savedata" both there: not sure
+    return named if len(named) == 1 else []           # two editions, two makers' folders...: not sure
 
 
 def suggest_save_folder(game_dir: str, names: Iterable[str], other: Optional[tuple[str, str]] = None,

@@ -1471,3 +1471,55 @@ class Updates(unittest.TestCase):
             self.assertFalse((folder / "new").exists())                              # tidied up
             self.assertEqual(list(folder.glob("*.zip")), [])
             self.assertIn("updated", (folder / "update.log").read_text("utf-8"))
+
+
+class StricterSaveSuggestions(unittest.TestCase):
+    """1.0.1: a folder must be named after the WHOLE game (not one shared word) and hold save files; two
+    candidates = not sure = nothing. (Cases from the owner's own library.)"""
+
+    def setUp(self):
+        import detect
+        self.detect = detect
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.docs = self.root / "Documents"
+        self.low = self.root / "LocalLow"
+        for d in (self.docs, self.low):
+            d.mkdir()
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def suggest(self, game: Path, names):
+        game.mkdir(parents=True, exist_ok=True)
+        return self.detect.suggest_save_folder(str(game), list(names), None, lambda p: True,
+                                               home=self.root, roots=[game, self.docs, self.low])
+
+    def test_one_shared_word_is_not_enough(self):
+        write(self.docs / "BLACKcyc" / "SaDisticBlooD_savefiles", "save01.dat", "x")    # another game's saves
+        self.assertIsNone(self.suggest(self.root / "D" / "BLACK SHEEP TOWN", ["BLACK SHEEP TOWN", "Bst"]))
+        s = self.suggest(self.root / "D" / "SaDistic BlooD", ["SaDistic BlooD", "SaDisticBlooD"])
+        self.assertEqual(s.path, str(self.docs / "BLACKcyc" / "SaDisticBlooD_savefiles"))
+
+    def test_down_to_the_save_folder_past_engine_clutter(self):
+        bst = self.low / "MoralityLine" / "Bst"
+        write(bst, "Player.log", "log")
+        write(bst / "Unity", "cache.bin", "x")
+        write(bst / "Utage" / "Savebst", "save1.utage", "x")
+        s = self.suggest(self.root / "D" / "BLACK SHEEP TOWN", ["BLACK SHEEP TOWN", "Bst"])
+        self.assertEqual(s.path, str(bst / "Utage" / "Savebst"))
+
+    def test_save_words_after_the_name(self):
+        write(self.docs / "魔導書の司書 セーブデータ", "save.dat", "x")
+        s = self.suggest(self.root / "D" / "魔導書の司書", ["魔導書の司書"])
+        self.assertEqual(s.path, str(self.docs / "魔導書の司書 セーブデータ"))
+
+    def test_two_candidates_means_nothing(self):
+        write(self.docs / "slowdamage" / "1.10", "system.dat", "x")
+        write(self.low / "NITRO CHiRAL" / "slowdamage 普及版" / "1.10", "system.dat", "x")
+        self.assertIsNone(self.suggest(self.root / "D" / "スロウ・ダメージ", ["スロウ・ダメージ", "slowdamage"]))
+
+    def test_only_logs_and_settings_are_not_saves(self):
+        write(self.docs / "Indigo", "config.ini", "x")
+        write(self.docs / "Indigo", "error.log", "x")
+        self.assertIsNone(self.suggest(self.root / "D" / "Indigo", ["Indigo"]))
