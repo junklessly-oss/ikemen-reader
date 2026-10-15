@@ -2903,8 +2903,8 @@ class SettingsDialog(FitsScreen, QDialog):
         self.vndb_safe = self._tx(QCheckBox(), "settings.vndb_safe")
         self.vndb_safe.setChecked(current.vndb_safe_only if current else False)
         lay.addWidget(self.pulse)
-        lay.addWidget(self.auto_update)
         lay.addWidget(self.startup)
+        lay.addWidget(self.auto_update)
         lay.addWidget(self.vndb)
         lay.addWidget(self.vndb_safe)
 

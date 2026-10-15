@@ -298,7 +298,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 
 - Auto-updater (owner's request, 2026-10-15; updater.py): checks GitHub's latest release on every start (packaged
   program only; IKEMEN_UPDATE_CHECK=1 shows the question from source). Settings "Install Updates Automatically"
-  (LocalSettings.auto_update, default off, per device, under Pulsing Sync Lights). Off: "Later | Update Now" with
+  (LocalSettings.auto_update, default off, per device, under Launch Program on Startup). Off: "Later | Update Now" with
   release notes -> UpdateDialog (progress, Cancel) -> restart. On: downloads in the background, "Later | Restart
   Now"; Later = installed when Ikemen Reader closes. Download verified against GitHub's asset SHA-256 digest;
   unpacked into <program folder>\update\new (build.py creates update\; falls back to %APPDATA%\IkemenReader\update
