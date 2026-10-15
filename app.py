@@ -1710,6 +1710,10 @@ class ThemedCombo(QComboBox):
         box = self._box()
         box.setMask(QRegion(0, 0, 1, 1))             # hidden until the slide reveals it
         super().showPopup()
+        # nothing highlighted when it opens (the choice in use already shows in the box itself); the highlight
+        # follows the mouse from there
+        self.view().selectionModel().clearSelection()
+        self.view().setCurrentIndex(self.view().model().index(-1, 0))
         # a layered window shows the last picture it was given: draw the list afresh now, or a list that changed
         # while it was closed (e.g. the tick moved to another choice) is shown as it was until something redraws
         self.view().viewport().repaint()
@@ -4927,7 +4931,7 @@ class MainWindow(TaskOwner, QMainWindow):
         if inside:
             return sorts + [None, (tr("sort.follow"), "follow"), mine]
         # three groups, each under a thin line: the sorts | where folders go | your own arrangement
-        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("mixed", "first", "last")] + [None, mine]
+        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("first", "last", "mixed")] + [None, mine]
 
     def _fill_sort(self) -> None:
         c = self.sort

@@ -1652,7 +1652,7 @@ class SortingAndCustomOrder(unittest.TestCase):
                 shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
                 f = app.FOLDER_PREFIX + fid
                 self.assertEqual([w.sort.itemData(i) for i in range(w.sort.count()) if w.sort.itemData(i)],
-                                 ["title", "hours", "recent", "place:mixed", "place:first", "place:last", "custom"])
+                                 ["title", "hours", "recent", "place:first", "place:last", "place:mixed", "custom"])
                 self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])     # mixed in, by its latest game
                 w.choose_sort("place:first")                                       # a setting: stays a sort
                 self.assertEqual(shown(), [f, ids["A"], ids["B"], ids["C"]])

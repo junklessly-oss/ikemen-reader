@@ -305,7 +305,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    items via _sort_choices/_fill_sort (tick icon); in a folder: Same as Library + 4 sorts. Library.set_folder takes a
    game out of the list it leaves (so it lands at the end of the new one). Search/filter: no rearranging.
    FINAL owner decision (2026-10-15, after several rounds): menu = Title / Most Played / Recently Played |
-   Folders Mixed / Folders First / Folders Last / My Arrangement; NO ticks; folder options greyed when there are no
+   Folders First / Folders Last / Folders Mixed | My Arrangement (three groups, visible lines); NO ticks; nothing
+   highlighted when a drop-down opens; folder options greyed when there are no
    folders. Folder options = a remembered setting (folder_place, saved, Ikemen Sync) for the three automatic sorts
    (folders mixed in / grouped front / back, always in that sort's order; folders placed by name / total hours /
    latest game - their inner order never matters). They never switch to My Arrangement. MY ARRANGEMENT (sort
