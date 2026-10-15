@@ -255,7 +255,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    sliding open); the bottom-bar status drop-down isn't touched by refreshes while its list is open.
 2. Grid: Steam-style covers - today's size = minimum, covers stretch to fill each row, a new column when
    one more fits at minimum, equal gaps left/right, crops unchanged. Drag auto-scroll near top/bottom edge,
-   faster the further you push. Background picture: KEEP as before (pinned-crop trial rejected: laggy,
+   faster the further you push (DRAG_SCROLL_*; not over trash / "‹ Library"). DONE: MainWindow._fit_grid (Qt's
+   grid always reserves PM_ScrollBarExtent + 1 px, taken from the right edge; viewport margins top/bottom 0 so covers
+   slide under the bars, owner chose first row 12 px below the top bar over the old 8 px strips). Background picture: KEEP as before (pinned-crop trial rejected: laggy,
    disorienting). Cover-size slider: not now (future idea).
 3. Titles: hover titles - English breaks only between words; Japanese shrinks one font size when it
    overflows by 1-2 characters, else wraps (kinsoku: no line starts with 。、ー」 etc.). Added-game title:

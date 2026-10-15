@@ -336,6 +336,11 @@ class LibraryGrid(QListWidget):
             p.end()
         super().paintEvent(ev)
 
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        if hasattr(self.w, "grid"):
+            self.w._fit_grid()
+
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
         if BACKGROUND["path"]:
@@ -495,6 +500,10 @@ COVER_W, COVER_H = 176, 248          # roughly the shape of a VN package
 CARD_PAD_X, CARD_PAD_TOP, CARD_PAD_BOTTOM = 12, 12, 18
 CARD_W, CARD_H = COVER_W + 2 * CARD_PAD_X, COVER_H + CARD_PAD_TOP + CARD_PAD_BOTTOM
 GRID_SPACING = 6
+GRID_GAP = 2 * CARD_PAD_X + GRID_SPACING     # the space between two covers, and at the left/right edges
+# covers grow with the window (Steam style): COVER_W x COVER_H is the smallest size; the grid works out
+# how many columns fit at that size and then stretches the covers so the row is filled exactly
+GRID = {"cover_w": float(COVER_W), "cover_h": float(COVER_H)}
 HOVER_LIFT = 6                       # px the cover rises on hover
 HOVER_GROW = 0.03                    # 3% bigger on hover
 HOVER_MS = 150                       # ease in/out time
@@ -505,6 +514,8 @@ RECHECK_POLLS = 15                   # re-check every game's saves every 15 live
 STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
 SCROLLBAR_LINGER_S = 0.6             # stays visible this long after scrolling / leaving the edge
 SCROLLBAR_EDGE_PX = 36               # mouse this close to the right edge shows it
+DRAG_SCROLL_ZONE = 70                # dragging a game this close to the grid's top/bottom scrolls it...
+DRAG_SCROLL_MIN, DRAG_SCROLL_MAX = 2, 60   # ...this many px per frame, faster the further you push
 LIGHT_R = 5.5
 LOGO_H = 30
 
@@ -998,15 +1009,16 @@ class CardDelegate(QStyledItemDelegate):
         self.shadow = make_shadow(COVER_W, COVER_H)
 
     def sizeHint(self, option, index) -> QSize:
-        return QSize(CARD_W, CARD_H)
+        return QSize(round(GRID["cover_w"]) + 2 * CARD_PAD_X, round(GRID["cover_h"]) + CARD_PAD_TOP + CARD_PAD_BOTTOM)
 
     @staticmethod
     def cover_rect(rect: QRect, hover: float) -> QRectF:
         e = ease(hover)
         scale = 1 + HOVER_GROW * e
-        w, h = COVER_W * scale, COVER_H * scale
-        cx = rect.x() + CARD_W / 2
-        top = rect.y() + CARD_PAD_TOP + COVER_H / 2 - h / 2 - HOVER_LIFT * e
+        cw, ch = round(GRID["cover_w"]), round(GRID["cover_h"])
+        w, h = cw * scale, ch * scale
+        cx = rect.x() + (cw + 2 * CARD_PAD_X) / 2
+        top = rect.y() + CARD_PAD_TOP + ch / 2 - h / 2 - HOVER_LIFT * e
         # whole pixels only: an edge that falls between pixels gets a faint light seam where the cover
         # and its hover fade are each softened separately
         left = round(cx - w / 2)
@@ -3828,7 +3840,6 @@ class MainWindow(TaskOwner, QMainWindow):
         self.grid.setResizeMode(QListWidget.Adjust)
         self.grid.setMovement(QListWidget.Static)
         self.grid.setUniformItemSizes(True)
-        self.grid.setGridSize(QSize(CARD_W + GRID_SPACING, CARD_H + GRID_SPACING))
         self.grid.setSpacing(0)
         self.grid.setSelectionMode(QAbstractItemView.SingleSelection)
         self.grid.setMouseTracking(True)
@@ -3842,7 +3853,7 @@ class MainWindow(TaskOwner, QMainWindow):
         sb.valueChanged.connect(lambda _: self._show_scrollbar())
         sb.installEventFilter(self)
         self._style_scrollbar()
-        self.grid.setViewportMargins(14, 8, 10, 8)         # 14 + the cover's own inset = 29 px, the same as between covers
+        self._fit_grid()
         self.grid.setItemDelegate(CardDelegate(self))
         self.grid.setContextMenuPolicy(Qt.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self._context_menu)
@@ -4214,7 +4225,6 @@ class MainWindow(TaskOwner, QMainWindow):
             iid = obj.game_id if kind == "game" else FOLDER_PREFIX + obj
             it.setData(GAME_ID_ROLE, iid)
             it.setData(Qt.DisplayRole, obj.title if kind == "game" else self.folder_name(obj))
-            it.setSizeHint(QSize(CARD_W, CARD_H))
             self.grid.addItem(it)
             if iid == current:
                 self.grid.setCurrentItem(it)
@@ -4564,6 +4574,35 @@ class MainWindow(TaskOwner, QMainWindow):
             return True
         return super().eventFilter(obj, ev)
 
+    def _fit_grid(self) -> None:
+        """Covers grow with the window (Steam style): as many columns as fit at the smallest cover size,
+        then the covers stretch so the row is filled exactly, with the same gap at the left and right
+        edges as between covers."""
+        g, sb = self.grid, self.grid.verticalScrollBar()
+        # Qt's grid always keeps room for a scroll bar (shown or not) plus a pixel before it starts a new
+        # column; that room is taken out of the right-hand edge, where the scroll bar appears anyway
+        reserve = g.style().pixelMetric(QStyle.PM_ScrollBarExtent, None, sb) + 1
+        edge = max(GRID_GAP // 2, reserve)                  # (each cover's own inset is the other half)
+        inner = g.width() - 2 * g.frameWidth()
+        avail = inner - 2 * edge
+        if avail <= 0:
+            return
+        cols = max(1, int(avail // (COVER_W + GRID_GAP)))
+        cell = int(avail // cols)
+        cover_w = min(2.0 * COVER_W, cell - GRID_GAP)
+        cover_h = cover_w * COVER_H / COVER_W
+        side = inner - cols * cell                          # both edges together
+        left = side // 2
+        right = side - left - reserve
+        size = QSize(cell, round(cover_h) + CARD_PAD_TOP + CARD_PAD_BOTTOM + GRID_SPACING)
+        if (GRID["cover_w"], GRID["cover_h"]) != (cover_w, cover_h) or g.gridSize() != size:
+            GRID["cover_w"], GRID["cover_h"] = cover_w, cover_h
+            g.setGridSize(size)
+        m = g.viewportMargins()
+        if (m.left(), m.right()) != (left, right):
+            g.setViewportMargins(left, 0, right, 0)     # covers scroll right up to the bars
+            g.doItemsLayout()                   # (new margins alone don't make the view lay out again)
+
     def _start_game_drag(self, gid: str) -> None:
         g = self.games.get(gid)
         if g is None:
@@ -4604,6 +4643,39 @@ class MainWindow(TaskOwner, QMainWindow):
         self._drag_watch.setInterval(150)
         self._drag_watch.timeout.connect(self._check_drag_button)
         self._drag_watch.start()
+        self._drag_scroll = QTimer(self)
+        self._drag_scroll.setInterval(16)
+        self._drag_scroll.timeout.connect(self._drag_autoscroll)
+        self._drag_scroll.start()
+
+    def _drag_autoscroll(self) -> None:
+        """While a game is dragged near the top or bottom of the grid (or past it), the library scrolls:
+        slowly at the start of the zone, faster the deeper you go, fastest well beyond the edge."""
+        if self._ghost is None:
+            return
+        gp = QCursor.pos()
+        kind, _ = self._drag_hit(gp)
+        if kind in ("trash", "back"):
+            return                                   # aiming at a button, not scrolling
+        vp = self.grid.viewport()
+        top_left = vp.mapToGlobal(QPoint(0, 0))
+        if not (top_left.x() - 40 <= gp.x() <= top_left.x() + vp.width() + 40):
+            return
+        y = gp.y() - top_left.y()
+        if y < DRAG_SCROLL_ZONE:
+            depth, direction = (DRAG_SCROLL_ZONE - y) / DRAG_SCROLL_ZONE, -1
+        elif y > vp.height() - DRAG_SCROLL_ZONE:
+            depth, direction = (y - vp.height() + DRAG_SCROLL_ZONE) / DRAG_SCROLL_ZONE, 1
+        else:
+            return
+        # inside the zone: depth 0..1 (gentle start); past the edge it keeps growing up to 3
+        depth = min(depth, 3.0)
+        speed = DRAG_SCROLL_MIN + (DRAG_SCROLL_MAX - DRAG_SCROLL_MIN) * (depth / 3.0) ** 1.6
+        sb = self.grid.verticalScrollBar()
+        before = sb.value()
+        sb.setValue(before + direction * round(speed))
+        if sb.value() != before:
+            self._move_game_drag(gp)                 # what's under the mouse changed
 
     def _check_drag_button(self) -> None:
         if self._ghost is not None and not (QApplication.mouseButtons() & Qt.LeftButton):
@@ -4635,6 +4707,7 @@ class MainWindow(TaskOwner, QMainWindow):
         if self._ghost is None:
             return
         self._drag_watch.stop()
+        self._drag_scroll.stop()
         QApplication.instance().removeEventFilter(self._esc)
         self._ghost.hide()
         self._ghost.deleteLater()

@@ -1222,3 +1222,47 @@ class Version101QuickFixes(unittest.TestCase):
                 mock.patch.object(vndb.http.client, "HTTPSConnection", lambda *a, **k: Alive()):
             self.assertEqual(vndb._request("GET", "https://api.vndb.org/x"), b"ok")
         self.assertTrue(pool.empty())
+
+
+class SteamStyleGrid(unittest.TestCase):
+    """1.0.1: covers stretch to fill each row, never below their smallest size, with the same gap at both
+    edges as between covers, at any window width."""
+
+    def test_rows_filled_with_equal_edges(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            from library import Library
+            qa = QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            exe = Path(tmp) / "g.exe"
+            exe.write_bytes(b"")
+            for i in range(20):
+                lib.add_game(f"Game {i:02d}", "PC", exe=str(exe))
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.show()
+                w.refresh()
+                for width in (1150, 1234, 1400, 1777, 2200):
+                    w.resize(width, 800)
+                    for _ in range(5):
+                        qa.processEvents()
+                    g = w.grid
+                    vp = g.viewport().mapTo(g, app.QPoint(0, 0)).x()
+                    covers = [app.CardDelegate.cover_rect(g.visualItemRect(g.item(i)), 0) for i in range(g.count())]
+                    row = [c for c in covers if abs(c.y() - covers[0].y()) < 1]
+                    left, right = row[0].x() + vp, g.width() - (row[-1].x() + row[-1].width() + vp)
+                    gaps = {round(row[i + 1].x() - (row[i].x() + row[i].width())) for i in range(len(row) - 1)}
+                    self.assertGreaterEqual(app.GRID["cover_w"], app.COVER_W)
+                    self.assertLess(app.GRID["cover_w"], app.COVER_W + app.COVER_W + app.GRID_GAP)
+                    self.assertEqual(gaps, {app.GRID_GAP}, width)
+                    self.assertLessEqual(abs(left - right), 2, width)
+                    self.assertLessEqual(abs(left - app.GRID_GAP), 3, width)
+                    # one more column would not have fitted at the smallest size
+                    self.assertLess(g.width() - app.GRID_GAP, (len(row) + 1) * (app.COVER_W + app.GRID_GAP), width)
+            finally:
+                w.close()
