@@ -514,6 +514,33 @@ S: dict[str, tuple[str, str]] = {
     "theme.c_logo_outline":     ("Logo Outline", "ロゴの縁取りの色"),
     "settings.startup":         ("Launch Program on Startup", "Windowsの起動時に自動で起動"),
     "settings.pulse":           ("Pulsing Sync Lights", "同期ランプの点滅"),
+    "settings.auto_update":     ("Install Updates Automatically", "アップデートを自動でインストール"),
+    "update.available_title":   ("Update Available", "アップデートがあります"),
+    "update.available":         ("Ikemen Reader {version} is available. You have {current}.",
+                                 "イケメンリーダー {version} が利用できます（現在のバージョン：{current}）。"),
+    "update.whats_new":         ("What's new:", "主な変更点："),
+    "update.now":               ("Update Now", "今すぐアップデート"),
+    "update.later":             ("Later", "後で"),
+    "update.downloading":       ("Downloading Ikemen Reader {version}... {done} / {total} MB",
+                                 "イケメンリーダー {version} をダウンロード中… {done} / {total} MB"),
+    "update.ready_title":       ("Update Ready", "アップデートの準備ができました"),
+    "update.ready":             ("Ikemen Reader {version} has been downloaded. Restart now to start using it, "
+                                 "or it will be installed the next time you close Ikemen Reader.",
+                                 "イケメンリーダー {version} をダウンロードしました。今すぐ再起動して使い始めるか、"
+                                 "次にイケメンリーダーを閉じたときにインストールされます。"),
+    "update.restart":           ("Restart Now", "今すぐ再起動"),
+    "update.failed":            ("The update couldn't be downloaded right now. Ikemen Reader will try again next time.",
+                                 "アップデートをダウンロードできませんでした。次回もう一度試します。"),
+    "update.damaged":           ("The downloaded update was damaged, so it wasn't installed. Ikemen Reader will try "
+                                 "again next time.",
+                                 "ダウンロードしたアップデートが破損していたため、インストールしませんでした。次回もう一度試します。"),
+    "update.wait_game":         ("The update will be installed when you close Ikemen Reader (not while a game is "
+                                 "running or saves are syncing).",
+                                 "アップデートはイケメンリーダーを閉じたときにインストールされます（ゲームの実行中や"
+                                 "セーブの同期中は行いません）。"),
+    "update.done":              ("Updated to Ikemen Reader {version}.", "イケメンリーダー {version} にアップデートしました。"),
+    "update.not_packaged":      ("Updates install themselves only in the packaged program (Ikemen Reader.exe).",
+                                 "アップデートの自動インストールは、パッケージ版（Ikemen Reader.exe）でのみ行えます。"),
     "settings.vndb":            ("Automatically Fetch Covers From VNDB", "VNDBからカバー画像を自動取得"),
     "settings.vndb_safe":       ("Safe Covers Only (Hide Covers VNDB Marks as Explicit)",
                                  "安全なカバーのみ（VNDBで成人向けとされるカバーを除外）"),

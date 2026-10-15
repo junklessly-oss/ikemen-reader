@@ -1374,3 +1374,100 @@ class LavenderAndBookmarks(unittest.TestCase):
             save_local_settings(s, Path(tmp))
             self.assertFalse(load_local_settings(Path(tmp)).show_bookmarks)
             self.assertIn("show_bookmarks", devsync.SHARED)
+
+
+class Updates(unittest.TestCase):
+    """1.0.1: new versions from GitHub releases: newer-than check, verified download, unpacking, and the
+    helper that swaps the files once Ikemen Reader has closed (run for real on Windows)."""
+
+    def test_versions(self):
+        import updater
+        self.assertTrue(updater.is_newer("1.0.1", "1.0.0"))
+        self.assertTrue(updater.is_newer("v1.1", "1.0.9"))
+        self.assertFalse(updater.is_newer("1.0.0", "1.0.0"))
+        self.assertFalse(updater.is_newer("1.0", "1.0.0"))
+        self.assertFalse(updater.is_newer("nightly", "1.0.0"))
+
+    def test_pick_release(self):
+        import updater
+        data = {"tag_name": "1.0.1", "body": "## Ikemen Reader 1.0.1\n- Bookmarks",
+                "assets": [{"name": "notes.txt"},
+                           {"name": "Ikemen-Reader-1.0.1.zip", "size": 5, "digest": "sha256:ABC",
+                            "browser_download_url": "https://example/zip"}]}
+        r = updater.pick_release(data, "1.0.0")
+        self.assertEqual((r.version, r.name, r.size, r.sha256), ("1.0.1", "Ikemen-Reader-1.0.1.zip", 5, "abc"))
+        self.assertIsNone(updater.pick_release(data, "1.0.1"))                      # not newer
+        self.assertIsNone(updater.pick_release(dict(data, prerelease=True), "1.0.0"))
+        self.assertIsNone(updater.pick_release({"tag_name": "2.0"}, "1.0.0"))      # no program zip
+
+    def _zip(self, folder: Path, exe_text: str) -> Path:
+        import zipfile
+        z = folder / "Ikemen-Reader-9.9.9.zip"
+        with zipfile.ZipFile(z, "w") as f:
+            f.writestr("Ikemen Reader/Ikemen Reader.exe", exe_text)
+            f.writestr("Ikemen Reader/_internal/lib.dll", "new lib")
+        return z
+
+    def test_download_checks_the_fingerprint(self):
+        import hashlib
+        import updater
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            src = self._zip(tmp, "new exe")
+            data = src.read_bytes()
+            good = updater.Release("9.9.9", "", src.as_uri(), "dl.zip", len(data), hashlib.sha256(data).hexdigest())
+            out = tmp / "update"
+            out.mkdir()
+            self.assertEqual(updater.download(good, out).read_bytes(), data)
+            bad = updater.Release("9.9.9", "", src.as_uri(), "dl2.zip", len(data), "0" * 64)
+            with self.assertRaises(ValueError):
+                updater.download(bad, out)
+            self.assertFalse((out / "dl2.zip").exists())                              # nothing damaged left behind
+            new = updater.stage(out / "dl.zip", out)
+            self.assertEqual((new / "Ikemen Reader.exe").read_text(), "new exe")
+            self.assertEqual(updater.staged(out), new)
+
+    def test_unsafe_zip_refused(self):
+        import zipfile
+        import updater
+        with tempfile.TemporaryDirectory() as tmp:
+            z = Path(tmp) / "evil.zip"
+            with zipfile.ZipFile(z, "w") as f:
+                f.writestr("../outside.txt", "x")
+                f.writestr("Ikemen Reader/Ikemen Reader.exe", "x")
+            with self.assertRaises(ValueError):
+                updater.stage(z, Path(tmp) / "update")
+            self.assertFalse((Path(tmp) / "outside.txt").exists())
+
+    @unittest.skipUnless(IS_WINDOWS, "the swap helper is PowerShell")
+    def test_helper_swaps_after_the_program_closes(self):
+        import updater
+        with tempfile.TemporaryDirectory() as tmp:
+            program = Path(tmp) / "Ikemen Reader ほん"          # (a Japanese folder name, like the owner's)
+            (program / "_internal").mkdir(parents=True)
+            (program / "Ikemen Reader.exe").write_text("old exe")
+            (program / "_internal" / "lib.dll").write_text("old lib")
+            (program / "Google Drive.lnk").write_text("keep me")
+            folder = updater.update_dir(Path(tmp) / "appdata", program)
+            self.assertEqual(folder, program / "update")
+            new = updater.stage(self._zip(Path(tmp), "new exe"), folder)
+            # "Ikemen Reader" = a process that closes after a moment
+            proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
+            script = updater.install_on_exit(folder, new, restart=False, program=program, pid=proc.pid, run=False)
+            started = time.time()
+            subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                           check=True, timeout=60, capture_output=True)
+            self.assertGreaterEqual(time.time() - started, 1.0)                     # waited for it to close
+            proc.wait()
+            self.assertEqual((program / "Ikemen Reader.exe").read_text(), "new exe")
+            self.assertEqual((program / "_internal" / "lib.dll").read_text(), "new lib")
+            self.assertEqual((program / "Google Drive.lnk").read_text(), "keep me")  # not ours: untouched
+            self.assertEqual((folder / "previous" / "Ikemen Reader.exe").read_text(), "old exe")   # backup
+            self.assertFalse((folder / "new").exists())                              # tidied up
+            self.assertIn("updated", (folder / "update.log").read_text("utf-8"))
+
+    def test_release_notes_for_the_question(self):
+        import app
+        notes = app._release_notes("## Ikemen Reader 1.0.1\r\n\r\n- **Bookmarks** on covers\r\n- [Guide](x) updated"
+                                   "\r\n\r\n### Install\r\n1. Download it")
+        self.assertEqual(notes, "• Bookmarks on covers\n• Guide updated")

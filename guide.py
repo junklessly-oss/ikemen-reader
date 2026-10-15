@@ -116,8 +116,12 @@ GUIDE = {
             "- Font: pick a separate font for English and for Japanese, or add your own with Add Font.",
             "- Custom Library Background: choose a picture, set its opacity and zoom, and drag it into place.",
             "- Theme: Dark, Light, or Custom, where you choose every colour yourself.",
-            "- Accessibility: pulsing sync lights, launching on startup, automatic covers from VNDB, and safe "
-            "covers only.",
+            "- Accessibility: pulsing sync lights, automatic updates, launching on startup, automatic covers from "
+            "VNDB, and safe covers only.",
+            "- Updates: when a new version of Ikemen Reader is out, you're asked whether to update when Ikemen "
+            "Reader opens. With Install Updates Automatically ticked, it downloads by itself and offers Restart Now "
+            "(otherwise it's installed when you close Ikemen Reader). Updates never touch your library, saves or "
+            "settings, and never happen while a game is running.",
         ]),
         ("Ikemen Sync", [
             "Device Settings Sync copies the other device's look and preferences (theme, fonts, background, "
@@ -205,7 +209,10 @@ GUIDE = {
             "- フォント：英語と日本語で別々のフォントを選べます。「フォントを追加」で自分のフォントも使えます。",
             "- ライブラリの背景をカスタマイズ：画像を選び、不透明度とズームを調整して、ドラッグで位置を合わせます。",
             "- テーマ：ダーク、ライト、またはすべての色を自分で選べるカスタムから選べます。",
-            "- アクセシビリティ：同期ランプの点滅、Windows起動時の自動起動、VNDBからのカバー画像の自動取得、安全なカバーのみの表示を設定できます。",
+            "- アクセシビリティ：同期ランプの点滅、アップデートの自動インストール、Windows起動時の自動起動、VNDBからのカバー画像の自動取得、安全なカバーのみの表示を設定できます。",
+            "- アップデート：イケメンリーダーの新しいバージョンが出ると、起動時にアップデートするか尋ねます。「アップデートを自動でインストール」をオンにすると、"
+            "自動でダウンロードして「今すぐ再起動」を提案します（再起動しない場合は、イケメンリーダーを閉じたときにインストールされます）。"
+            "アップデートでライブラリ・セーブ・設定が変わることはなく、ゲームの実行中に行われることもありません。",
         ]),
         ("イケメン同期", [
             "「端末設定の同期」を押すと、もう一方の端末の見た目と設定（テーマ・フォント・背景・言語など）をこの端末にコピーします。端末番号、クラウドフォルダー、Locale Emulator、Luna、"

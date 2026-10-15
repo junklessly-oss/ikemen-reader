@@ -130,6 +130,7 @@ class LocalSettings:
     font_ja: str = "Hiragino Maru Gothic ProN"   # font family for the Japanese interface
     show_stats: bool = True           # playtime / last played on the covers and the bottom bar
     show_bookmarks: bool = True       # reading-status bookmarks on the covers
+    auto_update: bool = False         # install new versions by itself (off: asks when one is available)
 
 
 def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSettings]:

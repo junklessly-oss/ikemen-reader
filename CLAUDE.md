@@ -33,8 +33,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   `detect.py` (save-location detection), `luna.py`, `vndb.py`, `titles.py` (title cleaning), `lnk.py`
   (shortcut reader; follows Luna `--Exec` shortcuts to the game), `vn.py` (small CLI), `outside.py` (starts
   every outside program: games, Luna, LE, admin prompt).
-- `assets/`: `Logo.png`, `Icon.png`, `Font.otf` (Hiragino Maru Gothic ProN W4, owner-supplied, licence is
-  likely Mac-only — owner's personal use), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
+- `assets/`: `Logo.png`, `Icon.png`, `Font.otf` (Hiragino Maru Gothic ProN W4, owner-supplied; the owner has legal permission for all
+  bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
 - Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 71 tests, all pass on the PC
@@ -296,7 +296,24 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   0 ms timer (>= 7 ms apart; Windows' 15.6 ms timer steps made 16/31 ms judder), the light pulse's grid updates
   pause while it runs (they forced out-of-step repaints). Read button: only the bevel scales, the label stays.
 
+- Auto-updater (owner's request, 2026-10-15; updater.py): checks GitHub's latest release on every start (packaged
+  program only; IKEMEN_UPDATE_CHECK=1 shows the question from source). Settings "Install Updates Automatically"
+  (LocalSettings.auto_update, default off, per device, under Pulsing Sync Lights). Off: "Later | Update Now" with
+  release notes -> UpdateDialog (progress, Cancel) -> restart. On: downloads in the background, "Later | Restart
+  Now"; Later = installed when Ikemen Reader closes. Download verified against GitHub's asset SHA-256 digest;
+  unpacked into <program folder>\update\new (build.py creates update\; falls back to %APPDATA%\IkemenReader\update
+  if not writable). install-update.ps1 (UTF-8 BOM, hidden PowerShell) waits for our pid, moves each item of the
+  release (exe, _internal) into place, old ones to update\previous, rolls back on failure, logs update\update.log,
+  restarts. Only the release's own items are replaced (owner's Google Drive.lnk etc. stay). Never while a game
+  runs / saves sync. last_version.txt -> "Updated to X" note. Release zips must keep the layout
+  "Ikemen Reader/Ikemen Reader.exe" and be named *Ikemen*.zip; tag = version ("1.0.1").
+  1.0.0 has no updater: 1.0.1 is installed by hand; 1.0.1 -> 1.0.2 is the first automatic update.
+
 ## Ideas for later (owner interested, not scheduled)
+- macOS / Linux support: UI, sync engine, library already portable; games would run through Wine (start/track via
+  wine, save paths inside the Wine prefix + translation between devices), Wine registry for registry saves,
+  LE/Luna don't apply, startup/.lnk/window titles/playtime need equivalents, build per OS (Mac signing ~$99/yr).
+  Can't be tested from the owner's Windows machines.
 - Cover size changer (Ctrl+wheel and/or slider in Settings → Display).
 - Theme editor (low priority): Settings → "Customise Theme..." window listing every colour in COLORS/LIGHTS
   under friendly grouped names, swatch + hex box each, Qt colour picker (styled), live preview through

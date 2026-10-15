@@ -30,7 +30,7 @@ from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, Q
 from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-                               QMessageBox, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
+                               QMessageBox, QProgressBar, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
                                QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QVBoxLayout,
                                QWidget)
 
@@ -41,6 +41,7 @@ import devsync
 import guide
 import luna
 import regsync
+import updater
 import vndb
 from i18n import tr
 import detect
@@ -605,6 +606,8 @@ QComboBox::drop-down {{ border: none; width: 26px; subcontrol-origin: padding; s
 QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; }}
 QComboBox::down-arrow:on {{ top: 1px; }}
 QComboBoxPrivateContainer {{ background: {c['input']}; border: none; }}
+QProgressBar {{ background: {c['input']}; border: none; border-radius: 4px; }}
+QProgressBar::chunk {{ background: {c['play']}; border-radius: 4px; }}
 QComboBox QAbstractItemView {{ background: {c['input']}; border: 1px solid {c['border']};
                                selection-background-color: {c['button_hover']}; outline: none; }}
 QPushButton {{ background: {c['button']}; border: 1px solid {c['button']}; border-radius: 6px; padding: 6px 14px; }}
@@ -2007,6 +2010,79 @@ class FolderTransition(QWidget):
         p.end()
 
 
+class UpdateDownload(QThread):
+    """Downloads and unpacks a release in the background (progress in bytes)."""
+    progress = Signal(int, int)
+    done = Signal(object)                # the unpacked folder (Path)
+    failed = Signal(object)
+
+    def __init__(self, release: "updater.Release", folder: Path):
+        super().__init__()
+        self.release, self.folder = release, folder
+        self.stop = False
+
+    def run(self) -> None:
+        try:
+            z = updater.download(self.release, self.folder, lambda d, t: self.progress.emit(d, t), lambda: self.stop)
+            self.done.emit(updater.stage(z, self.folder))
+        except Exception as e:  # noqa: BLE001 - reported to the UI
+            self.failed.emit(e)
+
+
+class UpdateDialog(QDialog):
+    """Update Now: downloads the new version with a progress bar (Cancel stops it)."""
+
+    def __init__(self, release: "updater.Release", folder: Path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("update.available_title"))
+        self.release, self.new = release, None
+        self.error: Optional[Exception] = None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(12)
+        self.label = QLabel(tr("update.downloading", version=release.version, done=0,
+                               total=max(1, round(release.size / 1048576))))
+        self.label.setMinimumWidth(380)
+        lay.addWidget(self.label)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(8)
+        lay.addWidget(self.bar)
+        row = QHBoxLayout()
+        cancel = QPushButton(tr("game.cancel"))
+        cancel.clicked.connect(self.reject)
+        row.addWidget(cancel)
+        row.addStretch()
+        lay.addLayout(row)
+        self.task = UpdateDownload(release, folder)
+        self.task.progress.connect(self._progress)
+        self.task.done.connect(self._done)
+        self.task.failed.connect(self._failed)
+        _LIVE_TASKS.add(self.task)
+        self.task.finished.connect(lambda: _LIVE_TASKS.discard(self.task))
+        self.task.start()
+
+    def _progress(self, done: int, total: int) -> None:
+        if total > 0:
+            self.bar.setValue(round(1000 * done / total))
+        self.label.setText(tr("update.downloading", version=self.release.version, done=round(done / 1048576),
+                              total=max(1, round((total or self.release.size) / 1048576))))
+
+    def _done(self, new) -> None:
+        self.new = new
+        self.accept()
+
+    def _failed(self, e) -> None:
+        if not isinstance(e, InterruptedError):
+            self.error = e
+        self.reject()
+
+    def reject(self) -> None:
+        self.task.stop = True                    # (Cancel: the half-download is deleted)
+        super().reject()
+
+
 class EasterEgg(QWidget):
     """Click the logo: the window goes dark with two boxes in the middle. Clicking anywhere else
     (or Esc) brings the library back."""
@@ -2818,6 +2894,8 @@ class SettingsDialog(FitsScreen, QDialog):
         lay.addSpacing(4)
         self.pulse = self._tx(QCheckBox(), "settings.pulse")
         self.pulse.setChecked(current.pulse if current else True)
+        self.auto_update = self._tx(QCheckBox(), "settings.auto_update")
+        self.auto_update.setChecked(current.auto_update if current else False)
         self.startup = self._tx(QCheckBox(), "settings.startup")
         self.startup.setChecked(startup.is_enabled())        # the real state of Windows' startup list
         self.vndb = self._tx(QCheckBox(), "settings.vndb")
@@ -2825,6 +2903,7 @@ class SettingsDialog(FitsScreen, QDialog):
         self.vndb_safe = self._tx(QCheckBox(), "settings.vndb_safe")
         self.vndb_safe.setChecked(current.vndb_safe_only if current else False)
         lay.addWidget(self.pulse)
+        lay.addWidget(self.auto_update)
         lay.addWidget(self.startup)
         lay.addWidget(self.vndb)
         lay.addWidget(self.vndb_safe)
@@ -3141,6 +3220,7 @@ class SettingsDialog(FitsScreen, QDialog):
             font_en=self.fonts["en"], font_ja=self.fonts["ja"],
             show_stats=self.current.show_stats if self.current else True,
             show_bookmarks=self.current.show_bookmarks if self.current else True,
+            auto_update=self.auto_update.isChecked(),
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
             bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4))
         save_local_settings(self.result_settings)
@@ -4219,6 +4299,17 @@ class MainWindow(TaskOwner, QMainWindow):
         self.apply_settings(settings)
         self._run(warm_up, lambda _: None)          # makes the first Play react instantly
         self._live_timer.start()
+
+        # new versions: looked for a few seconds after opening (only the packaged program updates itself;
+        # IKEMEN_UPDATE_CHECK=1 shows the question when running from source, for testing)
+        self._release: Optional[updater.Release] = None
+        self._update_ready: Optional[Path] = None    # unpacked and waiting: installed when Ikemen Reader closes
+        self._update_asked = False
+        before = updater.note_version(self.app_dir, APP_VERSION)
+        if before:
+            QTimer.singleShot(1500, lambda: self.statusBar().showMessage(tr("update.done", version=APP_VERSION), 10000))
+        if updater.FROZEN or os.environ.get("IKEMEN_UPDATE_CHECK") == "1":
+            QTimer.singleShot(4000, self._check_for_update)
 
     def restyle(self) -> None:
         """Redraw everything that isn't covered by the style sheet after a theme change."""
@@ -5687,6 +5778,82 @@ class MainWindow(TaskOwner, QMainWindow):
             self._live_checking = False
         self._run(library.change_signature, done, failed)
 
+    # ------------------------------------------------------------------ updates
+    def _update_folder(self) -> Path:
+        return updater.update_dir(self.app_dir)
+
+    def _check_for_update(self) -> None:
+        self._run(lambda: updater.check(APP_VERSION), self._update_found, lambda _e: None)   # offline: quiet
+
+    def _update_found(self, release: Optional["updater.Release"]) -> None:
+        if release is None:
+            return
+        self._release = release
+        if self.settings.auto_update and updater.FROZEN:
+            folder = self._update_folder()
+            self._run(lambda: updater.stage(updater.download(release, folder), folder),
+                      self._update_downloaded, lambda _e: None)        # tried again next time
+        else:
+            self._offer_update()
+
+    def _busy_for_update(self) -> bool:
+        """Not while a game runs, saves sync, or a window / menu is open: asked again a little later."""
+        return (self.worker is not None or self.syncer is not None or self._ghost is not None
+                or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None)
+
+    def _offer_update(self) -> None:
+        """Checkbox off: "Ikemen Reader 1.0.1 is available" - Later | Update Now."""
+        r = self._release
+        if r is None or self._update_asked:
+            return
+        if self._busy_for_update():
+            QTimer.singleShot(5000, self._offer_update)
+            return
+        self._update_asked = True
+        notes = _release_notes(r.notes)
+        text = tr("update.available", version=r.version, current=APP_VERSION)
+        if notes:
+            text += "\n\n" + tr("update.whats_new") + "\n" + notes
+        if message(self, text, tr("update.available_title"),
+                   [("now", tr("update.now")), ("later", tr("update.later"))], dismiss="later") != "now":
+            return
+        if not updater.FROZEN:
+            message(self, tr("update.not_packaged"))
+            return
+        d = UpdateDialog(r, self._update_folder(), self)
+        d.exec()
+        if d.new is not None:
+            self._restart_for_update(d.new)
+        elif d.error is not None:
+            message(self, tr("update.damaged" if str(d.error) == "update.damaged" else "update.failed"))
+
+    def _update_downloaded(self, new: Path) -> None:
+        """Checkbox on: downloaded and unpacked in the background - Restart Now, or it's installed on closing."""
+        self._update_ready = new
+        if self._busy_for_update():
+            QTimer.singleShot(5000, lambda: self._update_downloaded(new))
+            return
+        if self._update_asked:
+            return
+        self._update_asked = True
+        version = self._release.version if self._release else ""
+        if message(self, tr("update.ready", version=version), tr("update.ready_title"),
+                   [("now", tr("update.restart")), ("later", tr("update.later"))], dismiss="later") == "now":
+            self._restart_for_update(new)
+
+    def _restart_for_update(self, new: Path) -> None:
+        if self.worker is not None or self.syncer is not None:
+            self._update_ready = new
+            message(self, tr("update.wait_game"))
+            return
+        try:
+            updater.install_on_exit(self._update_folder(), new, restart=True)
+        except (OSError, ValueError):
+            message(self, tr("update.failed"))
+            return
+        self._update_ready = None                    # (the helper is already waiting: not twice on closing)
+        self.close()
+
     def closeEvent(self, e) -> None:
         if (self.worker and self.play_phase == "syncing") or self.syncer is not None:
             message(self, tr("close.syncing"))      # stopping mid-sync could leave saves half-uploaded
@@ -5701,7 +5868,30 @@ class MainWindow(TaskOwner, QMainWindow):
             os._exit(0)  # the game keeps running; nothing of ours is mid-write while we only watch it
         if self.checker:
             self.checker.wait(5000)       # (it may be uploading saves made outside Ikemen Reader)
+        if self._update_ready is not None and updater.FROZEN:
+            try:                          # downloaded earlier ("Later"): put in place once we've closed
+                updater.install_on_exit(self._update_folder(), self._update_ready, restart=False)
+            except (OSError, ValueError):
+                pass
         e.accept()                        # other background work: see wait_for_tasks() in main()
+
+
+def _release_notes(markdown: str, lines: int = 10) -> str:
+    """A release's description as a few plain lines for the update question (headings and the install
+    instructions left out)."""
+    out = []
+    for raw in (markdown or "").replace("\r", "").split("\n"):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            if line.lower().lstrip("# ").startswith(("install", "インストール")):
+                break
+            continue
+        line = re.sub(r"\*\*|__|`", "", line)
+        line = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", line)       # [text](link) -> text
+        out.append("• " + line[2:] if line.startswith(("- ", "* ")) else line)
+        if len(out) >= lines:
+            break
+    return "\n".join(out)
 
 
 def user_fonts_dir() -> Path:

@@ -57,7 +57,7 @@ def normal_dll_search(frozen: bool = FROZEN):
             k32.SetDllDirectoryW(buf.value if had else None)
 
 
-def popen(cmd: list[str], cwd: Optional[str] = None) -> subprocess.Popen:
+def popen(cmd: list[str], cwd: Optional[str] = None, creationflags: int = 0) -> subprocess.Popen:
     """subprocess.Popen for a program outside Ikemen Reader."""
     with normal_dll_search():
-        return subprocess.Popen(cmd, cwd=cwd, env=environment())
+        return subprocess.Popen(cmd, cwd=cwd, env=environment(), creationflags=creationflags)

@@ -62,6 +62,8 @@ def main() -> None:
         "--workpath", str(HERE / "build"),
         "--specpath", str(HERE / "build"),
     ])
+    # where new versions are downloaded and unpacked before they're swapped in (see updater.py)
+    (HERE / "dist" / "Ikemen Reader" / "update").mkdir(exist_ok=True)
     print(f"\nBuilt Ikemen Reader {v}: {HERE / 'dist' / 'Ikemen Reader' / 'Ikemen Reader.exe'}")
 
 
