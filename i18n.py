@@ -31,7 +31,6 @@ S: dict[str, tuple[str, str]] = {
     "sort.custom":              ("My Arrangement", "自分の並び"),
     "sort.follow":              ("Same as Library", "ライブラリと同じ"),
     "place.first":              ("Folders First", "フォルダーを先に"),
-    "place.mixed":              ("Folders Mixed", "フォルダーを混在"),
     "place.last":               ("Folders Last", "フォルダーを後に"),
     "status.now_custom":        ("Now showing My Arrangement: your own order. Drag covers between others to arrange them.",
                                  "「自分の並び」に切り替えました。カバーを他のカバーの間にドラッグすると並べ替えられます。"),

@@ -132,7 +132,7 @@ class LocalSettings:
     show_stats: bool = True           # playtime / last played on the covers and the bottom bar
     show_bookmarks: bool = True       # reading-status bookmarks on the covers
     auto_update: bool = False         # install new versions by itself (off: asks when one is available)
-    folder_place: str = "mixed"       # one of FOLDER_PLACES (not used while sorting by Custom)
+    folder_place: str = "mixed"       # (no longer used: Folders First / Last are now one-off moves)
 
 
 def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSettings]:

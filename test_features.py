@@ -1651,23 +1651,22 @@ class SortingAndCustomOrder(unittest.TestCase):
                 import app
                 shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
                 f = app.FOLDER_PREFIX + fid
-                self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])     # mixed: folder by its latest game
-                w.choose_sort("place:first")
+                self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])     # folder among games, by its latest game
+                self.assertEqual([w.sort.itemData(i) for i in range(w.sort.count()) if w.sort.itemData(i)],
+                                 ["recent", "hours", "title", "place:first", "place:last", "custom"])
+                w.choose_sort("place:first")                                       # a move: My Arrangement
                 self.assertEqual(shown(), [f, ids["A"], ids["B"], ids["C"]])
-                self.assertEqual(w.sort.currentData(), "recent")                   # the sort itself stays
-                w.choose_sort("place:last")
-                self.assertEqual(shown()[-1], f)
-                # drag C between A and B: My Arrangement, starting from what was shown
-                w._dragging = ids["C"]
+                self.assertEqual((w.settings.sort, w.sort.currentData()), ("custom", "custom"))
+                self.assertEqual(lib.library_order(), shown())                    # saved in the cloud folder
+                w.choose_sort("place:last")                                        # also works in My Arrangement
+                self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])
+                w._dragging = ids["C"]                                             # drag C between A and B
                 w._move_to(ids["C"], 1)
                 w._dragging = None
-                self.assertEqual(w.settings.sort, "custom")
                 self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
-                self.assertEqual(lib.library_order(), shown())                    # stored in the cloud folder
-                model = w.sort.model()
-                self.assertFalse(model.item(w.sort.findData("place:first")).isEnabled())   # you place folders yourself
-                w.choose_sort("hours")                                             # peek at another sort...
-                w.choose_sort("custom")                                            # ...and your arrangement is back
+                w.choose_sort("title")                                             # swap off it...
+                self.assertEqual(w.sort.currentData(), "title")
+                w.choose_sort("custom")                                            # ...and back: where you left things
                 self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
                 new = lib.add_game("New", "PC")
                 w.refresh()
@@ -1739,11 +1738,8 @@ class DragAndDropFeel(unittest.TestCase):
                     loop = QEventLoop()
                     QTimer.singleShot(ms, loop.quit)
                     loop.exec()
-                w.choose_sort("place:first")
                 f = app.FOLDER_PREFIX + fid
-                shown = [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
-                self.assertEqual(shown[0], f)
-                w._move_to(ids["C"], 1)                    # (folder first on screen: it stays first)
+                w._move_to(f, 0)                           # dragged to the front: My Arrangement from what was shown
                 self.assertEqual(w.settings.sort, "custom")
                 self.assertEqual(lib.library_order()[0], f)
                 # a real drop: lift, move between two covers, let go
@@ -1762,7 +1758,6 @@ class DragAndDropFeel(unittest.TestCase):
             finally:
                 w.close()
 
-
 class SortDropDownClicks(unittest.TestCase):
     """Picking options one after another by clicking (Qt's activated signal) always applies each pick, and
     the drop-downs' lists are layered windows (no white first frame) that slide open by themselves."""
@@ -1775,48 +1770,57 @@ class SortDropDownClicks(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
             w, lib, ids, fid = t._window(tmp, ["A", "B"], ["F1"])
             try:
+                f = app.FOLDER_PREFIX + fid
+                shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+
                 def click(data):
                     w.sort.activated.emit(w.sort.findData(data))
                     for _ in range(3):
                         QApplication.processEvents()
-                for place in ("first", "last", "mixed", "first"):
-                    click("place:" + place)
-                    self.assertEqual(w.settings.folder_place, place)
-                    self.assertEqual(w.sort.currentData(), "recent")     # the shown sort stays
-                click("title")
-                click("place:last")
-                self.assertEqual((w.settings.sort, w.settings.folder_place), ("title", "last"))
+                for pick, first in (("place:first", True), ("place:last", False), ("place:first", True)):
+                    click(pick)
+                    self.assertEqual(shown()[0] == f, first)
+                    self.assertEqual(w.sort.currentData(), "custom")
+                click("hours")
+                self.assertEqual(w.sort.currentData(), "hours")
+                click("custom")
+                self.assertEqual(shown()[0], f)                           # back to where things were moved
                 self.assertTrue(w.sort.view().parentWidget().testAttribute(QtNS.WA_TranslucentBackground))
                 self.assertFalse(QApplication.isEffectEnabled(QtNS.UI_AnimateCombo))
             finally:
                 w.close()
-
 
 class SortDropDownRealClicks(unittest.TestCase):
     """A real mouse press + release on a choice in the open list picks that choice (the tick moves on press,
     without moving the highlight Qt uses on release)."""
 
     def test_press_and_release(self):
-        from PySide6.QtWidgets import QApplication
         from PySide6.QtCore import QEventLoop, QTimer
         from PySide6.QtTest import QTest
         from PySide6.QtCore import Qt as QtNS
+        import app
         t = SortingAndCustomOrder()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             w, lib, ids, fid = t._window(tmp, ["A", "B"], ["F1"])
             try:
+                f = app.FOLDER_PREFIX + fid
+
                 def wait(ms):
                     loop = QEventLoop()
                     QTimer.singleShot(ms, loop.quit)
                     loop.exec()
-                for place in ("first", "last", "first"):
+                for pick, first in (("place:first", True), ("place:last", False), ("title", None)):
                     w.sort.showPopup()
                     wait(250)
                     view = w.sort.view()
-                    rect = view.visualRect(w.sort.model().index(w.sort.findData("place:" + place), 0))
+                    rect = view.visualRect(w.sort.model().index(w.sort.findData(pick), 0))
                     QTest.mouseClick(view.viewport(), QtNS.LeftButton, QtNS.NoModifier, rect.center())
                     wait(250)
-                    self.assertEqual(w.settings.folder_place, place)
+                    if first is not None:
+                        self.assertEqual(w.grid.item(0).data(app.GAME_ID_ROLE) == f, first)
+                    else:
+                        self.assertEqual(w.settings.sort, "title")
                     self.assertFalse(view.isVisible())
             finally:
                 w.close()
+

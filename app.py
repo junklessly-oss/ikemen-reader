@@ -1057,37 +1057,6 @@ def in_order(items: list, key, order: list[str]) -> list:
     return known + [it for it in items if key(it) not in pos]
 
 
-_ticks: dict = {}
-
-
-def tick_icon() -> QIcon:
-    """A small tick in the text colour (the folder choice in use, in the sort drop-down)."""
-    key = ("tick", COLORS["text"])
-    if key not in _ticks:
-        pm = QPixmap(32, 32)
-        pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(QColor(COLORS["text"]), 3.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        path = QPainterPath()
-        path.moveTo(7, 17)
-        path.lineTo(13, 23)
-        path.lineTo(25, 9)
-        p.drawPath(path)
-        p.end()
-        _ticks[key] = QIcon(pm)
-    return _ticks[key]
-
-
-def blank_icon() -> QIcon:
-    """The same size as tick_icon, empty (keeps the other choices lined up)."""
-    if "blank" not in _ticks:
-        pm = QPixmap(32, 32)
-        pm.fill(Qt.transparent)
-        _ticks["blank"] = QIcon(pm)
-    return _ticks["blank"]
-
-
 def ease(t: float) -> float:
     t = max(0.0, min(1.0, t))
     return t * t * (3 - 2 * t)          # smoothstep: gentle start and finish
@@ -4387,7 +4356,6 @@ class MainWindow(TaskOwner, QMainWindow):
         tl.addWidget(self.search)
         self.sort = ThemedCombo()
         self.sort.activated.connect(self._sort_picked)
-        self.sort.view().pressed.connect(self._sort_pressed)
         tl.addWidget(self.sort)
         self.filter = ThemedCombo()
         self.filter.currentIndexChanged.connect(self._filter_changed)
@@ -4857,12 +4825,8 @@ class MainWindow(TaskOwner, QMainWindow):
         top += [("folder", fid) for fid in self.folder_games]
         if sort == "custom":                             # My Arrangement: exactly your order
             top = in_order(top, self._entry_id, self.library_order)
-        else:
+        else:                                            # folders among the games, by the same sort
             top.sort(key=lambda e: self._sort_key(e))
-            if self.settings.folder_place != "mixed":   # folders first / last (each side keeps the sort)
-                folders = [e for e in top if e[0] == "folder"]
-                loose = [e for e in top if e[0] == "game"]
-                top = folders + loose if self.settings.folder_place == "first" else loose + folders
         self._top_ids = [self._entry_id(e) for e in top]   # the main page as arranged now (Mixed starts from it)
         if self.current_folder:
             entries = [("game", g) for g in self.folder_games[self.current_folder] if keep(g)]
@@ -4921,12 +4885,14 @@ class MainWindow(TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ the sort drop-down
     def _sort_choices(self, inside: bool) -> list:
-        """(label, data) for the sort drop-down: the library's four sorts and, under a divider, where folders
-        go (a tick by the one in use); inside a folder: Same as Library, then the four sorts."""
-        sorts = [(tr(f"sort.{s}"), s) for s in SORTS]
+        """(label, data) for the sort drop-down: the three automatic sorts, then under a divider Folders First,
+        Folders Last (actions: they move the folders) and My Arrangement. Inside a folder: Same as Library, the
+        three sorts, then My Arrangement."""
+        sorts = [(tr(f"sort.{s}"), s) for s in ("recent", "hours", "title")]
+        mine = (tr("sort.custom"), "custom")
         if inside:
-            return [(tr("sort.follow"), "follow")] + sorts
-        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("mixed", "first", "last")]
+            return [(tr("sort.follow"), "follow")] + sorts + [None, mine]
+        return sorts + [None, (tr("place.first"), "place:first"), (tr("place.last"), "place:last"), mine]
 
     def _fill_sort(self) -> None:
         c = self.sort
@@ -4940,28 +4906,16 @@ class MainWindow(TaskOwner, QMainWindow):
                 continue
             label, data = choice
             c.addItem(label, data)
-            if data.startswith("place:"):
-                i = c.count() - 1
-                c.setItemIcon(i, tick_icon() if data == "place:" + self.settings.folder_place else blank_icon())
         c.blockSignals(False)
         self._mark_sort()
 
-    def _mark_sort(self, place: Optional[str] = None, select: bool = True) -> None:
-        """Move the tick and the selection to the current choices without rebuilding the list (rebuilding it
-        on every pick made it slow to reopen). place: the folder choice to tick (default: the setting)."""
+    def _mark_sort(self) -> None:
+        """Show the sort in use (without rebuilding the list: rebuilding it on every pick made it slow to reopen)."""
         c = self.sort
-        place = place or self.settings.folder_place
         inside = self.current_folder is not None
+        current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
         c.blockSignals(True)
-        arranged = self.settings.sort == "custom" and not inside
-        for i in range(c.count()):
-            d = c.itemData(i)
-            if d and d.startswith("place:"):
-                c.setItemIcon(i, tick_icon() if d == "place:" + place else blank_icon())
-                c.model().item(i).setEnabled(not arranged)  # in My Arrangement you place folders by dragging
-        if select:                # (not while the list is open: Qt picks the highlighted item on release)
-            current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
-            c.setCurrentIndex(max(0, c.findData(current)))
+        c.setCurrentIndex(max(0, c.findData(current)))
         c.blockSignals(False)
 
     def _sort_key(self, entry) -> tuple:
@@ -5179,14 +5133,6 @@ class MainWindow(TaskOwner, QMainWindow):
             return              # locked for a moment: it's saved with the next change anyway
         self.share_settings()
 
-    def _sort_pressed(self, index) -> None:
-        """An item pressed in the open list: tick it at once, so the list is right while Qt blinks it and
-        closes (only then does Qt report the pick; see _sort_picked)."""
-        d = index.data(Qt.UserRole)
-        if isinstance(d, str) and d.startswith("place:"):
-            self._mark_sort(d[len("place:"):], select=False)
-            self.sort.view().viewport().repaint()
-
     def _sort_picked(self, index: int) -> None:
         """A choice in the sort drop-down. Acted on just after the click: rebuilding the drop-down's list
         while Qt is still handling the click left it unsure what was selected (the next pick was ignored)."""
@@ -5199,8 +5145,20 @@ class MainWindow(TaskOwner, QMainWindow):
         if not d:
             return
         before = self._positions()                   # every change glides: covers slide to their new places
-        if d.startswith("place:"):                   # Folders Mixed / First / Last (the automatic sorts)
-            self.settings.folder_place = d[len("place:"):]
+        if d.startswith("place:"):
+            # Folders First / Folders Last: move every folder to the front / back of what's on screen, the rest in
+            # the order it's in. Moving things = My Arrangement (it replaces the one saved before)
+            ids = list(getattr(self, "_top_ids", []))
+            folders = [x for x in ids if is_folder(x)]
+            games = [x for x in ids if not is_folder(x)]
+            order = folders + games if d == "place:first" else games + folders
+            self.library.set_library_order(order)
+            self.library_order = order
+            switched = self.settings.sort != "custom"
+            self.settings.sort = "custom"
+            self._own_change()
+            if switched:
+                self.statusBar().showMessage(tr("status.now_custom"), 8000)
         elif self.current_folder:                    # this folder's own sort ("follow" = the library's)
             self.library.set_folder_sort(self.current_folder, "" if d == "follow" else d)
             self._read_orders()
