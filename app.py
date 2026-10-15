@@ -4895,7 +4895,8 @@ class MainWindow(TaskOwner, QMainWindow):
         mine = (tr("sort.custom"), "custom")
         if inside:
             return sorts + [None, (tr("sort.follow"), "follow"), mine]
-        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("mixed", "first", "last")] + [mine]
+        # three groups, each under a thin line: the sorts | where folders go | your own arrangement
+        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("mixed", "first", "last")] + [None, mine]
 
     def _fill_sort(self) -> None:
         c = self.sort
@@ -5703,8 +5704,8 @@ class MainWindow(TaskOwner, QMainWindow):
             self.library.set_folder_order(fid, ids)
             meta = self.folder_meta.setdefault(fid, {"sort": "", "order": []})
             meta["order"] = list(ids)
-            if self.folder_sort(fid) != "custom":
-                self.library.set_folder_sort(fid, "custom")
+            if meta.get("sort") != "custom":             # its own My Arrangement (even if "Same as Library"
+                self.library.set_folder_sort(fid, "custom")   # was already showing the library's)
                 meta["sort"] = "custom"
                 switched = True
         else:

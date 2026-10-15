@@ -1859,3 +1859,26 @@ class SortDropDownRealClicks(unittest.TestCase):
             finally:
                 w.close()
 
+
+
+
+class FolderArrangement(unittest.TestCase):
+    """Inside a folder: untouched = Same as Library; moving a game gives the folder its own My Arrangement,
+    even when the library itself is on My Arrangement."""
+
+    def test_move_inside_a_folder(self):
+        t = SortingAndCustomOrder()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            w, lib, ids, fid = t._window(tmp, ["A"], ["X", "Y", "Z"])
+            try:
+                w._dragging = ids["A"]
+                w._move_to(ids["A"], 1)                       # the library: My Arrangement
+                w._dragging = None
+                w.open_folder(fid)
+                self.assertEqual(w.sort.currentData(), "follow")      # untouched folder: Same as Library
+                w._dragging = ids["Z"]
+                w._move_to(ids["Z"], 0)
+                w._dragging = None
+                self.assertEqual((lib.folder_sort(fid), w.sort.currentData()), ("custom", "custom"))
+            finally:
+                w.close()
