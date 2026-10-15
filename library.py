@@ -35,7 +35,8 @@ OLD_APP_DIR_NAME = "VNLauncher"
 SLOTS = ("PC", "Laptop")                 # Device 1, Device 2
 SLOT_NUMBER = {"PC": 1, "Laptop": 2}
 STATUSES = ("", "reading", "finished", "dropped", "plan")   # also the order shown in every menu
-SORTS = ("recent", "hours", "title")
+SORTS = ("recent", "hours", "title", "custom")       # custom = the owner's own order (dragged into place)
+FOLDER_PLACES = ("mixed", "first", "last")           # where folders go among the games on the main page
 
 
 def other_slot(slot: str) -> str:
@@ -131,6 +132,7 @@ class LocalSettings:
     show_stats: bool = True           # playtime / last played on the covers and the bottom bar
     show_bookmarks: bool = True       # reading-status bookmarks on the covers
     auto_update: bool = False         # install new versions by itself (off: asks when one is available)
+    folder_place: str = "mixed"       # one of FOLDER_PLACES (not used while sorting by Custom)
 
 
 def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSettings]:
@@ -148,6 +150,8 @@ def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSetting
         s.machine_name = SLOTS[0]
     if s.language not in ("en", "ja"):
         s.language = "en"
+    if s.folder_place not in FOLDER_PLACES:
+        s.folder_place = "mixed"
     if s.sort not in SORTS:
         s.sort = "recent"
     if s.status_filter != "all" and s.status_filter not in STATUSES[1:]:
@@ -259,6 +263,7 @@ class Library:
         self.art_dir = self.root / "artwork"
         self.devices_file = self.root / "devices.json"
         self.folders_file = self.root / "folders.json"
+        self.order_file = self.root / "order.json"          # the library's own order (Custom)
 
     def _file(self, game_id: str) -> Path:
         return self.games_dir / f"{safe_game_id(game_id)}.json"
@@ -393,20 +398,74 @@ class Library:
             self._drop_folder_if_empty(game.folder)
 
     # -- folders (like app folders on a phone: a game is in at most one; empty folders disappear)
-    def list_folders(self) -> dict[str, str]:
-        """folder id -> name."""
+    def _folders_raw(self) -> dict[str, dict]:
+        """folder id -> {"name", "sort" ("" = same as the library), "order" (game ids, for Custom)}."""
         try:
             data = json.loads(self.folders_file.read_text("utf-8"))
         except (OSError, ValueError):
             return {}
         if not isinstance(data, dict):
             return {}
-        return {fid: (v.get("name") if isinstance(v.get("name"), str) else "")
-                for fid, v in data.items() if isinstance(v, dict)}
+        out = {}
+        for fid, v in data.items():
+            if not isinstance(v, dict):
+                continue
+            order = v.get("order")
+            out[fid] = {"name": v.get("name") if isinstance(v.get("name"), str) else "",
+                        "sort": v.get("sort") if v.get("sort") in SORTS else "",
+                        "order": [x for x in order if isinstance(x, str)] if isinstance(order, list) else []}
+        return out
+
+    def list_folders(self) -> dict[str, str]:
+        """folder id -> name."""
+        return {fid: v["name"] for fid, v in self._folders_raw().items()}
 
     def _write_folders(self, folders: dict[str, str]) -> None:
-        _atomic_write(self.folders_file, json.dumps({fid: {"name": n} for fid, n in folders.items()},
-                                                    indent=2, ensure_ascii=False))
+        raw = self._folders_raw()
+        data = {}
+        for fid, name in folders.items():
+            extra = raw.get(fid, {})
+            entry = {"name": name}
+            if extra.get("sort"):
+                entry["sort"] = extra["sort"]
+            if extra.get("order"):
+                entry["order"] = extra["order"]
+            data[fid] = entry
+        _atomic_write(self.folders_file, json.dumps(data, indent=2, ensure_ascii=False))
+
+    def _write_folder_field(self, fid: str, key: str, value) -> None:
+        raw = self._folders_raw()
+        if fid not in raw:
+            raise KeyError(fid)
+        raw[fid][key] = value
+        data = {f: {k: v for k, v in e.items() if k == "name" or v} for f, e in raw.items()}
+        _atomic_write(self.folders_file, json.dumps(data, indent=2, ensure_ascii=False))
+
+    def folder_sort(self, fid: str) -> str:
+        """The folder's own sort, or "" when it follows the library's."""
+        return self._folders_raw().get(fid, {}).get("sort", "")
+
+    def set_folder_sort(self, fid: str, sort: str) -> None:
+        self._write_folder_field(fid, "sort", sort if sort in SORTS else "")
+
+    def folder_order(self, fid: str) -> list[str]:
+        return list(self._folders_raw().get(fid, {}).get("order", []))
+
+    def set_folder_order(self, fid: str, order: list[str]) -> None:
+        self._write_folder_field(fid, "order", [x for x in order if isinstance(x, str)])
+
+    # -- the library's own order (sort: Custom): game ids and "folder:<id>" for folders
+    def library_order(self) -> list[str]:
+        try:
+            data = json.loads(self.order_file.read_text("utf-8"))
+        except (OSError, ValueError):
+            return []
+        order = data.get("library") if isinstance(data, dict) else None
+        return [x for x in order if isinstance(x, str)] if isinstance(order, list) else []
+
+    def set_library_order(self, order: list[str]) -> None:
+        _atomic_write(self.order_file, json.dumps({"library": [x for x in order if isinstance(x, str)]},
+                                                  indent=1, ensure_ascii=False))
 
     def create_folder(self, name: str) -> str:
         import uuid
@@ -439,6 +498,10 @@ class Library:
         game = self.update(game_id, folder=fid)
         if old and old != fid:
             self._drop_folder_if_empty(old)
+            if old in self._folders_raw() and game_id in self.folder_order(old):
+                self.set_folder_order(old, [x for x in self.folder_order(old) if x != game_id])
+        if fid and game_id in self.library_order():
+            self.set_library_order([x for x in self.library_order() if x != game_id])
         return game
 
     def _drop_folder_if_empty(self, fid: str) -> None:
@@ -517,12 +580,14 @@ class Library:
             except OSError:
                 return ()
             return tuple(sorted(out))
-        try:
-            st = self.folders_file.stat()
-            folders = (st.st_size, st.st_mtime_ns)
-        except OSError:
-            folders = None
-        return (listing(self.games_dir), listing(self.art_dir), listing(self.root / "saves", deep=True), folders)
+        def stamp(f: Path):
+            try:
+                st = f.stat()
+                return (st.st_size, st.st_mtime_ns)
+            except OSError:
+                return None
+        return (listing(self.games_dir), listing(self.art_dir), listing(self.root / "saves", deep=True),
+                stamp(self.folders_file), stamp(self.order_file))
 
     # -- device slots (safeguard against both computers picking the same number)
     def _devices(self) -> dict:

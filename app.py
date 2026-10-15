@@ -47,7 +47,7 @@ from i18n import tr
 import detect
 import launcher
 from launcher import PlayResult, finish_first_play, play, warm_up
-from library import (SLOT_NUMBER, SLOTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
+from library import (FOLDER_PLACES, SLOT_NUMBER, SLOTS, SORTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
                      default_app_dir, load_local_settings, other_slot, save_local_settings,
                      sort_games, this_computer)
 from sync_engine import Action, ConflictInfo, SyncEngine, save_folder_problem
@@ -350,11 +350,27 @@ class LibraryGrid(QListWidget):
             backdrop.paint_into(p, ev.rect(), origin)
             p.end()
         super().paintEvent(ev)
+        if self.marker is not None and not self.bare:
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(COLORS["select"]))
+            p.drawRoundedRect(self.marker, 2, 2)
+            p.end()
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
         if hasattr(self.w, "grid"):
             self.w._fit_grid()
+
+    marker: Optional[QRectF] = None   # where a dragged cover would go (a thin line between two covers)
+
+    def set_marker(self, rect: Optional[QRectF]) -> None:
+        if rect != self.marker:
+            for r in (self.marker, rect):
+                if r is not None:
+                    self.viewport().update(r.adjusted(-3, -3, 3, 3).toAlignedRect())
+            self.marker = rect
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
@@ -1017,6 +1033,45 @@ def make_shadow(w: int, h: int, blur: int = 14) -> QPixmap:
     big = big.scaled(big.width() // 2, big.height() // 2, Qt.IgnoreAspectRatio, Qt.SmoothTransformation) \
              .scaled(w + pad * 2, h + pad * 2, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
     return QPixmap.fromImage(big)
+
+
+def in_order(items: list, key, order: list[str]) -> list:
+    """items in the owner's own order: the ones it lists in its order, then any it doesn't know yet (new
+    games, games just moved here) at the end, in the order they came."""
+    pos = {k: i for i, k in enumerate(order)}
+    known = sorted((it for it in items if key(it) in pos), key=lambda it: pos[key(it)])
+    return known + [it for it in items if key(it) not in pos]
+
+
+_ticks: dict = {}
+
+
+def tick_icon() -> QIcon:
+    """A small tick in the text colour (the folder choice in use, in the sort drop-down)."""
+    key = ("tick", COLORS["text"])
+    if key not in _ticks:
+        pm = QPixmap(32, 32)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(QColor(COLORS["text"]), 3.2, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        path = QPainterPath()
+        path.moveTo(7, 17)
+        path.lineTo(13, 23)
+        path.lineTo(25, 9)
+        p.drawPath(path)
+        p.end()
+        _ticks[key] = QIcon(pm)
+    return _ticks[key]
+
+
+def blank_icon() -> QIcon:
+    """The same size as tick_icon, empty (keeps the other choices lined up)."""
+    if "blank" not in _ticks:
+        pm = QPixmap(32, 32)
+        pm.fill(Qt.transparent)
+        _ticks["blank"] = QIcon(pm)
+    return _ticks["blank"]
 
 
 def ease(t: float) -> float:
@@ -4132,7 +4187,10 @@ class MainWindow(TaskOwner, QMainWindow):
         self.play_phase = "done"
         self.current_folder: Optional[str] = None     # folder id being viewed, None = the library
         self.folder_names: dict[str, str] = {}
+        self.folder_meta: dict[str, dict] = {}         # folder id -> {"sort", "order"} (each folder's own sort)
+        self.library_order: list[str] = []            # the owner's own order (sort: Custom)
         self.folder_games: dict[str, list[Game]] = {}
+        self._sort_mode: Optional[str] = "?"          # which choices the sort drop-down shows (a folder or the library)
         self._press: Optional[tuple] = None           # (position, game id) for starting a drag
         self._ghost: Optional[DragGhost] = None       # the cover following the mouse while a game is dragged
         self._dragging: Optional[str] = None
@@ -4375,19 +4433,21 @@ class MainWindow(TaskOwner, QMainWindow):
         self.bookmark_btn.setToolTip(tr("bar.bookmarks_hide" if self.settings.show_bookmarks else "bar.bookmarks_show"))
         self.stats_btn.setText(tr("top.hide_stats" if self.settings.show_stats else "top.show_stats"))
         self.stats_btn.setToolTip(tr("top.stats_tip"))
+        self._fill_sort()
         for combo, items, current in (
-                (self.sort, [(tr(f"sort.{s}"), s) for s in ("recent", "hours", "title")], self.settings.sort),
+                (self.sort, None, None),
                 (self.filter, [(tr("filter.all"), "all")] + [(tr(f"status.{s}"), s) for s in STATUSES[1:]],
                  self.settings.status_filter),
                 (self.d_status, [(tr(f"status.{s or 'none'}"), s) for s in STATUSES], None)):
             combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)   # resize when the language changes
-            combo.blockSignals(True)
-            combo.clear()
-            for label, data in items:
-                combo.addItem(label, data)
-            if current is not None:
-                combo.setCurrentIndex(max(0, combo.findData(current)))
-            combo.blockSignals(False)
+            if items is not None:
+                combo.blockSignals(True)
+                combo.clear()
+                for label, data in items:
+                    combo.addItem(label, data)
+                if current is not None:
+                    combo.setCurrentIndex(max(0, combo.findData(current)))
+                combo.blockSignals(False)
             combo.ensurePolished()                          # measure with the real font and padding
             if combo in (self.sort, self.filter):
                 # the top bar's two drop-downs: just as wide as their longest choice needs (leaving room for the
@@ -4398,7 +4458,10 @@ class MainWindow(TaskOwner, QMainWindow):
                 field = combo.style().subControlRect(QStyle.CC_ComboBox, opt, QStyle.SC_ComboBoxEditField, combo)
                 chrome = combo.width() - field.width()          # padding, border and the arrow's space
                 fm = combo.fontMetrics()
-                longest = max(fm.horizontalAdvance(combo.itemText(i)) for i in range(combo.count()))
+                texts = [combo.itemText(i) for i in range(combo.count())]
+                if combo is self.sort:                          # wide enough in and out of folders
+                    texts = [c[0] for c in self._sort_choices(True) + self._sort_choices(False) if c]
+                longest = max(fm.horizontalAdvance(t) for t in texts)
                 combo.setFixedWidth(longest + chrome + 6)       # 6 px to spare
             else:
                 # Qt keeps an old minimum otherwise; +12 because its estimate is a few px short with our arrow
@@ -4464,6 +4527,7 @@ class MainWindow(TaskOwner, QMainWindow):
         games = self.library.list_games() if Path(self.settings.cloud_root).is_dir() else []
         self.games = {g.game_id: g for g in games}
         self.folder_names = self.library.list_folders() if games else {}
+        self._read_orders()
         self._rebuild()
         if not Path(self.settings.cloud_root).is_dir():
             self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root))
@@ -4593,9 +4657,13 @@ class MainWindow(TaskOwner, QMainWindow):
         sort = self.settings.sort
 
         self.folder_games = {}
-        for g in sort_games(games, sort):
+        for g in sort_games(games, "recent"):
             if g.folder:
                 self.folder_games.setdefault(g.folder, []).append(g)
+        for fid, gs in self.folder_games.items():       # each folder in its own sort (or the library's)
+            fs = self.folder_sort(fid)
+            self.folder_games[fid] = in_order(gs, lambda g: g.game_id, self.folder_meta.get(fid, {}).get("order", [])) \
+                if fs == "custom" else sort_games(gs, fs)
         if self.current_folder and self.current_folder not in self.folder_games:
             self.current_folder = None                    # it was emptied or removed
         flat = bool(q) or status != "all"
@@ -4603,14 +4671,28 @@ class MainWindow(TaskOwner, QMainWindow):
         def keep(g: Game) -> bool:
             return (not q or q in g.title.lower()) and (status == "all" or g.status == status)
 
+        top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
+        top += [("folder", fid) for fid in self.folder_games]
+        if sort == "custom":
+            top = in_order(top, self._entry_id, self.library_order)
+        else:
+            top.sort(key=lambda e: self._sort_key(e))
+            if self.settings.folder_place != "mixed":   # folders first / last (each side keeps the sort)
+                folders = [e for e in top if e[0] == "folder"]
+                loose = [e for e in top if e[0] == "game"]
+                top = folders + loose if self.settings.folder_place == "first" else loose + folders
         if self.current_folder:
             entries = [("game", g) for g in self.folder_games[self.current_folder] if keep(g)]
         elif flat:
-            entries = [("game", g) for g in sort_games(games, sort) if keep(g)]
+            if sort == "custom":                         # the library's order, each folder's games in its place
+                expanded = []
+                for kind, obj in top:
+                    expanded += [g for g in self.folder_games[obj]] if kind == "folder" else [obj]
+                entries = [("game", g) for g in expanded if keep(g)]
+            else:
+                entries = [("game", g) for g in sort_games(games, sort) if keep(g)]
         else:
-            entries = [("game", g) for g in games if not g.folder]
-            entries += [("folder", fid) for fid in self.folder_games]
-            entries.sort(key=lambda e: self._sort_key(e))
+            entries = top
 
         scroll = self.grid.verticalScrollBar().value()       # keep your place (a refresh mustn't jump to the top)
         self.grid.clear()
@@ -4633,7 +4715,56 @@ class MainWindow(TaskOwner, QMainWindow):
         self.folderbar.setVisible(inside)
         if inside:
             self.folder_title.setText(self.folder_name(self.current_folder))
+        if self._sort_mode != self.current_folder:
+            self._fill_sort()                           # the library's choices, or this folder's
         self._update_details()
+
+    @staticmethod
+    def _entry_id(entry) -> str:
+        kind, obj = entry
+        return obj.game_id if kind == "game" else FOLDER_PREFIX + obj
+
+    def _read_orders(self) -> None:
+        try:
+            self.folder_meta = {fid: {"sort": v["sort"], "order": v["order"]}
+                                for fid, v in self.library._folders_raw().items()}
+            self.library_order = self.library.library_order()
+        except OSError:
+            pass
+
+    def folder_sort(self, fid: str) -> str:
+        """The sort a folder's games are shown in: its own, or the library's when it has none."""
+        return self.folder_meta.get(fid, {}).get("sort") or self.settings.sort
+
+    # ------------------------------------------------------------------ the sort drop-down
+    def _sort_choices(self, inside: bool) -> list:
+        """(label, data) for the sort drop-down: the library's four sorts and, under a divider, where folders
+        go (a tick by the one in use); inside a folder: Same as Library, then the four sorts."""
+        sorts = [(tr(f"sort.{s}"), s) for s in SORTS]
+        if inside:
+            return [(tr("sort.follow"), "follow")] + sorts
+        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("first", "mixed", "last")]
+
+    def _fill_sort(self) -> None:
+        c = self.sort
+        inside = self.current_folder is not None
+        self._sort_mode = self.current_folder
+        c.blockSignals(True)
+        c.clear()
+        for choice in self._sort_choices(inside):
+            if choice is None:
+                c.insertSeparator(c.count())
+                continue
+            label, data = choice
+            c.addItem(label, data)
+            if data.startswith("place:"):
+                i = c.count() - 1
+                c.setItemIcon(i, tick_icon() if data == "place:" + self.settings.folder_place else blank_icon())
+                if self.settings.sort == "custom":       # in Custom, you decide where folders sit
+                    c.model().item(i).setEnabled(False)
+        current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
+        c.setCurrentIndex(max(0, c.findData(current)))
+        c.blockSignals(False)
 
     def _sort_key(self, entry) -> tuple:
         from library import title_sort_key
@@ -4850,9 +4981,27 @@ class MainWindow(TaskOwner, QMainWindow):
             return              # locked for a moment: it's saved with the next change anyway
         self.share_settings()
 
+    @guarded
     def _sort_changed(self, _i: int) -> None:
-        self.settings.sort = self.sort.currentData() or "recent"
+        d = self.sort.currentData()
+        if not d:
+            return
+        if d.startswith("place:"):                   # Folders First / Mixed / Folders Last
+            self.settings.folder_place = d[len("place:"):]
+            self._save_view_choice()
+            self._fill_sort()                        # (the sort itself stays as it was)
+            self._rebuild()
+            return
+        if self.current_folder:                      # this folder's own sort ("follow" = the library's)
+            fid = self.current_folder
+            self.library.set_folder_sort(fid, "" if d == "follow" else d)
+            self._read_orders()
+            self._own_change()
+            self._rebuild()
+            return
+        self.settings.sort = d
         self._save_view_choice()
+        self._fill_sort()
         self.refresh()
 
     def _filter_changed(self, _i: int) -> None:
@@ -5004,7 +5153,7 @@ class MainWindow(TaskOwner, QMainWindow):
             if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
                 it = self.grid.itemAt(ev.position().toPoint())
                 iid = it.data(GAME_ID_ROLE) if it else None
-                self._press = (ev.position().toPoint(), iid) if iid and not is_folder(iid) else None
+                self._press = (ev.position().toPoint(), iid) if iid else None   # (folders: to rearrange)
                 if it is None:                      # clicked the background, not a cover
                     self.clear_selection()
                     return True
@@ -5071,6 +5220,9 @@ class MainWindow(TaskOwner, QMainWindow):
             g.doItemsLayout()                   # (new margins alone don't make the view lay out again)
 
     def _start_game_drag(self, gid: str) -> None:
+        if is_folder(gid):
+            self._start_folder_drag(gid)
+            return
         g = self.games.get(gid)
         if g is None:
             return
@@ -5095,6 +5247,9 @@ class MainWindow(TaskOwner, QMainWindow):
             grad.setColorAt(1, QColor(COLORS["placeholder_bottom"]))
             p.fillRect(QRectF(0, 0, w, h), grad)
         p.end()
+        self._begin_drag(gid, img)
+
+    def _begin_drag(self, gid: str, img: QPixmap) -> None:
         self._dragging = gid
         self._dim_gid = gid
         self._ghost = DragGhost(img)
@@ -5144,6 +5299,32 @@ class MainWindow(TaskOwner, QMainWindow):
         if sb.value() != before:
             self._move_game_drag(gp)                 # what's under the mouse changed
 
+    def _start_folder_drag(self, iid: str) -> None:
+        """A folder picked up (only to rearrange it): its tile, small, follows the mouse."""
+        if self.current_folder or iid[len(FOLDER_PREFIX):] not in self.folder_games:
+            return
+        r = None
+        for i in range(self.grid.count()):
+            if self.grid.item(i).data(GAME_ID_ROLE) == iid:
+                r = CardDelegate.cover_rect(self.grid.visualItemRect(self.grid.item(i)), 0)
+        if r is None:
+            return
+        self.grid.bare = True
+        try:
+            shot = self.grid.viewport().grab(r.toAlignedRect())
+        finally:
+            self.grid.bare = False
+        dpr = self.devicePixelRatioF()
+        w, h = COVER_W // 2, COVER_H // 2
+        img = QPixmap(round(w * dpr), round(h * dpr))
+        img.setDevicePixelRatio(dpr)
+        img.fill(Qt.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.drawPixmap(QRectF(0, 0, w, h), shot, QRectF(shot.rect()))
+        p.end()
+        self._begin_drag(iid, img)
+
     def _check_drag_button(self) -> None:
         if self._ghost is not None and not (QApplication.mouseButtons() & Qt.LeftButton):
             self._end_game_drag(QCursor.pos(), drop=False)
@@ -5152,25 +5333,63 @@ class MainWindow(TaskOwner, QMainWindow):
         """What a dragged game is over: ("trash", None), ("back", None), ("grid", target or None) or (None, None)."""
         def over(w) -> bool:
             return w.isVisible() and w.rect().contains(w.mapFromGlobal(gp))
-        if over(self.trash_btn) and self.worker is None:
+        folder = is_folder(self._dragging)
+        if over(self.trash_btn) and self.worker is None and not folder:
             return "trash", None
-        if self.current_folder and over(self.back_btn):
+        if self.current_folder and over(self.back_btn) and not folder:
             return "back", None
         vp = self.grid.viewport()
         if over(vp):
-            return "grid", self._drop_target(vp.mapFromGlobal(gp))
+            return "grid", self._drop_spot(vp.mapFromGlobal(gp))
         return None, None
+
+    def _drop_spot(self, pos) -> Optional[tuple]:
+        """Where a dragged cover would land at pos: ("onto", item) - the middle of a cover: make a folder /
+        add to it; or ("between", index, marker) - the gap or edge between two covers: move it there.
+        None: nowhere (e.g. right next to where it already is)."""
+        dragged = self._dragging
+        visible = []
+        view = self.grid.viewport().rect()
+        for i in range(self.grid.count()):
+            r = self.grid.visualItemRect(self.grid.item(i))
+            if r.intersects(view):
+                visible.append((i, self.grid.item(i).data(GAME_ID_ROLE), CardDelegate.cover_rect(r, 0)))
+        if not visible:
+            return None
+        # the row under the mouse (or the nearest one), then the cover nearest to it in that row
+        def row_gap(c: QRectF) -> float:
+            return 0 if c.top() - CARD_PAD_TOP <= pos.y() <= c.bottom() + CARD_PAD_BOTTOM else \
+                min(abs(pos.y() - c.top()), abs(pos.y() - c.bottom()))
+        best = min(row_gap(c) for _, _, c in visible)
+        row = [v for v in visible if row_gap(v[2]) == best]
+        i, iid, c = min(row, key=lambda v: abs(pos.x() - v[2].center().x()))
+        inside_cover = c.contains(QPointF(pos)) and c.left() + c.width() * 0.2 <= pos.x() <= c.right() - c.width() * 0.2
+        if inside_cover and iid != dragged and not is_folder(dragged) and not self.current_folder:
+            return ("onto", iid)
+        flat = bool(self.search.text().strip()) or self.settings.status_filter != "all"
+        if flat or (inside_cover and iid == dragged):
+            return None                                  # (searching / filtering: nothing to rearrange)
+        before = pos.x() < c.center().x()
+        index = i if before else i + 1
+        mine = next((k for k in range(self.grid.count()) if self.grid.item(k).data(GAME_ID_ROLE) == dragged), -1)
+        if index in (mine, mine + 1):
+            return None                                  # it would stay where it is
+        x = c.left() - GRID_GAP / 2 if before else c.right() + GRID_GAP / 2
+        return ("between", index, QRectF(x - 2, c.top() + 6, 4, c.height() - 12))
 
     def _move_game_drag(self, gp: QPoint) -> None:
         self._ghost.follow(gp)
-        kind, target = self._drag_hit(gp)
+        kind, spot = self._drag_hit(gp)
         self.trash_btn.set_hot(kind == "trash")
         self._ghost.set_faded(kind == "trash")          # almost see-through over the trash can
-        self._set_hovered(target if kind == "grid" else None)   # the target lifts, so you can see where it'll go
+        onto = spot[1] if kind == "grid" and spot and spot[0] == "onto" else None
+        self._set_hovered(onto)                          # the target lifts, so you can see where it'll go
+        self.grid.set_marker(spot[2] if kind == "grid" and spot and spot[0] == "between" else None)
 
     def _end_game_drag(self, gp: QPoint, drop: bool) -> None:
         gid = self._dragging
-        kind, target = self._drag_hit(gp) if drop else (None, None)
+        kind, spot = self._drag_hit(gp) if drop else (None, None)
+        self.grid.set_marker(None)
         if self._ghost is None:
             return
         self._drag_watch.stop()
@@ -5190,19 +5409,40 @@ class MainWindow(TaskOwner, QMainWindow):
             QTimer.singleShot(0, lambda: self.remove_game(gid))
         elif kind == "back":
             self._drop_game(gid, None, True)
-        elif target is not None:
-            self._drop_game(gid, target, False)
+        elif spot and spot[0] == "onto":
+            self._drop_game(gid, spot[1], False)
+        elif spot and spot[0] == "between":
+            self._move_to(gid, spot[1])
 
-    def _drop_target(self, pos) -> Optional[str]:
-        """What a dragged game would land on at pos: a folder tile, or another game."""
-        it = self.grid.itemAt(pos)
-        iid = it.data(GAME_ID_ROLE) if it else None
-        dragged = getattr(self, "_dragging", None)
-        if not iid or iid == dragged:
-            return None
-        if not is_folder(iid) and self.current_folder:
-            return None                 # inside a folder there's nothing to make
-        return iid
+    @guarded
+    def _move_to(self, iid: str, index: int) -> None:
+        """A cover dropped between two others: that's its place now, in this view's own order. Not sorted by
+        Custom yet? Then it switches to Custom, starting from the order you were looking at."""
+        ids = [self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())]
+        if iid not in ids:
+            return
+        old = ids.index(iid)
+        ids.pop(old)
+        ids.insert(index - 1 if index > old else index, iid)
+        switched = False
+        if self.current_folder:
+            fid = self.current_folder
+            self.library.set_folder_order(fid, ids)
+            if self.folder_sort(fid) != "custom":
+                self.library.set_folder_sort(fid, "custom")
+                switched = True
+        else:
+            self.library.set_library_order(ids)
+            if self.settings.sort != "custom":
+                self.settings.sort = "custom"
+                self._save_view_choice()
+                switched = True
+        self._read_orders()
+        self._fill_sort()
+        self.refresh()
+        self._select_item(iid)
+        if switched:
+            self.statusBar().showMessage(tr("status.now_custom"), 8000)
 
     def _game_drag_event(self, obj, ev) -> bool:
         t = ev.type()
@@ -5217,7 +5457,8 @@ class MainWindow(TaskOwner, QMainWindow):
             ok = bool(self.current_folder)
             target = None
         else:
-            target = self._drop_target(ev.position().toPoint())
+            spot = self._drop_spot(ev.position().toPoint())
+            target = spot[1] if spot and spot[0] == "onto" else None
             ok = target is not None
             self._set_hovered(target)               # the target lifts, so you can see where it'll go
         if t == QEvent.DragEnter:

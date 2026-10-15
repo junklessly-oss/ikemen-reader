@@ -20,7 +20,7 @@ from library import LocalSettings, _atomic_write
 FOLDER = "device_settings"
 SHARED = ("language", "font_en", "font_ja", "pulse", "vndb", "vndb_safe_only", "sort", "status_filter",
           "theme", "custom_colors", "bg_opacity", "bg_zoom", "bg_x", "bg_y", "show_stats",
-          "show_bookmarks")
+          "show_bookmarks", "folder_place")
 
 
 def device_dir(cloud_root: str, slot: str) -> Path:

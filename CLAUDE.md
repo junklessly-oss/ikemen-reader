@@ -292,6 +292,13 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    the sort; folders sorted by the same rule: latest game / total hours / name). Custom order inside folders:
    drag to rearrange (drop marker), synced, new games go last, "Custom" in the sort drop-down inside a folder
    (starts from the order being viewed); mosaic shows the first four.
+   DONE + extended (owner): Custom is also a LIBRARY sort (SORTS gains "custom"); drag between covers anywhere
+   (gap / outer 20% of a cover = move, middle = folder as before; folders draggable to rearrange); doing it in
+   another sort switches to Custom from the visible order (status.now_custom). Storage (cloud, shared):
+   order.json {"library": [ids, "folder:<id>"]}, folders.json per folder "sort" ("" = Same as Library) + "order".
+   Folder placement LocalSettings.folder_place (END field, Ikemen Sync shared), greyed while Custom; sort drop-down
+   items via _sort_choices/_fill_sort (tick icon); in a folder: Same as Library + 4 sorts. Library.set_folder takes a
+   game out of the list it leaves (so it lands at the end of the new one). Search/filter: no rearranging.
 
 - Folder open/close animation (owner's request, 2026-10-15): FolderTransition overlays the library area with two
   snapshots of the covers alone (LibraryGrid.bare = no backdrop); opening = library fades out fully while a

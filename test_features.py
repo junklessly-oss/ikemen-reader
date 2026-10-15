@@ -1563,3 +1563,138 @@ class RegistryConfidence(unittest.TestCase):
             self.assertEqual(d._registry_choice(), maybe.path)
             d = app.DetectDialog(game, [maybe], Path(tmp))
             self.assertEqual(d._registry_choice(), maybe.path)          # the only lead: ticked
+
+
+class SortingAndCustomOrder(unittest.TestCase):
+    """1.0.1: Folders First / Mixed / Last, Custom order (library and per folder, synced in the cloud folder),
+    each folder's own sort (Same as Library until changed), drag between covers to arrange."""
+
+    def test_library_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Library(Path(tmp))
+            a = lib.add_game("A", "PC")
+            b = lib.add_game("B", "PC")
+            fid = lib.create_folder("Series")
+            lib.set_folder(a.game_id, fid)
+            lib.set_folder_sort(fid, "title")
+            lib.set_folder_order(fid, [a.game_id])
+            lib.rename_folder(fid, "Renamed")                       # renaming keeps sort + order
+            self.assertEqual((lib.folder_sort(fid), lib.folder_order(fid)), ("title", [a.game_id]))
+            lib.set_library_order([b.game_id, "folder:" + fid])
+            lib.set_folder(b.game_id, fid)                         # into the folder: leaves the library's order
+            self.assertEqual(lib.library_order(), ["folder:" + fid])
+            lib.set_folder(a.game_id, "")                          # out of it: leaves the folder's order
+            self.assertEqual(lib.folder_order(fid), [])
+            lib.folders_file.write_text('{"x": {"name": 5, "sort": "weird", "order": "nope"}}', "utf-8")
+            self.assertEqual((lib.folder_sort("x"), lib.folder_order("x")), ("", []))   # damaged: defaults
+
+    def test_in_order(self):
+        import app
+        self.assertEqual(app.in_order(["n1", "b", "a", "n2"], lambda x: x, ["a", "gone", "b"]), ["a", "b", "n1", "n2"])
+
+    def _window(self, tmp, titles, folder_titles=()):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        import i18n
+        qa = QApplication.instance() or QApplication([])
+        i18n.set_language("en")
+        cloud = Path(tmp) / "cloud"
+        cloud.mkdir()
+        lib = Library(cloud)
+        ids = {}
+        for i, t in enumerate(titles):
+            g = lib.add_game(t, "PC")
+            lib.update(g.game_id, last_played=1000 - i)               # first title = most recent
+            ids[t] = g.game_id
+        fid = None
+        if folder_titles:
+            fid = lib.create_folder("Series")
+            for i, t in enumerate(folder_titles):
+                g = lib.add_game(t, "PC")
+                lib.update(g.game_id, last_played=500 - i)
+                lib.set_folder(g.game_id, fid)
+                ids[t] = g.game_id
+        w = app.MainWindow(LocalSettings("PC", str(cloud)))
+        w.show()
+        w.resize(1300, 800)
+        w.refresh()
+        for _ in range(5):
+            qa.processEvents()
+        return w, lib, ids, fid
+
+    def test_folder_places_and_custom(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w, lib, ids, fid = self._window(tmp, ["A", "B", "C"], ["F1", "F2"])
+            try:
+                import app
+                shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+                f = app.FOLDER_PREFIX + fid
+                self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])     # mixed: folder by its latest game
+                w.sort.setCurrentIndex(w.sort.findData("place:first"))
+                self.assertEqual(shown(), [f, ids["A"], ids["B"], ids["C"]])
+                self.assertEqual(w.sort.currentData(), "recent")                   # the sort itself stays
+                w.sort.setCurrentIndex(w.sort.findData("place:last"))
+                self.assertEqual(shown()[-1], f)
+                # drag C between A and B: switches to Custom, starting from what was shown
+                w._dragging = ids["C"]
+                w._move_to(ids["C"], 1)
+                w._dragging = None
+                self.assertEqual(w.settings.sort, "custom")
+                self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
+                self.assertEqual(lib.library_order(), shown())                    # stored in the cloud folder
+                model = w.sort.model()
+                self.assertFalse(model.item(w.sort.findData("place:first")).isEnabled())   # greyed in Custom
+                new = lib.add_game("New", "PC")
+                w.refresh()
+                self.assertEqual(shown()[-1], new.game_id)                          # new games at the end
+            finally:
+                w.close()
+
+    def test_folder_own_sort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w, lib, ids, fid = self._window(tmp, ["A"], ["Zeta", "Alpha", "Mid"])
+            try:
+                import app
+                shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+                w.open_folder(fid)
+                self.assertEqual(w.sort.currentData(), "follow")                   # untouched: Same as Library
+                self.assertEqual(shown(), [ids["Zeta"], ids["Alpha"], ids["Mid"]])  # recent, like the library
+                w.sort.setCurrentIndex(w.sort.findData("title"))
+                self.assertEqual(shown(), [ids["Alpha"], ids["Mid"], ids["Zeta"]])
+                self.assertEqual(lib.folder_sort(fid), "title")
+                w.close_folder()
+                w.sort.setCurrentIndex(w.sort.findData("hours"))                  # the library's sort changes...
+                w.open_folder(fid)
+                self.assertEqual(w.sort.currentData(), "title")                    # ...the folder keeps its own
+                w._dragging = ids["Zeta"]
+                w._move_to(ids["Zeta"], 0)                                         # arrange inside: Custom
+                w._dragging = None
+                self.assertEqual(lib.folder_sort(fid), "custom")
+                self.assertEqual(shown()[0], ids["Zeta"])
+                self.assertEqual(w.folder_games[fid][0].game_id, ids["Zeta"])     # the mosaic follows it
+                w.sort.setCurrentIndex(w.sort.findData("follow"))
+                self.assertEqual(lib.folder_sort(fid), "")
+            finally:
+                w.close()
+
+    def test_onto_or_between(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w, lib, ids, fid = self._window(tmp, ["A", "B", "C"])
+            try:
+                import app
+                from PySide6.QtCore import QPoint
+                rect = lambda k: app.CardDelegate.cover_rect(w.grid.visualItemRect(w.grid.item(k)), 0)
+                w._dragging = ids["A"]
+                c = rect(1)
+                self.assertEqual(w._drop_spot(c.center().toPoint()), ("onto", ids["B"]))           # middle: folder
+                spot = w._drop_spot(QPoint(int(c.right() + app.GRID_GAP / 2), int(c.center().y())))
+                self.assertEqual(spot[:2], ("between", 2))                                         # gap: move
+                self.assertIsNone(w._drop_spot(QPoint(int(c.left() - 4), int(c.center().y()))))   # next to itself
+                w.search.setText("A")                                                               # searching:
+                w._dragging = ids["A"]
+                self.assertIsNone(w._drop_spot(QPoint(int(rect(0).right() + 10), int(rect(0).center().y()))))
+            finally:
+                w._dragging = None
+                w.close()

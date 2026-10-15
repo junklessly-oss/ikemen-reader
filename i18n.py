@@ -28,6 +28,13 @@ S: dict[str, tuple[str, str]] = {
     "sort.recent":              ("Recently Played", "最近プレイした順"),
     "sort.hours":               ("Most Played", "プレイ時間が長い順"),
     "sort.title":               ("Title", "タイトル順"),
+    "sort.custom":              ("Custom", "カスタム"),
+    "sort.follow":              ("Same as Library", "ライブラリと同じ"),
+    "place.first":              ("Folders First", "フォルダーを先に"),
+    "place.mixed":              ("Mixed", "混在"),
+    "place.last":               ("Folders Last", "フォルダーを後に"),
+    "status.now_custom":        ("Sorted by Custom now: your own order. Drag covers between others to arrange them.",
+                                 "並び順を「カスタム」にしました。カバーを他のカバーの間にドラッグすると並べ替えられます。"),
     "filter.all":               ("All Games", "すべてのゲーム"),
 
     # ------------------------------------------------------------------ reading status

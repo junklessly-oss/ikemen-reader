@@ -93,7 +93,14 @@ GUIDE = {
             "Error to jump to those games).",
         ]),
         ("Your Library", [
-            "- Search by title, sort by Recently Played, Most Played or Title, and filter by reading status.",
+            "- Search by title, sort by Recently Played, Most Played, Title or Custom, and filter by reading status.",
+            "- Below the sorts in the same menu, choose where folders go: Folders First, Mixed, or Folders Last.",
+            "- Custom is your own order: drag a cover into the gap between two others to move it there (a thin "
+            "line shows where it will land). Doing that in another sort switches to Custom, starting from the order "
+            "you were looking at. New games go at the end. Folders can be dragged the same way.",
+            "- Each folder has its own sort, found in the same menu while the folder is open. It starts as Same as "
+            "Library and follows the main page until you pick something else for it. A folder's own order and "
+            "sort are shared with the other device.",
             "- Hide Statistics (next to the menus at the top) hides playtime and last-played dates on the covers "
             "and in the bottom bar. Press Show Statistics to bring them back; your choice is remembered.",
             "- Set a game's reading status (Reading, Finished, Plan to Read, Dropped) in the bottom bar or by "
@@ -101,7 +108,7 @@ GUIDE = {
             "- A game with a reading status gets a little bookmark in that status's colour in the top-right corner "
             "of its cover (also inside folders and on a folder's cover). The bookmark button next to the trash can "
             "hides or shows them; your choice is remembered. The colours can be changed in a custom theme.",
-            "- Folders: drag a game onto another game to put them both in a new folder, or onto a folder to add "
+            "- Folders: drag a game onto the middle of another game to put them both in a new folder, or onto a folder to add "
             "it. Inside a folder, drag a game onto \"‹ Library\" to take it out. Right-click a folder to rename or "
             "remove it (its games go back to the library).",
             "- Click an empty space or press Esc to deselect.",
@@ -193,12 +200,17 @@ GUIDE = {
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
         ("ライブラリ", [
-            "- タイトルで検索、「最近プレイした順」「プレイ時間が長い順」「タイトル順」で並べ替え、プレイ状況で絞り込みができます。",
+            "- タイトルで検索、「最近プレイした順」「プレイ時間が長い順」「タイトル順」「カスタム」で並べ替え、プレイ状況で絞り込みができます。",
+            "- 同じメニューの下の方で、フォルダーの位置（「フォルダーを先に」「混在」「フォルダーを後に」）を選べます。",
+            "- 「カスタム」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。"
+            "他の並び順でこれを行うと、表示していた順番のまま「カスタム」に切り替わります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。",
+            "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではメインページに合わせます。"
+            "フォルダーの並び順はもう一方の端末とも共有されます。",
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーのプレイ時間と最終プレイ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",
             "- プレイ状況（プレイ中・読了・積みゲー・中断）は、下部のバーか右クリックで設定します。",
             "- プレイ状況を設定したゲームには、カバーの右上にその状況の色のしおりが付きます（フォルダーの中やフォルダーのカバーにも表示されます）。"
             "ゴミ箱の隣にあるしおりのボタンで表示・非表示を切り替えられます。この設定は次回以降も保持されます。色はカスタムテーマで変更できます。",
-            "- フォルダー：ゲームを別のゲームにドラッグすると、2つをまとめた新しいフォルダーができます。フォルダーにドラッグすると追加されます。フォルダーの中では、ゲームを「‹ ライブラリ」"
+            "- フォルダー：ゲームを別のゲームの中央にドラッグすると、2つをまとめた新しいフォルダーができます。フォルダーにドラッグすると追加されます。フォルダーの中では、ゲームを「‹ ライブラリ」"
             "にドラッグすると外に出せます。フォルダーを右クリックすると、名前の変更や解除ができます（中のゲームはライブラリに戻ります）。",
             "- 何もないところをクリックするか、Escキーを押すと選択を解除できます。",
         ]),
