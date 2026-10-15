@@ -1110,6 +1110,7 @@ class SilentSyncInTheWindow(unittest.TestCase):
             pc_saves, laptop_saves = tmp / "pc_saves", tmp / "laptop_saves"
             lib = Library(cloud)
             g = lib.add_game("Slow Damage", "PC", exe=str(exe), save_dir=str(pc_saves))
+            lib.set_paths(g.game_id, "Laptop", exe=str(exe), save_dir=str(tmp / "laptop_saves"))   # set up on both
             laptop = SyncEngine(cloud, tmp / "laptop_state")
             (laptop_saves / "0001").mkdir(parents=True)
             (laptop_saves / "0001" / "frames.npf").write_text("laptop progress", "utf-8")
@@ -1333,3 +1334,43 @@ class HoverTitles(unittest.TestCase):
         self.assertEqual((font.pointSize(), lines), (10, ["あいうえおかきくけ"]))
         font, lines = app.fit_title("Supercalifragilistic expialidociousness", f, w, 2)
         self.assertEqual(font.pointSize(), 11)                                # English never shrinks
+
+
+class LavenderAndBookmarks(unittest.TestCase):
+    """1.0.1: lavender = in sync but only set up on this device; folder lights split by colour;
+    bookmarks setting remembered and shared."""
+
+    def test_solo_state(self):
+        import app
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lib = Library(root / "cloud")
+            saves = root / "saves"
+            write(saves, "s.dat", "x")
+            g = lib.add_game("Solo", "PC", exe=str(root / "g.exe"), save_dir=str(saves))
+            eng = SyncEngine(root / "cloud", root / "state")
+            eng.after_exit(g.game_id, str(saves))
+            self.assertEqual(app.sync_state(eng, lib.get(g.game_id), "PC"), "solo")
+            lib.set_paths(g.game_id, "Laptop", exe=r"C:\Games\g.exe", save_dir=r"C:\Saves")
+            self.assertEqual(app.sync_state(eng, lib.get(g.game_id), "PC"), "synced")
+            self.assertEqual(app.STATE_LOOK["solo"][0], "lavender")
+
+    def test_folder_colours_in_order(self):
+        import app
+        from types import SimpleNamespace
+        games = [SimpleNamespace(game_id=x) for x in "abcd"]
+        fake = SimpleNamespace(folder_games={"f": games}, light_state=None)
+        states = {"a": "synced", "b": "conflict", "c": "solo", "d": "synced"}
+        fake.light_state = lambda gid: states[gid]
+        self.assertEqual(app.MainWindow.folder_colours(fake, "f"), ["red", "lavender", "green"])
+
+    def test_bookmark_setting(self):
+        import devsync
+        from library import load_local_settings, save_local_settings
+        with tempfile.TemporaryDirectory() as tmp:
+            s = LocalSettings("PC", tmp)
+            self.assertTrue(s.show_bookmarks)
+            s.show_bookmarks = False
+            save_local_settings(s, Path(tmp))
+            self.assertFalse(load_local_settings(Path(tmp)).show_bookmarks)
+            self.assertIn("show_bookmarks", devsync.SHARED)

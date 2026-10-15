@@ -274,7 +274,11 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    folders and in the folder mosaic. Colours (Custom Theme): Finished muted gold, Reading muted silver,
    Plan to Read muted bronze, Dropped muted rose. Toggle: bare icon button (Bookmark.png recoloured) between
    Edit and the trash can, like show_stats (setting at END of LocalSettings); hover: off = one nudge,
-   on = steady rocking (TrashButton motions). In the guide.
+   on = steady rocking (TrashButton motions). In the guide. DONE: bookmark = cached pixmap (_bookmark_pixmap; drawing the
+   shape per frame tanked the 60 fps light redraws), flat fill + chunky border (~1/7 of its width, colour role
+   mark_border, default #1C1C1C), rounded outer tips, SHARP notch point, width 12.5% of the grid cover width.
+   BookmarkButton has 13 px extra spacing before it so it sits centred. Status changes (_set_status) repaint
+   at once and record the signature (_own_change) so the live poll doesn't reload.
 5. Detection: save-folder suggestion must match the WHOLE title / full exe name / game folder name (not one
    word: "black" matched Documents\BLACKcyc\SaDisticBlooD_savefiles for Black Sheep Town), folder must hold
    save-like files, more than one candidate or any doubt -> suggest nothing. Other-device translation stays.

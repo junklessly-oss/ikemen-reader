@@ -84,12 +84,19 @@ def _reverse(hex_colour: str) -> str:
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
 APP_VERSION = "1.0.0"
-BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C"}
+BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
+               "lavender": "#A98BD9"}
+# folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
+LIGHT_ORDER = ["red", "amber", "blue", "lavender", "green", "grey"]
+# bookmark ribbons on the covers, one colour per reading status (muted gold / silver / bronze / rose)
+BASE_MARKS = {"finished": "#C9AB5A", "reading": "#B2B7BE", "plan": "#B5885E", "dropped": "#C48D96",
+              "border": "#1C1C1C"}        # (and the thin border round every bookmark)
 LOGO_ORIGINAL = {"logo_fill": "#F0F0F0", "logo_outline": "#303030"}   # what Logo.png / Icon.png are drawn in
 
 # the palette in use; apply_theme() switches them in place, so everything reads the current values
 COLORS = dict(DARK)
 LIGHTS = dict(BASE_LIGHTS)
+MARKS = dict(BASE_MARKS)
 LOGO = dict(LOGO_ORIGINAL)
 ICONS = {"check": "", "chevron": ""}           # generated in the theme's colours (see _write_icons)
 
@@ -105,6 +112,7 @@ THEME_MORE = [
     ("states", ["button_hover", "play_hover", "play_disabled", "play_disabled_text", "danger"]),
     ("covers", ["placeholder_top", "placeholder_bottom"]),
     ("lights", [f"light_{k}" for k in BASE_LIGHTS]),
+    ("bookmarks", [f"mark_{k}" for k in BASE_MARKS]),
 ]
 THEME_GROUPS = THEME_MAIN + THEME_MORE
 
@@ -113,6 +121,7 @@ def theme_colors(theme: str, custom: Optional[dict] = None) -> dict:
     """Every colour role for a theme. Custom starts from Dark and applies the owner's choices."""
     base = dict(LIGHT if theme == "light" else DARK)
     base.update({f"light_{k}": v for k, v in BASE_LIGHTS.items()})
+    base.update({f"mark_{k}": v for k, v in BASE_MARKS.items()})
     base.update(LOGO_ORIGINAL)
     if theme == "custom" and custom:
         base.update({k: v.upper() for k, v in custom.items() if k in base})
@@ -125,6 +134,8 @@ def apply_theme(theme: str = "dark", custom: Optional[dict] = None) -> None:
     COLORS.update({k: full[k] for k in DARK})
     LIGHTS.clear()
     LIGHTS.update({k: full[f"light_{k}"] for k in BASE_LIGHTS})
+    MARKS.clear()
+    MARKS.update({k: full[f"mark_{k}"] for k in BASE_MARKS})
     LOGO.update({k: full[k] for k in LOGO_ORIGINAL})
     _write_icons()
 
@@ -525,7 +536,8 @@ FOLDER_PREFIX = "folder:"
 MIME_GAME = "application/x-ikemen-game"  # a game being dragged inside the grid
 FOLDER_PAD, FOLDER_GAP = 10, 8           # mosaic inside a folder tile
 # when a folder holds games in different states, its light shows the most important one
-STATE_PRIORITY = ["conflict", "syncing", "starting", "playing", "push", "pull", "checking", "detect", "unset", "empty", "synced"]
+STATE_PRIORITY = ["conflict", "syncing", "starting", "playing", "push", "pull", "checking", "detect", "unset", "empty",
+                  "solo", "synced"]
 
 
 def is_folder(item_id: Optional[str]) -> bool:
@@ -534,6 +546,7 @@ def is_folder(item_id: Optional[str]) -> bool:
 # sync state -> (light colour, pulse: "calm" / "busy" / "steady", bottom-bar text key)
 STATE_LOOK = {
     "synced":   ("green", "calm", "sync.state.synced"),
+    "solo":     ("lavender", "calm", "sync.state.solo"),     # in sync; the other device hasn't set it up yet
     "push":     ("amber", "calm", "sync.state.push"),
     "pull":     ("blue", "calm", "sync.state.pull"),
     "conflict": ("red", "steady", "sync.state.conflict"),
@@ -791,7 +804,9 @@ def sync_state(engine: SyncEngine, game: Game, machine: str) -> str:
     action = engine.status(game.game_id, mine.save_dir, game.registry_key)
     if action is Action.NOTHING:
         d = Path(mine.save_dir)
-        return "synced" if (d.is_dir() and any(d.iterdir())) or game.registry_key else "empty"
+        if not ((d.is_dir() and any(d.iterdir())) or game.registry_key):
+            return "empty"
+        return "synced" if game.paths_for(other_slot(machine)).exe else "solo"
     return {Action.PUSHED: "push", Action.PULLED: "pull", Action.CONFLICT: "conflict"}[action]
 
 
@@ -1237,6 +1252,8 @@ class CardDelegate(QStyledItemDelegate):
                     grad.setColorAt(1, QColor(COLORS["placeholder_bottom"]))
                     q.fillRect(r, grad)
                 q.restore()
+                if self.w.settings.show_bookmarks:
+                    paint_bookmark(q, r, g.status, 5)
             if e > 0.01:
                 n = len(games)
                 count = tr("folder.count_one") if n == 1 else tr("folder.count_many", n=n)
@@ -1245,7 +1262,8 @@ class CardDelegate(QStyledItemDelegate):
         self._clipped(p, cover, e, draw)
         if option.state & QStyle.State_Selected:
             self._ring(p, cover)
-        self._paint_light(p, self.light_center(cover), self.w.light_state(iid))
+        # one slice per colour inside, all breathing calmly together
+        paint_light(p, self.light_center(cover), self.w.folder_colours(fid), "calm", self.w.settings.pulse)
         p.restore()
 
     def paint(self, p: QPainter, option: QStyleOptionViewItem, index) -> None:
@@ -1284,6 +1302,8 @@ class CardDelegate(QStyledItemDelegate):
                 self._overlay(q, option, rect, e, game.title if pm else "", play_line)
 
         self._clipped(p, cover, e, draw)
+        if self.w.settings.show_bookmarks:
+            paint_bookmark(p, cover, game.status, width=GRID["cover_w"])
         if selected:
             self._ring(p, cover)
         self._paint_light(p, self.light_center(cover), self.w.light_state(gid))
@@ -1313,28 +1333,109 @@ class CardDelegate(QStyledItemDelegate):
         paint_light(p, c, colour_key, pulse, self.w.settings.pulse)
 
 
-def paint_light(p: QPainter, c: QPointF, colour_key: str, pulse: str, pulsing_on: bool, r: float = LIGHT_R) -> None:
+def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: bool, r: float = LIGHT_R) -> None:
     """A sync light: a dot with a soft halo that breathes. All lights share one clock, so they pulse
-    in step. pulse: "calm" / "busy" (quicker) / "steady" (no pulse)."""
-    col = QColor(LIGHTS[colour_key])
+    in step. pulse: "calm" / "busy" (quicker) / "steady" (no pulse). colour_key may also be a list of
+    colours (a folder): the light is then split into equal slices, the first at 12 o'clock and the rest
+    clockwise, each slice glowing in its own colour."""
+    keys = [colour_key] if isinstance(colour_key, str) else list(colour_key) or ["grey"]
     s = 0.0
     if pulsing_on and pulse != "steady":
         period = PULSE_BUSY_S if pulse == "busy" else PULSE_CALM_S
         s = (1 - math.cos(2 * math.pi * (time.monotonic() % period) / period)) / 2   # 0..1, all in step
     halo_r = r * (1.6 + 1.2 * s)
-    g = QRadialGradient(c, halo_r)
-    hc = QColor(col)
-    hc.setAlpha(int(40 + 90 * s))
-    g.setColorAt(0, hc)
-    hc.setAlpha(0)
-    g.setColorAt(1, hc)
+    span = 360 * 16 / len(keys)                         # Qt angles: 1/16 degree, counter-clockwise from 3 o'clock
     p.setPen(Qt.NoPen)
-    p.setBrush(g)
-    p.drawEllipse(c, halo_r, halo_r)
-    core = QColor(col).lighter(100 + int(18 * s))
+    for i, key in enumerate(keys):
+        g = QRadialGradient(c, halo_r)
+        hc = QColor(LIGHTS[key])
+        hc.setAlpha(int(40 + 90 * s))
+        g.setColorAt(0, hc)
+        hc.setAlpha(0)
+        g.setColorAt(1, hc)
+        p.setBrush(g)
+        if len(keys) == 1:
+            p.drawEllipse(c, halo_r, halo_r)
+        else:
+            p.drawPie(QRectF(c.x() - halo_r, c.y() - halo_r, 2 * halo_r, 2 * halo_r),
+                      round(90 * 16 - i * span), -round(span))
+    for i, key in enumerate(keys):
+        p.setBrush(QColor(LIGHTS[key]).lighter(100 + int(18 * s)))
+        if len(keys) == 1:
+            p.drawEllipse(c, r, r)
+        else:
+            p.drawPie(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), round(90 * 16 - i * span), -round(span))
     p.setPen(QPen(QColor(0, 0, 0, 150), 1.5))   # dark ring so it reads on light covers too
-    p.setBrush(core)
+    p.setBrush(Qt.NoBrush)
     p.drawEllipse(c, r, r)
+
+
+_bookmarks: dict = {}
+
+
+def _bookmark_pixmap(colour: str, border: str, w: int, dpr: float) -> QPixmap:
+    """One bookmark, drawn once and reused (stamping a picture is far cheaper than drawing the shape on
+    every frame). Flat colour with a chunky, soft border like Bookmark.png's, down the sides and along the
+    notched bottom (the top is the cover's edge, where it hangs from), with nicely rounded points."""
+    key = (colour, border, w, dpr)
+    pm = _bookmarks.get(key)
+    if pm is not None:
+        return pm
+    h = round(w * 1.55)
+    pm = QPixmap(math.ceil(w * dpr), math.ceil(h * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.transparent)
+    q = QPainter(pm)
+    q.setRenderHint(QPainter.Antialiasing)
+    b = max(1.5, w * 0.14)                              # border width (Bookmark.png's outline: ~1/7 of its width)
+    x0, x1, top, bottom, cx = b / 2, w - b / 2, -2.0, h - b / 2, w / 2
+    notch = bottom - h * 0.24
+    r = w * 0.2                                         # rounded outer tips, like the icon (the notch stays sharp)
+
+    def toward(ax, ay, bx, by, d):                      # a point d px from (ax, ay) towards (bx, by)
+        length = math.hypot(bx - ax, by - ay) or 1.0
+        return ax + (bx - ax) * d / length, ay + (by - ay) * d / length
+
+    outline = QPainterPath()
+    outline.moveTo(x1, top)
+    pts = [(x1, bottom), (cx, notch), (x0, bottom)]
+    prev = (x1, top)
+    for i, (px, py) in enumerate(pts):
+        nxt = pts[i + 1] if i + 1 < len(pts) else (x0, top)
+        if (px, py) == (cx, notch):
+            outline.lineTo(px, py)                      # the inner point of the notch: crisp
+        else:
+            outline.lineTo(*toward(px, py, *prev, r))
+            outline.quadTo(px, py, *toward(px, py, *nxt, r))
+        prev = (px, py)
+    outline.lineTo(x0, top)
+    shape = QPainterPath(outline)
+    shape.closeSubpath()
+    q.setPen(Qt.NoPen)
+    q.setBrush(QColor(colour))
+    q.drawPath(shape)
+    q.setPen(QPen(QColor(border), b, Qt.SolidLine, Qt.FlatCap, Qt.MiterJoin))
+    q.setBrush(Qt.NoBrush)
+    q.drawPath(outline)                                 # sides + notched bottom, not the top
+    q.end()
+    if len(_bookmarks) > 64:
+        _bookmarks.clear()
+    _bookmarks[key] = pm
+    return pm
+
+
+def paint_bookmark(p: QPainter, cover: QRectF, status: str, corner: float = 8, width: Optional[float] = None) -> None:
+    """A little ribbon bookmark in the reading status's colour, hanging from the top edge of a cover in its
+    top-right corner (the shape of Bookmark.png), just clear of the cover's rounded corner."""
+    colour = MARKS.get(status or "") if status != "border" else None
+    if not colour:
+        return
+    w = max(6, round((width if width is not None else cover.width()) * 0.125))
+    dev = p.device()
+    dpr = dev.devicePixelRatioF() if dev is not None else 1.0
+    pm = _bookmark_pixmap(colour, MARKS["border"], w, dpr)
+    x = round(cover.right() - corner - 1 - w)
+    p.drawPixmap(QPointF(x, round(cover.top())), pm)
 
 
 class SyncLight(QWidget):
@@ -1705,6 +1806,9 @@ class TrashButton(QPushButton):
             self._timer.stop()                                              # still: stop redrawing
         self.update()
 
+    def _rest_opacity(self) -> float:
+        return 0.85
+
     def paintEvent(self, _ev) -> None:                          # only the icon: no button background
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
@@ -1712,7 +1816,7 @@ class TrashButton(QPushButton):
         if not self._live():
             p.setOpacity(0.3)
         elif not (self._hot or self._hover):
-            p.setOpacity(0.85)
+            p.setOpacity(self._rest_opacity())
         s = self.ICON * self._scale
         lift = (self._scale - 1.0) * 10                         # rises a little as it grows
         base = QPointF(self.width() / 2, (self.height() + self.ICON) / 2 - lift)
@@ -1725,6 +1829,42 @@ class TrashButton(QPushButton):
         super().changeEvent(ev)
         if ev.type() == QEvent.EnabledChange:
             self._animate()
+
+
+class BookmarkButton(TrashButton):
+    """Bookmarks on / off (Bookmark.png, recoloured with the theme, no button box). Moves like the trash
+    can: while bookmarks are off, hovering gives one nudge; while they're on, it rocks steadily."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("bookmarks")
+        self.setAcceptDrops(False)
+        self.on = True
+
+    def refresh_icon(self) -> None:
+        self._icon = QPixmap.fromImage(themed_image("Bookmark.png", self.ICON * 3))
+        self.update()
+
+    def _rest_opacity(self) -> float:
+        return 0.85 if self.on else 0.4                 # dimmer while bookmarks are hidden
+
+    def set_on(self, on: bool) -> None:
+        self.on = on
+        if self._hover:
+            self.set_hot(on)
+        self.update()
+
+    def enterEvent(self, ev) -> None:
+        if self.on:
+            QWidget.enterEvent(self, ev)
+            self._hover = True
+            self.set_hot(True)
+        else:
+            super().enterEvent(ev)
+
+    def leaveEvent(self, ev) -> None:
+        super().leaveEvent(ev)
+        self.set_hot(False)
 
 
 class WobbleBox(TrashButton):
@@ -2753,7 +2893,7 @@ class SettingsDialog(FitsScreen, QDialog):
                        vndb=new.vndb, vndb_safe_only=new.vndb_safe_only, sort=new.sort,
                        status_filter=new.status_filter, theme=new.theme, custom_colors=dict(new.custom_colors),
                        bg_image=self.bg_path, bg_opacity=new.bg_opacity, bg_zoom=new.bg_zoom, bg_x=new.bg_x,
-                       bg_y=new.bg_y, show_stats=new.show_stats)
+                       bg_y=new.bg_y, show_stats=new.show_stats, show_bookmarks=new.show_bookmarks)
         if self.current is not None:
             self._persist(**changes)
             self._orig_theme, self._orig_custom = self.theme, dict(self.custom)
@@ -2912,6 +3052,7 @@ class SettingsDialog(FitsScreen, QDialog):
             theme=self.theme, custom_colors=dict(self.custom), bg_image=bg_image,
             font_en=self.fonts["en"], font_ja=self.fonts["ja"],
             show_stats=self.current.show_stats if self.current else True,
+            show_bookmarks=self.current.show_bookmarks if self.current else True,
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
             bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4))
         save_local_settings(self.result_settings)
@@ -3945,11 +4086,16 @@ class MainWindow(TaskOwner, QMainWindow):
         self.edit_btn = QPushButton()
         self.edit_btn.clicked.connect(lambda: self.edit_game(self.bar_game()) if self._bar_shows_running()
                                       else self.edit_selected())
+        self.bookmark_btn = BookmarkButton()
+        self.bookmark_btn.clicked.connect(self._toggle_bookmarks)
         self.trash_btn = TrashButton()
         self.trash_btn.clicked.connect(lambda: self.remove_game(self.selected_id() or ""))
         self.trash_btn.installEventFilter(self)       # games can be dropped on it
         dl.addWidget(self.saves_btn)
         dl.addWidget(self.edit_btn)
+        # the icons carry invisible padding and Edit doesn't: this evens out the space on both sides
+        dl.addSpacing(13)
+        dl.addWidget(self.bookmark_btn)
         dl.addWidget(self.trash_btn)
         root.addWidget(self.details)
         # create the status line now (Qt makes it on the first message otherwise): the band then
@@ -3994,6 +4140,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self.add_btn.refresh_icon()
         self.settings_btn.refresh_icon()
         self.trash_btn.refresh_icon()
+        self.bookmark_btn.refresh_icon()
         self.setWindowIcon(app_icon())
         self._style_scrollbar()
         self.grid.setItemDelegate(CardDelegate(self))     # fresh shadow etc.
@@ -4025,6 +4172,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.back_btn.setText(tr("folder.back"))
         self.back_btn.setToolTip(tr("folder.back_tip"))
         self.trash_btn.setToolTip(tr("bar.trash_tip"))
+        self.bookmark_btn.set_on(self.settings.show_bookmarks)
+        self.bookmark_btn.setToolTip(tr("bar.bookmarks_hide" if self.settings.show_bookmarks else "bar.bookmarks_show"))
         self.stats_btn.setText(tr("top.hide_stats" if self.settings.show_stats else "top.show_stats"))
         self.stats_btn.setToolTip(tr("top.stats_tip"))
         for combo, items, current in (
@@ -4400,6 +4549,12 @@ class MainWindow(TaskOwner, QMainWindow):
         (the "Save at least once!" state): only the message matters then."""
         return gid == self.playing_id or self.sync_states.get(gid) == "detect"
 
+    def folder_colours(self, fid: str) -> list[str]:
+        """The light colours of the games in a folder, each once, most important first."""
+        present = {STATE_LOOK.get(self.light_state(g.game_id), STATE_LOOK["checking"])[0]
+                   for g in self.folder_games.get(fid, [])}
+        return [c for c in LIGHT_ORDER if c in present] or ["grey"]
+
     def light_state(self, gid: str) -> str:
         if is_folder(gid):
             states = {self.light_state(g.game_id) for g in self.folder_games.get(gid[len(FOLDER_PREFIX):], [])}
@@ -4419,6 +4574,14 @@ class MainWindow(TaskOwner, QMainWindow):
         self._save_view_choice()                 # remembered for next time (and shared by Ikemen Sync)
         self.grid.viewport().update()
         self._update_details()
+
+    def _toggle_bookmarks(self) -> None:
+        """The bookmark button: show / hide the reading-status ribbons on the covers."""
+        self.settings.show_bookmarks = not self.settings.show_bookmarks
+        self.bookmark_btn.set_on(self.settings.show_bookmarks)
+        self.bookmark_btn.setToolTip(tr("bar.bookmarks_hide" if self.settings.show_bookmarks else "bar.bookmarks_show"))
+        self._save_view_choice()                 # remembered for next time (and shared by Ikemen Sync)
+        self.grid.viewport().update()
 
     def _save_view_choice(self) -> None:
         try:
@@ -4444,9 +4607,7 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         s = self.d_status.currentData() or ""
         if s != g.status:
-            self.games[g.game_id] = self.library.update(g.game_id, status=s)
-            if self.settings.status_filter != "all":
-                self._rebuild()
+            self._set_status(g.game_id, s)
 
     # ------------------------------------------------------------------ bottom bar / top status
     def _update_details(self) -> None:
@@ -5345,8 +5506,35 @@ class MainWindow(TaskOwner, QMainWindow):
 
     @guarded
     def _set_status(self, gid: str, status: str) -> None:
-        self.library.update(gid, status=status)
-        self.refresh()
+        """A new reading status: saved, then shown at once (its bookmark, the folder mosaic, the filter)
+        without re-reading the whole library."""
+        g = self.library.update(gid, status=status)
+        self.games[gid] = g
+        for games in self.folder_games.values():
+            for i, old in enumerate(games):
+                if old.game_id == gid:
+                    games[i] = g
+        if self.settings.status_filter != "all":
+            self._rebuild()
+        else:
+            self.grid.viewport().update()
+            self._update_details()
+        self._own_change()
+
+    def _own_change(self) -> None:
+        """Note the library as it is after a change made here, so the live check doesn't take it for news
+        from the other device (and reload everything). In the background: the cloud folder can be slow."""
+        self._live_checking = True                  # (no live check in between)
+        library = self.library
+
+        def done(sig) -> None:
+            self._live_checking = False
+            if library is self.library:
+                self._live_sig = sig
+
+        def failed(_e) -> None:
+            self._live_checking = False
+        self._run(library.change_signature, done, failed)
 
     def closeEvent(self, e) -> None:
         if (self.worker and self.play_phase == "syncing") or self.syncer is not None:

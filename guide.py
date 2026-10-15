@@ -2,7 +2,7 @@
 guide.py - the "Help and Guidance" text (Settings > About), in English and Japanese.
 
 Plain sections of (heading, paragraphs). A paragraph starting with "- " is a list item;
-{green} {amber} {blue} {red} {grey} become sync-light dots in the theme's colours.
+{green} {amber} {blue} {red} {grey} {lavender} become sync-light dots in the theme's colours.
 """
 from __future__ import annotations
 
@@ -83,6 +83,9 @@ GUIDE = {
             "Ikemen Reader, once you close it).",
             "- {red} Saves changed on both devices. You'll be asked which to keep.",
             "- {grey} Not set up on this device yet, no saves yet, or still being checked.",
+            "- {lavender} Saves are in sync, but the game isn't set up on the other device yet.",
+            "A folder's light is split into equal slices, one for each colour among its games, with the most "
+            "important first (starting at the top and going clockwise).",
             "The top bar sums it all up: Synced, Syncing, or Error when saves changed on both devices (click "
             "Error to jump to those games).",
         ]),
@@ -92,6 +95,9 @@ GUIDE = {
             "and in the bottom bar. Press Show Statistics to bring them back; your choice is remembered.",
             "- Set a game's reading status (Reading, Finished, Plan to Read, Dropped) in the bottom bar or by "
             "right-clicking it.",
+            "- A game with a reading status gets a little bookmark in that status's colour in the top-right corner "
+            "of its cover (also inside folders and on a folder's cover). The bookmark button next to the trash can "
+            "hides or shows them; your choice is remembered. The colours can be changed in a custom theme.",
             "- Folders: drag a game onto another game to put them both in a new folder, or onto a folder to add "
             "it. Inside a folder, drag a game onto \"‹ Library\" to take it out. Right-click a folder to rename or "
             "remove it (its games go back to the library).",
@@ -174,12 +180,16 @@ GUIDE = {
             "- {blue} クラウドのセーブの方が新しいです。自動でダウンロードされます（イケメンリーダー以外から開いているゲームは、閉じたあと）。",
             "- {red} 両方の端末でセーブが変更されています。どちらを残すか尋ねます。",
             "- {grey} この端末ではまだ未設定、セーブがまだない、または確認中です。",
+            "- {lavender} セーブは同期済みですが、もう一方の端末ではまだこのゲームが設定されていません。",
+            "フォルダーのランプは、中のゲームのランプの色ごとに等分され、重要なものから順に（上から時計回りに）並びます。",
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
         ("ライブラリ", [
             "- タイトルで検索、「最近プレイした順」「プレイ時間が長い順」「タイトル順」で並べ替え、プレイ状況で絞り込みができます。",
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーのプレイ時間と最終プレイ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",
             "- プレイ状況（プレイ中・読了・積みゲー・中断）は、下部のバーか右クリックで設定します。",
+            "- プレイ状況を設定したゲームには、カバーの右上にその状況の色のしおりが付きます（フォルダーの中やフォルダーのカバーにも表示されます）。"
+            "ゴミ箱の隣にあるしおりのボタンで表示・非表示を切り替えられます。この設定は次回以降も保持されます。色はカスタムテーマで変更できます。",
             "- フォルダー：ゲームを別のゲームにドラッグすると、2つをまとめた新しいフォルダーができます。フォルダーにドラッグすると追加されます。フォルダーの中では、ゲームを「‹ ライブラリ」"
             "にドラッグすると外に出せます。フォルダーを右クリックすると、名前の変更や解除ができます（中のゲームはライブラリに戻ります）。",
             "- 何もないところをクリックするか、Escキーを押すと選択を解除できます。",
@@ -215,7 +225,7 @@ UL = '<ul style="margin-left:-14px; margin-top:2px">'
 
 def guide_html(lang: str, colors: dict, lights: dict) -> str:
     """The whole guide as simple HTML, coloured for the current theme."""
-    dots = {k: f'<span style="color:{lights[k]}">●</span>' for k in ("green", "amber", "blue", "red", "grey")}
+    dots = {k: f'<span style="color:{lights[k]}">●</span>' for k in ("green", "amber", "blue", "red", "grey", "lavender")}
     out = [f'<div style="color:{colors["text"]}">']
     for heading, paras in GUIDE.get(lang, GUIDE["en"]):
         out.append(f'<h3 style="margin-top:18px; margin-bottom:6px">{html.escape(heading)}</h3>')
