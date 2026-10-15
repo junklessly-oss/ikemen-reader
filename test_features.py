@@ -1664,8 +1664,10 @@ class SortingAndCustomOrder(unittest.TestCase):
                 self.assertEqual(w.settings.sort, "custom")
                 self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
                 self.assertEqual(lib.library_order(), shown())                    # stored in the cloud folder
-                model = w.sort.model()
-                self.assertFalse(model.item(w.sort.findData("place:first")).isEnabled())   # greyed in Custom
+                w.choose_sort("place:first")                                       # usable in Custom too
+                self.assertEqual(shown()[0], f)
+                w.choose_sort("place:mixed")                                       # fresh from what's shown
+                self.assertEqual(lib.library_order()[0], f)
                 new = lib.add_game("New", "PC")
                 w.refresh()
                 self.assertEqual(shown()[-1], new.game_id)                          # new games at the end
@@ -1764,6 +1766,7 @@ class SortDropDownClicks(unittest.TestCase):
     def test_consecutive_picks_apply(self):
         from PySide6.QtWidgets import QApplication
         from PySide6.QtCore import Qt as QtNS
+        import app
         t = SortingAndCustomOrder()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
             w, lib, ids, fid = t._window(tmp, ["A", "B"], ["F1"])
@@ -1772,10 +1775,14 @@ class SortDropDownClicks(unittest.TestCase):
                     w.sort.activated.emit(w.sort.findData(data))
                     for _ in range(3):
                         QApplication.processEvents()
-                for place in ("first", "last", "mixed", "first"):
+                for place in ("first", "last", "first"):
                     click("place:" + place)
                     self.assertEqual(w.settings.folder_place, place)
                     self.assertEqual(w.sort.currentData(), "recent")     # the shown sort stays
+                shown = [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+                click("place:mixed")                                     # Mixed: your arrangement, from what's shown
+                self.assertEqual((w.settings.sort, w.settings.folder_place), ("custom", "mixed"))
+                self.assertEqual([w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())], shown)
                 click("title")
                 click("place:last")
                 self.assertEqual((w.settings.sort, w.settings.folder_place), ("title", "last"))

@@ -4380,6 +4380,7 @@ class MainWindow(TaskOwner, QMainWindow):
         status.addWidget(self.sync_light)
         self.sync_label = QLabel()
         self.sync_label.linkActivated.connect(self._show_next_conflict)
+        # as wide as its longest word (Synced / Syncing / Error), so a change of word never moves the bar
         status.addWidget(self.sync_label)
         # the light's box keeps ~9 px of empty room (for its glow) left of the dot; the same space after
         # the text keeps what you see (dot + text) exactly centred between the drop-downs and the buttons
@@ -4576,6 +4577,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.bookmark_btn.setToolTip(tr("bar.bookmarks_hide" if self.settings.show_bookmarks else "bar.bookmarks_show"))
         self.stats_btn.setText(tr("top.hide_stats" if self.settings.show_stats else "top.show_stats"))
         self.stats_btn.setToolTip(tr("top.stats_tip"))
+        fm = self.sync_label.fontMetrics()
+        self.sync_label.setFixedWidth(max(fm.horizontalAdvance(tr(k)) for k in ("top.synced", "top.syncing", "top.attention_one")) + 2)
         self._fill_sort()
         for combo, items, current in (
                 (self.sort, None, None),
@@ -4820,10 +4823,11 @@ class MainWindow(TaskOwner, QMainWindow):
             top = in_order(top, self._entry_id, self.library_order)
         else:
             top.sort(key=lambda e: self._sort_key(e))
-            if self.settings.folder_place != "mixed":   # folders first / last (each side keeps the sort)
-                folders = [e for e in top if e[0] == "folder"]
-                loose = [e for e in top if e[0] == "game"]
-                top = folders + loose if self.settings.folder_place == "first" else loose + folders
+        if self.settings.folder_place != "mixed":       # folders first / last (each side keeps its order)
+            folders = [e for e in top if e[0] == "folder"]
+            loose = [e for e in top if e[0] == "game"]
+            top = folders + loose if self.settings.folder_place == "first" else loose + folders
+        self._top_ids = [self._entry_id(e) for e in top]   # the main page as arranged now (Mixed starts from it)
         if self.current_folder:
             entries = [("game", g) for g in self.folder_games[self.current_folder] if keep(g)]
         elif flat:
@@ -4903,8 +4907,6 @@ class MainWindow(TaskOwner, QMainWindow):
             if data.startswith("place:"):
                 i = c.count() - 1
                 c.setItemIcon(i, tick_icon() if data == "place:" + self.settings.folder_place else blank_icon())
-                if self.settings.sort == "custom":       # in Custom, you decide where folders sit
-                    c.model().item(i).setEnabled(False)
         current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
         c.setCurrentIndex(max(0, c.findData(current)))
         c.blockSignals(False)
@@ -5135,23 +5137,27 @@ class MainWindow(TaskOwner, QMainWindow):
     def choose_sort(self, d: str) -> None:
         if not d:
             return
-        if d.startswith("place:"):                   # Folders First / Mixed / Folders Last
+        before = self._positions()                   # every change glides: covers slide to their new places
+        if d == "place:mixed":
+            # Mixed = your own arrangement, starting fresh from exactly what's on screen now (never an older
+            # one); from here anything can be moved. (It's the Custom sort, folders where they are.)
+            if (self.settings.sort, self.settings.folder_place) != ("custom", "mixed"):
+                self.library.set_library_order(list(getattr(self, "_top_ids", [])))
+                self.settings.sort, self.settings.folder_place = "custom", "mixed"
+                self._read_orders()
+                self._own_change()
+        elif d.startswith("place:"):                 # Folders First / Folders Last: the rest keeps its order
             self.settings.folder_place = d[len("place:"):]
-            self._save_view_choice()
-            self._fill_sort()                        # (the sort itself stays as it was)
-            self._rebuild()
-            return
-        if self.current_folder:                      # this folder's own sort ("follow" = the library's)
-            fid = self.current_folder
-            self.library.set_folder_sort(fid, "" if d == "follow" else d)
+        elif self.current_folder:                    # this folder's own sort ("follow" = the library's)
+            self.library.set_folder_sort(self.current_folder, "" if d == "follow" else d)
             self._read_orders()
             self._own_change()
-            self._rebuild()
-            return
-        self.settings.sort = d
+        else:
+            self.settings.sort = d
         self._save_view_choice()
         self._fill_sort()
-        self.refresh()
+        self._rebuild()                              # (no reload or save check: only the order changed)
+        self._slide_from(before)
 
     def _filter_changed(self, _i: int) -> None:
         self.settings.status_filter = self.filter.currentData() or "all"
@@ -5656,8 +5662,8 @@ class MainWindow(TaskOwner, QMainWindow):
             if self.settings.sort != "custom":
                 self.settings.sort = "custom"
                 changed = switched = True
-            if is_folder(iid) and self.settings.folder_place != "mixed":
-                self.settings.folder_place = "mixed"     # you're placing folders yourself now
+            if self.settings.folder_place != "mixed":
+                self.settings.folder_place = "mixed"     # you're arranging things yourself now
                 changed = True
             if changed:
                 self._save_view_choice()

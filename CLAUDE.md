@@ -299,6 +299,12 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    Folder placement LocalSettings.folder_place (END field, Ikemen Sync shared), greyed while Custom; sort drop-down
    items via _sort_choices/_fill_sort (tick icon); in a folder: Same as Library + 4 sorts. Library.set_folder takes a
    game out of the list it leaves (so it lands at the end of the new one). Search/filter: no rearranging.
+   Owner's rule (2026-10-15): MIXED = your own arrangement: picking it stores exactly what's on screen
+   (_top_ids) as the library order and sets sort=custom (fresh every time, never an older arrangement); moving
+   anything sets custom + mixed. Folders First/Last work in every sort incl. Custom. Sort/placement picks go
+   through activated -> choose_sort (deferred) and glide (_positions/_slide_from); no refresh/save check.
+   Drop-downs are ThemedCombo (layered popup + own mask slide: no white first frame). Top-bar status label has
+   a fixed width (longest of Synced/Syncing/Error) so the bar never shifts.
 
 - Folder open/close animation (owner's request, 2026-10-15): FolderTransition overlays the library area with two
   snapshots of the covers alone (LibraryGrid.bare = no backdrop); opening = library fades out fully while a
