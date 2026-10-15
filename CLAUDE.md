@@ -119,7 +119,25 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Easter egg (keep out of the guide): click the top-bar logo → EasterEgg overlay darkens the whole window
   (alpha 175, fades) with two WobbleBoxes (subclass TrashButton, same motion constants, centre pivot):
   "Ver. {APP_VERSION}" on top nudges once on hover, "Easter Egg ^_^" (JA イースターエッグ ^_^, i18n egg.title)
-  below rocks while hovered; neither clickable.
+  below rocks while hovered; neither clickable. Settings "Anki (Optional)" (under Luna; LocalSettings.anki_path,
+  per device, not shared; hint "You may be rewarded for hunting...") adds a clickable box ABOVE the version:
+  "Anki" (JA 暗記) = AnkiBox (same footprint as a WobbleBox; on hover the box beats 10 % every 1.2 s, text
+  still, like the Read button but stronger); closes the egg and, if Anki is already open, brings its window
+  forward (outside.show_anki / anki_window: visible unowned window of anki.exe itself or of a python(w) under an
+  "anki" path running aqt = the new uv launcher's AnkiProgramFiles; ~17 ms), else starts it via outside.popen.
+  (Investigated 2026-10-15 "slow Anki": not us - starting anki.exe takes 0.03 s, same in any environment; a second
+  copy needs ~2 s to hand over; a fresh start is Anki itself: 186 MB collection + 11 add-ons incl. AnkiMorphs.)
+  Hovering "Easter Egg ^_^" rocks every library cover, each OUT OF STEP (phase + 0.9-1.1x speed from crc32 of
+  its id). MainWindow.rumble = amplitude (deg) + rumble_t (one clock per frame); EasterEgg._rumble_step
+  (PreciseTimer) scales it by the box's growth so it eases in/out. CardDelegate.paint while rumbling: each tile
+  drawn upright once into CardDelegate._tiles (lights skipped via _skip_light), then only rotated; lights drawn
+  live on top; covers fully out of the viewport aren't drawn while rocking (their corners swung into view). ~7.8 ms/frame vs ~5 ms still (1280x800, 40 covers; was 11 ms drawing tiles rotated).
+  warm_up (psutil's first look, holds the GIL ~10 ms per step) is paused while the covers rock
+  (launcher.hold_warm_up): with it 45 fps + stutter near startup, held 125 fps steady.
+  Egg boxes react only over the box as drawn (BoxZone mixin: mouse tracking, _zone() / _arrive() / _depart(),
+  4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
+- Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
+  (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
   Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.0.0" in app.py.
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
@@ -262,7 +280,13 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    one more fits at minimum, equal gaps left/right, crops unchanged. Drag auto-scroll near top/bottom edge,
    faster the further you push (DRAG_SCROLL_*; not over trash / "‹ Library"). DONE: MainWindow._fit_grid (Qt's
    grid always reserves PM_ScrollBarExtent + 1 px, taken from the right edge; viewport margins top/bottom 0 so covers
-   slide under the bars, owner chose first row 12 px below the top bar over the old 8 px strips). Background picture: KEEP as before (pinned-crop trial rejected: laggy,
+   slide under the bars). First row was 12 px below the top bar (hover + selection outline touched/crossed it);
+   now first row and last row sit ROW_GAP (36 px = the gap between rows) from the bars: Qt ignores spacing with a
+   grid size, so LibraryGrid overrides visualRect/indexAt (+GRID_TOP_SHIFT 24), updateGeometries (scroll range
+   + GRID_END_EXTRA), scrollTo + scrollToItem (Qt's scrollToItem bypasses the virtual scrollTo).
+   Opening size: width 1200, height fitted on first show (MainWindow._fit_start_height) to START_ROWS = 2 rows with
+   ROW_GAP above/between/below (1200x833 on the PC; at 800 the 2nd row sat 3 px above the bottom bar), capped
+   to the screen. Background picture: KEEP as before (pinned-crop trial rejected: laggy,
    disorienting). Cover-size slider: not now (future idea).
 3. Titles: hover titles - English breaks only between words; Japanese shrinks one font size when it
    overflows by 1-2 characters, else wraps (kinsoku: no line starts with 。、ー」 etc.). Added-game title:

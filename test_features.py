@@ -1882,3 +1882,52 @@ class FolderArrangement(unittest.TestCase):
                 self.assertEqual((lib.folder_sort(fid), w.sort.currentData()), ("custom", "custom"))
             finally:
                 w.close()
+
+
+class AnkiButton(unittest.TestCase):
+    """The easter egg's Anki button brings an open Anki forward instead of starting a second copy."""
+
+    def test_recognises_anki(self):
+        import outside
+
+        class Proc:
+            def __init__(self, exe, cmd=()):
+                self._exe, self._cmd = exe, list(cmd)
+
+            def exe(self):
+                return self._exe
+
+            def cmdline(self):
+                return self._cmd
+
+        setting = r"C:\Users\Me\AppData\Local\Programs\Anki\anki.exe"
+        new_anki = Proc(r"C:\Users\Me\AppData\Local\AnkiProgramFiles\.venv\Scripts\pythonw.exe",
+                        ["pythonw.exe", "-c", "import aqt, sys; sys.argv[0] = 'Anki'; aqt.run()"])
+        old_anki = Proc(setting)
+        ikemen = Proc(r"C:\Python314\python.exe", ["python.exe", "app.py"])
+        other_python = Proc(r"C:\Users\Me\AppData\Local\AnkiProgramFiles\.venv\Scripts\python.exe", ["x.py"])
+        self.assertTrue(outside._is_anki(new_anki, setting))
+        self.assertTrue(outside._is_anki(old_anki, setting))
+        self.assertFalse(outside._is_anki(ikemen, setting))
+        self.assertFalse(outside._is_anki(other_python, setting))
+        self.assertFalse(outside._is_anki(Proc(""), ""))
+
+    def test_open_anki_is_shown_not_started(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QWidget
+        import app
+        QApplication.instance() or QApplication([])
+        w = QWidget()
+        w.settings = LocalSettings("PC", "x", anki_path=sys.executable)
+        egg = app.EasterEgg(w)
+        with mock.patch.object(app.outside, "show_anki", return_value=True), \
+                mock.patch.object(app.outside, "popen") as start:
+            egg._open_anki()
+            start.assert_not_called()
+        egg = app.EasterEgg(w)
+        with mock.patch.object(app.outside, "show_anki", return_value=False), \
+                mock.patch.object(app.outside, "popen") as start:
+            egg._open_anki()
+            start.assert_called_once()
+        w.close()

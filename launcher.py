@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -86,11 +87,22 @@ def _related_processes(root: Optional[psutil.Process], game_dir: Path,
     return found
 
 
+_warm_go = threading.Event()
+_warm_go.set()
+
+
+def hold_warm_up(hold: bool) -> None:
+    """Pause warm_up (True) while something must animate perfectly smoothly, then let it go on (False).
+    Each of its steps keeps Python busy for up to ~10 ms, which shows as stutter in a full-window animation."""
+    _warm_go.clear() if hold else _warm_go.set()
+
+
 def warm_up() -> None:
     """The first look at every running program's details takes a few seconds on Windows (psutil
     caches them afterwards). Done in the background when the window opens, so Play reacts at once."""
     for _ in psutil.process_iter(["pid", "ppid", "exe", "create_time"]):
         time.sleep(0.01)      # a short pause per program, so the window's animations keep running smoothly
+        _warm_go.wait(10)     # (held: waits, but never forever)
 
 
 def already_running(game_dir: Path) -> bool:

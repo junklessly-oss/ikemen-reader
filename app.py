@@ -19,6 +19,7 @@ import re
 import sys
 import threading
 import time
+import zlib
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -40,6 +41,7 @@ import startup
 import devsync
 import guide
 import luna
+import outside
 import regsync
 import updater
 import vndb
@@ -377,6 +379,34 @@ class LibraryGrid(QListWidget):
         if BACKGROUND["path"]:
             self.viewport().update()          # keep the picture still while the covers scroll
 
+    # every cell GRID_TOP_SHIFT lower than Qt places it: drawing, clicks and our own code all go through these
+    def visualRect(self, index) -> QRect:
+        r = super().visualRect(index)
+        return r.translated(0, GRID_TOP_SHIFT) if r.isValid() else r
+
+    def indexAt(self, pos: QPoint):
+        return super().indexAt(pos - QPoint(0, GRID_TOP_SHIFT))
+
+    def updateGeometries(self) -> None:
+        super().updateGeometries()
+        sb = self.verticalScrollBar()
+        sb.setRange(0, max(0, self.contentsSize().height() + GRID_END_EXTRA - self.viewport().height()))
+
+    def scrollTo(self, index, hint=QAbstractItemView.EnsureVisible) -> None:
+        r = self.visualRect(index)
+        if not r.isValid():
+            return
+        sb = self.verticalScrollBar()
+        cover_top = r.top() + CARD_PAD_TOP - ROW_GAP       # (with the usual gap above / below it)
+        cover_bottom = r.bottom() - (CARD_PAD_BOTTOM + GRID_SPACING) + ROW_GAP
+        if cover_top < 0:
+            sb.setValue(sb.value() + cover_top)
+        elif cover_bottom > self.viewport().height():
+            sb.setValue(sb.value() + cover_bottom - self.viewport().height())
+
+    def scrollToItem(self, item, hint=QAbstractItemView.EnsureVisible) -> None:
+        self.scrollTo(self.indexFromItem(item), hint)    # (Qt's own skips the shift above)
+
 
 # fonts: every font Ikemen Reader offers (family -> "builtin"/"user") and the choice per interface language
 FONTS: dict[str, str] = {}
@@ -532,6 +562,11 @@ CARD_PAD_X, CARD_PAD_TOP, CARD_PAD_BOTTOM = 12, 12, 18
 CARD_W, CARD_H = COVER_W + 2 * CARD_PAD_X, COVER_H + CARD_PAD_TOP + CARD_PAD_BOTTOM
 GRID_SPACING = 6
 GRID_GAP = 2 * CARD_PAD_X + GRID_SPACING     # the space between two covers, and at the left/right edges
+ROW_GAP = CARD_PAD_BOTTOM + GRID_SPACING + CARD_PAD_TOP   # the space between two rows of covers
+# the first row sits a whole row gap below the top bar (room to lift on hover with the selection outline),
+# and the last one as far above the bottom bar: Qt's grid can't pad its top, so LibraryGrid shifts every cell
+GRID_TOP_SHIFT = ROW_GAP - CARD_PAD_TOP
+GRID_END_EXTRA = GRID_TOP_SHIFT + ROW_GAP - (CARD_PAD_BOTTOM + GRID_SPACING)
 # covers grow with the window (Steam style): COVER_W x COVER_H is the smallest size; the grid works out
 # how many columns fit at that size and then stretches the covers so the row is filled exactly
 GRID = {"cover_w": float(COVER_W), "cover_h": float(COVER_H)}
@@ -659,6 +694,7 @@ QLabel#title {{ font-size: 16pt; }}
 QLabel#muted, QLabel#hint {{ color: {c['muted']}; }}
 QLabel#hint {{ font-size: 9pt; }}
 QLabel#section {{ color: {c['muted']}; padding-top: 8px; }}
+QDialog#settings_dialog QLabel#section {{ padding-top: 5px; }}   /* a little tighter: Settings fits the screen */
 QLabel#banner {{ background: {c['input']}; border-radius: 6px; padding: 6px 10px; }}
 QCheckBox, QRadioButton {{ spacing: 8px; }}
 QCheckBox::indicator, QRadioButton::indicator {{ width: 16px; height: 16px; }}
@@ -693,7 +729,7 @@ def suggest_save(settings: LocalSettings, exe: str, title: str,
     if not exe.strip():
         return None
     game_dir = str(Path(exe).parent)
-    skip = [settings.cloud_root, str(default_app_dir())] + [str(Path(p).parent) for p in (settings.luna_path, settings.le_path) if p]
+    skip = [settings.cloud_root, str(default_app_dir())] + [str(Path(p).parent) for p in (settings.luna_path, settings.le_path, settings.anki_path) if p]
     usable = lambda p: save_folder_problem(str(p), settings.cloud_root) is None and not any(
         os.path.normcase(str(p)).startswith(os.path.normcase(s)) for s in skip if s)
     return detect.suggest_save_folder(game_dir, [title, Path(exe).stem, Path(game_dir).name], other, usable, skip)
@@ -1137,6 +1173,8 @@ class CardDelegate(QStyledItemDelegate):
         super().__init__(window)
         self.w = window
         self.shadow = make_shadow(COVER_W, COVER_H)
+        self._tiles: dict = {}             # rumbling (easter egg): each tile drawn upright once, then only turned
+        self._skip_light = False           # (the lights stay live on top, so they keep breathing)
 
     def sizeHint(self, option, index) -> QSize:
         return QSize(round(GRID["cover_w"]) + 2 * CARD_PAD_X, round(GRID["cover_h"]) + CARD_PAD_TOP + CARD_PAD_BOTTOM)
@@ -1307,10 +1345,65 @@ class CardDelegate(QStyledItemDelegate):
         if option.state & QStyle.State_Selected:
             self._ring(p, cover)
         # one slice per colour inside, all breathing calmly together
-        paint_light(p, self.light_center(cover), self.w.folder_colours(fid), "calm", self.w.settings.pulse)
+        if not self._skip_light:
+            paint_light(p, self.light_center(cover), self.w.folder_colours(fid), "calm", self.w.settings.pulse)
         p.restore()
 
+    RUMBLE_MARGIN = 32                     # room round a tile's cell for its shadow, outline and bookmark
+
     def paint(self, p: QPainter, option: QStyleOptionViewItem, index) -> None:
+        amp = getattr(self.w, "rumble", 0.0)
+        if not amp:
+            if self._tiles:
+                self._tiles.clear()
+            self._paint_item(p, option, index)
+            return
+        # the easter egg's rocking box is hovered: every tile rocks around its own centre, each in its own
+        # rhythm (a phase and a slightly different speed of its own, from its id)
+        iid = index.data(GAME_ID_ROLE)
+        cover = self.cover_rect(option.rect, self.w.hover.get(iid, 0.0))
+        if not cover.intersects(QRectF(self.w.grid.viewport().rect())):
+            return          # out of sight: it stays still (rocking, its corners would swing into view)
+        seed = zlib.crc32(str(iid).encode("utf-8"))
+        phase = (seed & 0xFFFF) / 0x10000 * 2 * math.pi
+        speed = 0.9 + ((seed >> 16) & 0xFF) / 255 * 0.2
+        deg = amp * math.sin(2 * math.pi * WobbleBox.ROCK_HZ * speed * self.w.rumble_t + phase)
+        rect = QRectF(option.rect)
+        m = self.RUMBLE_MARGIN
+        key = (iid, option.rect.size().toTuple(), bool(option.state & QStyle.State_Selected))
+        tile = self._tiles.get(key)
+        if tile is None:
+            dev = p.device()
+            dpr = dev.devicePixelRatioF() if dev is not None else 1.0
+            tile = QPixmap(math.ceil((rect.width() + 2 * m) * dpr), math.ceil((rect.height() + 2 * m) * dpr))
+            tile.setDevicePixelRatio(dpr)
+            tile.fill(Qt.transparent)
+            q = QPainter(tile)
+            q.translate(m - rect.x(), m - rect.y())
+            self._skip_light = True
+            try:
+                self._paint_item(q, option, index)
+            finally:
+                self._skip_light = False
+                q.end()
+            self._tiles[key] = tile
+        c = rect.center()
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        p.translate(c)
+        p.rotate(deg)
+        p.translate(-c)
+        p.drawPixmap(rect.adjusted(-m, -m, m, m), tile, QRectF(tile.rect()))
+        hover = self.w.hover.get(iid, 0.0)
+        centre = self.light_center(self.cover_rect(option.rect, hover))
+        if is_folder(iid):
+            paint_light(p, centre, self.w.folder_colours(iid[len(FOLDER_PREFIX):]), "calm", self.w.settings.pulse)
+        elif iid in self.w.games:
+            self._paint_light(p, centre, self.w.light_state(iid))
+        p.restore()
+
+    def _paint_item(self, p: QPainter, option: QStyleOptionViewItem, index) -> None:
         gid = index.data(GAME_ID_ROLE)
         if gid == self.w._dim_gid and self.w._landing is not None:
             return                                       # the dropped cover is gliding onto this spot
@@ -1356,7 +1449,8 @@ class CardDelegate(QStyledItemDelegate):
             paint_bookmark(p, cover, game.status, width=GRID["cover_w"])
         if selected:
             self._ring(p, cover)
-        self._paint_light(p, self.light_center(cover), self.w.light_state(gid))
+        if not self._skip_light:
+            self._paint_light(p, self.light_center(cover), self.w.light_state(gid))
         if gid == self.w._dim_gid and self.w.drag_dim > 0:
             # only over the cover itself (not its whole cell: a neighbour may be sliding past through the gap)
             self._fade_into_background(p, cover.adjusted(-3, -3, 3, 3).toAlignedRect(), 0.75 * self.w.drag_dim)
@@ -1976,6 +2070,7 @@ class TrashButton(QPushButton):
         self._wiggle_from = -1.0                                # when the hover wiggle started (-1 = none)
         self._t = time.monotonic()
         self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.PreciseTimer)                   # even frames (see EasterEgg._rumble)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
         self.refresh_icon()
@@ -2097,7 +2192,46 @@ class BookmarkButton(TrashButton):
         self.set_hot(False)
 
 
-class WobbleBox(TrashButton):
+class BoxZone:
+    """For the easter egg's boxes: their widgets are bigger than the boxes drawn in them (room to grow and
+    tilt), so the mouse counts as "over" only inside the box itself (as big as it is drawn right now).
+    Subclasses provide _zone() (the box's rectangle) and _arrive() / _depart(); a click outside the box
+    goes on to the dark cover behind (= closes the easter egg)."""
+
+    def _zone_init(self) -> None:
+        self.setMouseTracking(True)
+        self._inside = False
+
+    def _zone_check(self, pos) -> None:
+        zone = self._zone()
+        if self._inside:
+            zone = zone.adjusted(-4, -4, 4, 4)   # a little leeway once inside, so the edge doesn't flicker
+        inside = zone.contains(QPointF(pos))
+        if inside != self._inside:
+            self._inside = inside
+            self._arrive() if inside else self._depart()
+
+    def enterEvent(self, ev) -> None:
+        QWidget.enterEvent(self, ev)
+        self._zone_check(ev.position())
+
+    def mouseMoveEvent(self, ev) -> None:
+        self._zone_check(ev.position())
+
+    def leaveEvent(self, ev) -> None:
+        QWidget.leaveEvent(self, ev)
+        if self._inside:
+            self._inside = False
+            self._depart()
+
+    def mousePressEvent(self, ev) -> None:
+        if self._zone().contains(ev.position()):
+            QPushButton.mousePressEvent(self, ev)
+        else:
+            ev.ignore()
+
+
+class WobbleBox(BoxZone, TrashButton):
     """A button-like box that moves exactly like the trash can, but does nothing when clicked.
     rock=True: grows and keeps rocking while the mouse is over it (the trash can with a game held over it).
     rock=False: rises and gives one wiggle when the mouse arrives (the trash can's normal hover).
@@ -2113,23 +2247,30 @@ class WobbleBox(TrashButton):
         self.box = QSizeF(fm.horizontalAdvance(text) + 56, fm.height() + 26)
         # room to grow (x1.2) and tilt without being cut off
         self.setFixedSize(int(self.box.width() * 1.2) + 24, int(self.box.height() * 1.2) + 44)
+        self._zone_init()
 
     def refresh_icon(self) -> None:          # no icon; just repaint (theme changes)
         self.update()
 
-    def enterEvent(self, ev) -> None:
-        if self.rock:
-            QWidget.enterEvent(self, ev)
-            self.set_hot(True)
-        else:
-            super().enterEvent(ev)
+    def _zone(self) -> QRectF:
+        w, h = self.box.width() * self._scale, self.box.height() * self._scale
+        lift = (self._scale - 1.0) * 10
+        return QRectF((self.width() - w) / 2, (self.height() - h) / 2 - lift, w, h)
 
-    def leaveEvent(self, ev) -> None:
+    def _arrive(self) -> None:
         if self.rock:
-            QWidget.leaveEvent(self, ev)
+            self.set_hot(True)
+        else:                                # (the trash can's own hover: rise + one wiggle)
+            self._hover = True
+            self._wiggle_from = time.monotonic()
+            self._animate()
+
+    def _depart(self) -> None:
+        if self.rock:
             self.set_hot(False)
         else:
-            super().leaveEvent(ev)
+            self._hover = False
+            self._animate()
 
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
@@ -2146,6 +2287,73 @@ class WobbleBox(TrashButton):
         p.setPen(QColor(COLORS["text"]))
         p.setFont(self.box_font)
         p.drawText(r, Qt.AlignCenter, self.text_)
+        p.end()
+
+
+class AnkiBox(BoxZone, QPushButton):
+    """The easter egg's reward: a box like the WobbleBoxes that opens Anki. While the mouse is over it, the box
+    beats like the Read button, only stronger; the text stays still."""
+    PULSE, PERIOD = 0.10, 1.2           # grows up to 10 %, one beat every 1.2 s
+
+    def __init__(self, text: str):
+        super().__init__()
+        self.text_ = text
+        self.box_font = ui_font(13)
+        fm = QFontMetrics(self.box_font)
+        self.box = QSizeF(fm.horizontalAdvance(text) + 56, fm.height() + 26)
+        # the same footprint as a WobbleBox, so the three sit evenly spaced
+        self.setFixedSize(int(self.box.width() * 1.2) + 24, int(self.box.height() * 1.2) + 44)
+        self._hover = False
+        self._scale = 1.0
+        self._since = 0.0
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.setInterval(16)
+        self._timer.timeout.connect(self._step)
+        self._zone_init()
+
+    def hitButton(self, pos) -> bool:         # only the box itself, not the room left around it
+        return self._rect().contains(QPointF(pos))
+
+    def _zone(self) -> QRectF:
+        return self._rect()
+
+    def _rect(self, scale: float = 1.0) -> QRectF:
+        w, h = self.box.width() * scale, self.box.height() * scale
+        return QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h)
+
+    def _arrive(self) -> None:
+        self.setCursor(Qt.PointingHandCursor)
+        self._hover = True
+        self._since = time.monotonic()
+        self._timer.start()
+
+    def _depart(self) -> None:
+        self.unsetCursor()
+        self._hover = False
+        self._timer.start()
+
+    def _step(self) -> None:
+        if self._hover:
+            t = time.monotonic() - self._since
+            self._scale = 1 + self.PULSE * (1 - math.cos(2 * math.pi * t / self.PERIOD)) / 2
+        else:
+            self._scale += (1.0 - self._scale) * 0.25          # settle back
+            if abs(self._scale - 1.0) < 0.001:
+                self._scale = 1.0
+                self._timer.stop()
+        self.update()
+
+    def paintEvent(self, _ev) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.setPen(QPen(QColor(COLORS["border"]), 1))
+        p.setBrush(QColor(COLORS["button_hover"] if self._hover else COLORS["button"]))
+        p.drawRoundedRect(self._rect(self._scale), 8 * self._scale, 8 * self._scale)
+        p.setPen(QColor(COLORS["text"]))
+        p.setFont(self.box_font)
+        p.drawText(self._rect(), Qt.AlignCenter, self.text_)     # (unscaled: the text never moves)
         p.end()
 
 
@@ -2314,9 +2522,22 @@ class EasterEgg(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self._alpha, self._target = 0.0, float(self.DARK)
         self.boxes = [WobbleBox(f"Ver. {APP_VERSION}", rock=False), WobbleBox(tr("egg.title"), rock=True)]   # top, bottom
+        settings = getattr(window, "settings", None)
+        self.anki_path = settings.anki_path if settings else ""
+        if self.anki_path:                       # the reward for hunting (Settings > Anki)
+            anki = AnkiBox(tr("egg.anki"))
+            anki.clicked.connect(self._open_anki)
+            self.boxes.insert(0, anki)           # above the version
         for b in self.boxes:
             b.setParent(self)
         self._place()
+        # hovering the rocking "Easter Egg" box makes every cover in the library rock with it
+        self._rocker = next(b for b in self.boxes if isinstance(b, WobbleBox) and b.rock)
+        self._rumble = QTimer(self)
+        self._rumble.setTimerType(Qt.PreciseTimer)   # (a normal timer ticks unevenly on Windows: 16 / 31 ms)
+        self._rumble.setInterval(16)
+        self._rumble.timeout.connect(self._rumble_step)
+        self._rumble.start()
         window.installEventFilter(self)          # follow the window's size
         self._t = time.monotonic()
         self._fade = QTimer(self)
@@ -2328,12 +2549,40 @@ class EasterEgg(QWidget):
         self._fade.start()
 
     def _place(self) -> None:
-        a, b = self.boxes
         gap = -18                                # the boxes' own margins already leave space between them
-        total = a.height() + gap + b.height()
+        total = sum(b.height() for b in self.boxes) + gap * (len(self.boxes) - 1)
         y = (self.height() - total) // 2
-        a.move((self.width() - a.width()) // 2, y)
-        b.move((self.width() - b.width()) // 2, y + a.height() + gap)
+        for b in self.boxes:
+            b.move((self.width() - b.width()) // 2, y)
+            y += b.height() + gap
+
+    def _rumble_step(self) -> None:
+        b, w = self._rocker, self.parent()
+        grid = getattr(w, "grid", None)
+        if grid is None:
+            return
+        # as strong as the box has grown (eases in and out with it); each cover rocks in its own rhythm
+        k = max(0.0, min(1.0, (b._scale - 1.0) / (b.HOT_SCALE - 1.0))) if b.isVisible() else 0.0
+        amp = b.ROCK_DEG * k
+        if bool(amp) != bool(w.rumble):
+            launcher.hold_warm_up(bool(amp))     # (its first look at all programs stalls the frames)
+        if amp or w.rumble:
+            w.rumble, w.rumble_t = amp, time.monotonic()
+            grid.viewport().update()
+
+    def _open_anki(self) -> None:
+        try:
+            if outside.show_anki(self.anki_path):    # already open: just bring it forward (starting another
+                self.dismiss()                       # copy takes seconds before it hands over to the open one)
+                return
+        except Exception:                            # (finding it failed: start it as usual)
+            pass
+        try:
+            outside.popen([self.anki_path], cwd=str(Path(self.anki_path).parent))
+        except OSError as e:
+            message(self.parent(), tr("egg.anki_failed", error=e))
+            return
+        self.dismiss()
 
     def eventFilter(self, obj, ev) -> bool:
         if obj is self.parent() and ev.type() == QEvent.Resize:
@@ -2359,6 +2608,8 @@ class EasterEgg(QWidget):
             self._target = 0.0
             for b in self.boxes:
                 b.hide()
+            self._rumble_step()                  # (hidden: the covers settle straight back)
+            self._rumble.stop()
             self._t = time.monotonic()
             self._fade.start()
 
@@ -3017,6 +3268,7 @@ class SettingsDialog(FitsScreen, QDialog):
         super().__init__(parent)
         self._i18n: list[Callable] = []          # re-applies every text when the language is switched
         self._tx(self, "settings.welcome" if welcome else "settings.title", "setWindowTitle")
+        self.setObjectName("settings_dialog")
         self.setMinimumWidth(580)
         # the settings scroll when the screen is too short for them; Cancel / Save stay fixed below
         outer = QVBoxLayout(self)
@@ -3075,7 +3327,7 @@ class SettingsDialog(FitsScreen, QDialog):
         lay.addLayout(pair)
         lay.addSpacing(14)
         lay.addLayout(self._divider())
-        lay.addSpacing(3)                      # + the heading's own top space = the same visible gap as above
+        lay.addSpacing(6)                      # + the heading's own top space = the same visible gap as above
 
         lay.addWidget(self._tx(section(""), "settings.device"))
         self.device = ThemedCombo()
@@ -3105,10 +3357,16 @@ class SettingsDialog(FitsScreen, QDialog):
         lay.addLayout(self._browse_row(self.luna, self._pick_luna))
         lay.addWidget(self._tx(hint(""), "settings.luna_hint"))
 
+        lay.addWidget(self._tx(section(""), "settings.anki"))
+        self.anki = QLineEdit(current.anki_path if current else "")
+        self._tx(self.anki, "settings.anki_placeholder", "setPlaceholderText")
+        lay.addLayout(self._browse_row(self.anki, self._pick_anki))
+        lay.addWidget(self._tx(hint(""), "settings.anki_hint"))
+
         # a faint line: what follows is personalisation
         lay.addSpacing(14)
         lay.addLayout(self._divider())
-        lay.addSpacing(3)                      # + the heading's own top space = the same visible gap as above
+        lay.addSpacing(6)                      # + the heading's own top space = the same visible gap as above
 
         lay.addWidget(self._tx(section(""), "settings.accessibility"))
         lay.addSpacing(4)
@@ -3394,13 +3652,19 @@ class SettingsDialog(FitsScreen, QDialog):
         if f:
             self.luna.setText(str(Path(f)))
 
+    def _pick_anki(self):
+        f, _ = QFileDialog.getOpenFileName(self, tr("settings.pick_anki"), self.anki.text(), "*.exe")
+        if f:
+            self.anki.setText(str(Path(f)))
+
     @guarded
     def _save(self):
         cloud, le, lp = self.cloud.text().strip(), self.le.text().strip(), self.luna.text().strip()
+        anki = self.anki.text().strip()
         if not cloud:
             message(self, tr("settings.need_cloud"))
             return
-        for path in (le, lp):
+        for path in (le, lp, anki):
             if path and not Path(path).is_file():
                 message(self, tr("settings.bad_file", path=path))
                 return
@@ -3441,6 +3705,9 @@ class SettingsDialog(FitsScreen, QDialog):
             show_stats=self.current.show_stats if self.current else True,
             show_bookmarks=self.current.show_bookmarks if self.current else True,
             auto_update=self.auto_update.isChecked(),
+            folder_place=self.current.folder_place if self.current else "mixed",
+            last_sort=self.current.last_sort if self.current else "hours",
+            anki_path=anki,
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
             bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4))
         save_local_settings(self.result_settings)
@@ -4328,10 +4595,13 @@ class RestoreDialog(QDialog):
 
 # =========================================================================== main window
 class MainWindow(TaskOwner, QMainWindow):
+    START_ROWS = 2                          # the window opens just tall enough for this many rows, evenly spaced
+
     def __init__(self, settings: LocalSettings):
         super().__init__()
         self.setWindowIcon(app_icon())
-        self.resize(1200, 800)
+        self.resize(1200, 800)                  # (the height is fitted to the rows when it first opens)
+        self._start_fitted = False
         self.setMinimumHeight(520)          # room for the bars and at least one row of covers
         self.setAcceptDrops(True)
         self.covers = CoverCache()
@@ -4365,6 +4635,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self._slide_t0 = 0.0
         self._dim_gid: Optional[str] = None           # the picked-up game, faded in its place
         self.drag_dim = 0.0                           # 0..1 how far it has faded
+        self.rumble = 0.0                             # how far the covers rock, in degrees (easter egg)
+        self.rumble_t = 0.0                           # the rocking's clock (one per frame for all covers)
 
         central = Backdrop(self)
         self.backdrop = central
@@ -4670,6 +4942,29 @@ class MainWindow(TaskOwner, QMainWindow):
         self.refresh()
         self._update_anim()
         self.share_settings()
+
+    def showEvent(self, ev) -> None:
+        super().showEvent(ev)
+        if not self._start_fitted:
+            self._start_fitted = True
+            self._fit_start_height()
+
+    def _fit_start_height(self) -> None:
+        """Opening size: START_ROWS rows of covers with the same gap above, between and below them (the
+        covers' height depends on the window's width, the bars' on the font). Never taller than the screen."""
+        if self.isMaximized() or self.isFullScreen():
+            return
+        self._fit_grid()
+        need = ROW_GAP + self.START_ROWS * (round(GRID["cover_h"]) + ROW_GAP)
+        h = self.height() + need - self.grid.viewport().height()
+        room = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        frame = max(self.frameGeometry().height() - self.height(), 32)
+        h = max(self.minimumHeight(), min(h, room.height() - frame))
+        if h != self.height():
+            self.resize(self.width(), h)
+            top = self.frameGeometry().top()
+            if top + h + frame > room.bottom() or top < room.top():
+                self.move(self.x(), max(room.top(), room.bottom() - h - frame))
 
     def easter_egg(self) -> None:
         if self.findChild(EasterEgg) is None:
