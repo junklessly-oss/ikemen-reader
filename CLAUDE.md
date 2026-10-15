@@ -263,7 +263,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    overflows by 1-2 characters, else wraps (kinsoku: no line starts with 。、ー」 etc.). Added-game title:
    ignore engine names (AdvGame Module, codeX RScript, TVP(KIRIKIRI)..., Stuff スクリプトエンジン, AVGEngineV2,
    words engine/エンジン/module/script/platform/core), then best of folder/exe name (prefer Japanese,
-   prefer the fuller one: Reli vs Relirium), strip edition tags and 『』 around the whole title.
+   prefer the fuller one: Reli vs Relirium), strip edition tags and 『』 around the whole title. DONE (app.wrap_title / fit_title,
+   titles.guess_title / is_engine_name; tests AddedGameTitles, HoverTitles).
 4. Lights + bookmarks: new LAVENDER light (~#A98BD9) = synced, set up on this device, not yet on the other
    (top bar still "Synced"; Custom Theme + guide). Folder light = pie with EQUAL slices, one per colour
    present (max 6), most important first from 12 o'clock clockwise; whole pie breathes at the normal calm

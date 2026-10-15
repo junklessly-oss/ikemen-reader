@@ -1266,3 +1266,70 @@ class SteamStyleGrid(unittest.TestCase):
                     self.assertLess(g.width() - app.GRID_GAP, (len(row) + 1) * (app.COVER_W + app.GRID_GAP), width)
             finally:
                 w.close()
+
+
+class AddedGameTitles(unittest.TestCase):
+    """1.0.1: engine names in the .exe are ignored; the better of folder / .exe name is used."""
+
+    def test_engine_names(self):
+        from titles import is_engine_name
+        for n in ["AdvGame Module", "codeX RScript", "TVP(KIRIKIRI) Z core / Scripting Platform for Win32",
+                  "Stuff スクリプトエンジン", "AVGEngineV2"]:
+            self.assertTrue(is_engine_name(n), n)
+        for n in ["CROSS†CHANNEL", "スロウ・ダメージ 普及版", "Summer Pockets", "Corepunk Stories"]:
+            self.assertFalse(is_engine_name(n), n)
+
+    def test_folder_or_exe_name(self):
+        from titles import guess_title
+        cases = {                                   # (folder path, exe name) -> title (fake .exes have no info)
+            ("Albatross/信天翁航海録", "信天翁航海録.exe"): "信天翁航海録",
+            ("Kagerou/霞外籠逗留記", "kagerou.exe"): "霞外籠逗留記",
+            ("ooe ver2.0", "大穢-完全版-.exe"): "大穢",
+            ("Relirium/Reli", "Relirium.exe"): "Relirium",
+            ("Mama/Data", "Start.exe"): "Mama",
+            ("Mamatomo/ママトモ", "Start.exe"): "ママトモ",
+            ("Tsukutori/『つくとり』", "TUKU.EXE"): "つくとり",
+            ("Black Sheep Town/BLACK SHEEP TOWN", "Bst.exe"): "BLACK SHEEP TOWN",
+            ("11Gatsu/11月のアルカディア", "BGI.exe"): "11月のアルカディア",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for (folder, exe), want in cases.items():
+                d = Path(tmp) / folder
+                d.mkdir(parents=True, exist_ok=True)
+                (d / exe).write_bytes(b"")
+                self.assertEqual(guess_title(str(d / exe)), want, folder)
+
+    def test_cleaning(self):
+        self.assertEqual(clean_title("大穢-完全版-"), "大穢")
+        self.assertEqual(clean_title("大穢-前編-"), "大穢-前編-")              # a real subtitle stays
+        self.assertEqual(clean_title("『つくとり』"), "つくとり")
+        self.assertEqual(clean_title("【A】 x 【B】"), "【A】 x 【B】")
+
+
+class HoverTitles(unittest.TestCase):
+    """1.0.1: English breaks between words (or after † ・ etc.), Japanese follows its line-break rules and
+    shrinks one size when the last line would hold only one or two characters."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance() or QApplication([])
+
+    def test_wrapping(self):
+        import app
+        from PySide6.QtGui import QFontMetrics
+        f = app.ui_font(11)
+        fm = QFontMetrics(f)
+        self.assertEqual(app.wrap_title("CROSS†CHANNEL", fm, fm.horizontalAdvance("CROSS†CHAN"), 2),
+                         ["CROSS†", "CHANNEL"])
+        self.assertEqual(app.wrap_title("Cross Channel", fm, fm.horizontalAdvance("Cross Chan"), 2),
+                         ["Cross", "Channel"])
+        w = fm.horizontalAdvance("あ" * 8) + 2
+        for text, second in [("あいうえおかきく。けこ", "く。けこ"), ("あいうえおかき「くけこ", "「くけこ"),
+                             ("あいうえおかきくーけこ", "くーけこ"), ("あいうえおかきくっけこ", "くっけこ")]:
+            self.assertEqual(app.wrap_title(text, fm, w, 3)[1], second, text)
+        font, lines = app.fit_title("あいうえおかきくけ", f, w, 2)            # one character over: one size down
+        self.assertEqual((font.pointSize(), lines), (10, ["あいうえおかきくけ"]))
+        font, lines = app.fit_title("Supercalifragilistic expialidociousness", f, w, 2)
+        self.assertEqual(font.pointSize(), 11)                                # English never shrinks

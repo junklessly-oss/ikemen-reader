@@ -32,6 +32,10 @@ _OPEN, _CLOSE = r"[\[\(（【〔「『<＜]", r"[\]\)）】〕」』>＞]"
 _SEPCHARS = "-–—_:：・|｜/／~～"
 
 _BRACKETED = re.compile(rf"{_OPEN}\s*(?:{_TAG})(?:\s*[ /・]\s*(?:{_TAG}))*\s*{_CLOSE}\s*$", re.IGNORECASE)
+# an edition tag between dashes, as in file names: "大穢-完全版-" (a real subtitle like "-前編-" stays)
+_DASHED = re.compile(rf"[-－~～―]\s*(?:{_TAG})\s*[-－~～―]\s*$", re.IGNORECASE)
+_WRAPPED = re.compile(r"^\s*([『「【〔\[(（<＜])(.+)([』」】〕\])）>＞])\s*$")
+_PAIRS = {"『": "』", "「": "」", "【": "】", "〔": "〕", "[": "]", "(": ")", "（": "）", "<": ">", "＜": "＞"}
 _BARE = re.compile(rf"(?:{_TAG})\s*$", re.IGNORECASE)
 _JA_TAG = re.compile(rf"(?:{'|'.join(_EDITIONS_JA)})\s*$", re.IGNORECASE)
 
@@ -48,9 +52,12 @@ def _cut(t: str, start: int) -> str:
 def clean_title(raw: str) -> str:
     """Strip trailing version numbers / edition tags (repeatedly), keep everything else."""
     t = " ".join((raw or "").split())
+    m = _WRAPPED.match(t)
+    if m and _PAIRS.get(m.group(1)) == m.group(3) and not re.search(r"[『「【〔\[(（<＜』」】〕\])）>＞]", m.group(2)):
+        t = m.group(2).strip()               # 『つくとり』 -> つくとり (brackets round the whole title only)
     for _ in range(6):
         new = t
-        m = _BRACKETED.search(new)
+        m = _BRACKETED.search(new) or _DASHED.search(new)
         if m:
             new = _cut(new, m.start())
         else:
@@ -96,17 +103,60 @@ def exe_product_name(exe: str) -> Optional[str]:
     return None
 
 
+# what game engines write into the .exe instead of the game's name ("AdvGame Module", "codeX RScript",
+# "TVP(KIRIKIRI) Z core / Scripting Platform for Win32", "Stuff スクリプトエンジン", "AVGEngineV2")
+_ENGINE = re.compile(r"engine|エンジン|module|script|platform|\bcore\b|kirikiri|krkr|\btvp|siglus|nscripter|"
+                     r"\bbgi\b|ren'?py|tyrano|unity|launcher|runtime|\bplayer\b|^(?:game|application|launcher)$",
+                     re.IGNORECASE)
+# folder / .exe names that say nothing about which game it is
+_GENERIC = {"game", "games", "bin", "data", "system", "program", "x64", "x86", "win", "windows", "start",
+            "launcher", "launch", "setup", "config", "play", "main", "bgi", "update", "patch", "app",
+            "siglusengine", "nscripter", "kirikiri", "krkr", "tyrano", "renpy", "player", "runtime", "exe"}
+_JA = re.compile(r"[぀-ヿ㐀-鿿ｦ-ﾟ]")
+
+
+def is_engine_name(name: str) -> bool:
+    return bool(_ENGINE.search(name or ""))
+
+
+def _usable(name: str) -> bool:
+    n = (name or "").strip()
+    return bool(n) and n.casefold() not in _GENERIC and len(n) >= 2 and not re.fullmatch(r"[a-z]:\\?", n, re.I)
+
+
+def _flat(name: str) -> str:
+    return re.sub(r"[\s\-_・.]", "", name.casefold())
+
+
 def guess_title(exe: str) -> str:
-    """Best title available before the game has ever run: .exe info, else folder name, else exe name."""
+    """Best title available before the game has ever run. The .exe's own name for itself when it is a
+    real title (engines often put their own name there instead); otherwise the better of the game
+    folder's name and the .exe's name: the Japanese one if only one is Japanese, the fuller one if one is
+    a shortened form of the other ("Reli" / "Relirium"), else the folder. A folder called Data, Game...
+    is skipped in favour of the folder above it."""
     name = exe_product_name(exe)
-    if name:
+    if name and not is_engine_name(name):
         return clean_title(name)
     p = Path(exe)
-    folder = p.parent.name
-    generic = {"game", "games", "bin", "data", "system", "program", "x64", "x86", "win", "windows"}
-    if folder and folder.lower() not in generic and not re.fullmatch(r"[a-z]:\\?", folder, re.I):
-        return clean_title(folder)
-    return clean_title(p.stem)
+    folder = p.parent
+    while folder.name and not _usable(folder.name) and folder.parent != folder:
+        folder = folder.parent
+    candidates = [clean_title(n) for n in (folder.name, p.stem) if _usable(n)]
+    candidates = [c for c in candidates if _usable(c)]
+    if not candidates:
+        return clean_title(p.stem)
+    if len(candidates) == 1:
+        return candidates[0]
+    a, b = candidates                                       # folder, exe name
+    ja_a, ja_b = bool(_JA.search(a)), bool(_JA.search(b))
+    if ja_a != ja_b:
+        return a if ja_a else b
+    fa, fb = _flat(a), _flat(b)
+    if fa != fb and fa in fb:
+        return b
+    if fa != fb and fb in fa:
+        return a
+    return a
 
 
 def usable_window_title(title: str) -> bool:

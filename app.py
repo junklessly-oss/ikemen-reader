@@ -15,6 +15,7 @@ import html
 import dataclasses
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -1002,6 +1003,76 @@ def ease(t: float) -> float:
     return t * t * (3 - 2 * t)          # smoothstep: gentle start and finish
 
 
+_CJK = "　-〿぀-ヿ㐀-鿿豈-﫿＀-￯"     # Japanese characters
+_JOINERS = "†‡・/\\-–—_~～×:：&+"          # a title may break after these ("CROSS†" / "CHANNEL")
+_J = re.escape(_JOINERS)
+_TITLE_PIECES = re.compile(rf"[^\s{_CJK}{_J}]+[{_J}]*|[{_J}]+|\s+|.")
+# Japanese line breaking (kinsoku): these never start a line / never end one
+_NO_START = set("、。，．,.・:：;；!！?？ー～〜)）]］}｝」』】〕〉》’”ゝゞヽヾぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々")
+_NO_END = set("(（[［{｛「『【〔〈《‘“")
+
+
+def has_japanese(text: str) -> bool:
+    return re.search(rf"[{_CJK}]", text) is not None
+
+
+def wrap_title(text: str, fm: QFontMetrics, width: float, max_lines: int) -> list[str]:
+    """Wrap a title to max_lines, with an ellipsis if it still doesn't fit. English breaks between words
+    (or after a joining symbol like † or ・), and splits a word only when the word alone is wider than the
+    line. Japanese can break between any two characters, except that no line starts with 、。ー」 or a
+    small kana, and none ends with 「『（ (the character moves to the next line with its neighbour)."""
+    pieces = _TITLE_PIECES.findall(text)
+    lines: list[str] = []
+    cur: list[str] = []
+    i = 0
+    while i < len(pieces):
+        piece = pieces[i]
+        if cur and fm.horizontalAdvance("".join(cur) + piece) > width:
+            carry: list[str] = []
+            if not piece.isspace() and len(cur) > 1 and not cur[-1].isspace() and                     (piece[0] in _NO_START or cur[-1][-1] in _NO_END):
+                carry = [cur.pop()]                  # keep the pair together on the next line
+            lines.append("".join(cur).rstrip())
+            cur = carry
+            if len(lines) == max_lines:
+                rest = "".join(carry + pieces[i:]).lstrip()
+                lines[-1] = fm.elidedText(lines[-1] + ("" if has_japanese(rest[:1]) else " ") + rest,
+                                          Qt.ElideRight, int(width))
+                return lines
+            if piece.isspace():
+                i += 1
+            continue
+        if not cur and not piece.isspace() and fm.horizontalAdvance(piece) > width:   # one very long word
+            cut = 1
+            while cut < len(piece) and fm.horizontalAdvance(piece[:cut + 1]) <= width:
+                cut += 1
+            pieces[i:i + 1] = [piece[:cut], piece[cut:]]
+            piece = pieces[i]
+        if not cur and piece.isspace():
+            i += 1                                   # no line starts with a space
+            continue
+        cur.append(piece)
+        i += 1
+    if cur:
+        lines.append("".join(cur).rstrip())
+    return lines
+
+
+def fit_title(text: str, font: QFont, width: float, max_lines: int) -> tuple[QFont, list[str]]:
+    """The title's font and lines. A Japanese title whose last line would hold only one or two characters
+    is set one size smaller when that saves the line (a big jump in size would look odd, so only one)."""
+    fm = QFontMetrics(font)
+    lines = wrap_title(text, fm, width, max_lines)
+    if has_japanese(text):
+        natural = wrap_title(text, fm, width, 99)
+        if len(natural) > 1 and len(natural[-1].strip()) <= 2:
+            smaller = QFont(font)
+            smaller.setPointSizeF(font.pointSizeF() - 1)
+            sfm = QFontMetrics(smaller)
+            if len(wrap_title(text, sfm, width, 99)) < len(natural):
+                return smaller, wrap_title(text, sfm, width, max_lines)
+    return font, lines
+
+
 class CardDelegate(QStyledItemDelegate):
     def __init__(self, window: "MainWindow"):
         super().__init__(window)
@@ -1060,10 +1131,10 @@ class CardDelegate(QStyledItemDelegate):
         if title:
             ft = QFont(option.font)
             ft.setPointSize(11)
+            ft, lines = fit_title(title, ft, text_w, 2)
             fm = QFontMetrics(ft)
             p.setFont(ft)
             p.setPen(QColor(DARK["text"]))
-            lines = self._wrap(title, fm, text_w, 2)
             top = y - fm_small.height() - 4 - fm.height() * len(lines)
             for i, l in enumerate(lines):
                 p.drawText(QRectF(cover.x() + 12, top + i * fm.height(), text_w, fm.height()),
@@ -1098,9 +1169,11 @@ class CardDelegate(QStyledItemDelegate):
             q.fillRect(rect, grad)
             f = QFont(font)
             f.setPointSize(13)
+            box = rect.adjusted(16, 16, -16, -16)
+            f, lines = fit_title(title, f, box.width(), 7)
             q.setFont(f)
             q.setPen(QColor(COLORS["text"]))
-            q.drawText(rect.adjusted(16, 16, -16, -16), Qt.AlignCenter | Qt.TextWordWrap, title)
+            q.drawText(box, Qt.AlignCenter, "\n".join(lines))
             q.end()
             if len(self._placeholders) > 400:
                 self._placeholders.clear()
@@ -1232,35 +1305,8 @@ class CardDelegate(QStyledItemDelegate):
 
     @staticmethod
     def _wrap(text: str, fm: QFontMetrics, width: float, max_lines: int) -> list[str]:
-        """Wrap to max_lines, ellipsis on overflow. English breaks between words; Japanese (no spaces)
-        can break between any two characters."""
-        import re as _re
-        # pieces: a run of non-space, non-Japanese characters is one word; Japanese characters stand alone
-        cjk = "\u3000-\u303f\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef"
-        pieces = _re.findall(rf"[^\s{cjk}]+|\s+|.", text)
-        lines, cur, i = [], "", 0
-        while i < len(pieces):
-            piece = pieces[i]
-            if cur and fm.horizontalAdvance(cur + piece) > width:
-                lines.append(cur.rstrip())
-                cur = ""
-                if len(lines) == max_lines:
-                    rest = "".join(pieces[i:])
-                    lines[-1] = fm.elidedText(lines[-1] + " " + rest.lstrip(), Qt.ElideRight, int(width))
-                    return lines
-                if piece.isspace():
-                    i += 1
-                continue
-            if not cur and fm.horizontalAdvance(piece) > width:   # one very long word: split it
-                cut = 1
-                while cut < len(piece) and fm.horizontalAdvance(piece[:cut + 1]) <= width:
-                    cut += 1
-                pieces[i:i + 1] = [piece[:cut], piece[cut:]]
-                piece = pieces[i]
-            cur += piece
-            i += 1
-        lines.append(cur.rstrip())
-        return lines
+        """Wrap to max_lines, ellipsis on overflow. See wrap_title."""
+        return wrap_title(text, fm, width, max_lines)
 
     def _paint_light(self, p: QPainter, c: QPointF, state: str) -> None:
         colour_key, pulse, _ = STATE_LOOK.get(state, STATE_LOOK["checking"])
