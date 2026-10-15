@@ -151,7 +151,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.0.0" in app.py.
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.0.1" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -380,6 +380,17 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   runs / saves sync. last_version.txt -> "Updated to X" note. Release zips must keep the layout
   "Ikemen Reader/Ikemen Reader.exe" and be named *Ikemen*.zip; tag = version ("1.0.1").
   1.0.0 has no updater: 1.0.1 is installed by hand; 1.0.1 -> 1.0.2 is the first automatic update.
+
+## Sweep before 1.0.1 (2026-10-15)
+- Guide: title guessing, VNDB suggestions, edge-scrolling drags, a folder's own My Arrangement, search showing games
+  inside folders, Backspace; "Making It Yours" follows the Settings order. Still nothing about the easter egg / Anki.
+- Text: tooltips that are sentences end with a full stop (EN + JA); JA fixes: フォルダーを先頭に / 末尾に / 混ぜる
+  (混在 can't take を), no まだ+未 doubling, admin hint says right-click the icon, 後で everywhere, 元にするテーマ.
+- Animations: see "Animation pass" above. Fixes found while stress testing: Edit window's Cancel/Save touched
+  (BUTTON_GAP = 8 on every button row, pop-ups were 16, others 6-11); status drop-down shows No Status with
+  nothing selected. Random UI stress (21 action kinds incl. drags, other-device changes, language/theme switches,
+  300 games + background, no delays): ~13,000 actions, 0 errors. Packaged 1.0.1 built and run; the real updater
+  swap rehearsed on the 134 MB build (updated, previous kept, extra files kept, restarted). Tests: 161.
 
 ## Ideas for later (owner interested, not scheduled)
 - macOS / Linux support: UI, sync engine, library already portable; games would run through Wine (start/track via
