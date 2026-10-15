@@ -1670,6 +1670,55 @@ class StarButton(QPushButton):
         p.end()
 
 
+class ThemedCombo(QComboBox):
+    """A drop-down whose list opens without a white flash. Windows puts a newly shown ordinary window on
+    screen before the program has drawn it, white, for a frame - and Qt's slide-open effect even makes an
+    extra window just for the slide. Here the list's window is a layered one (WA_TranslucentBackground),
+    which Windows only shows once it has been drawn, and the slide-open is done on that same window by
+    revealing it top-down (or bottom-up, when the list opens above) with a growing mask."""
+    SLIDE_S = 0.16
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        QApplication.setEffectEnabled(Qt.UI_AnimateCombo, False)     # (Qt's slide: its extra window flashes)
+        self._box().setAttribute(Qt.WA_TranslucentBackground, True)    # before its window first exists
+        self._t0 = 0.0
+        self._down = True
+        self._last = 0.0
+        self._slide_timer = QTimer(self)
+        self._slide_timer.setTimerType(Qt.PreciseTimer)
+        self._slide_timer.setInterval(0)                                # paced by time, like the other animations
+        self._slide_timer.timeout.connect(self._slide)
+
+    def _box(self) -> QWidget:
+        return self.view().parentWidget()          # Qt's frame round the list: the pop-up window itself
+
+    def showPopup(self) -> None:
+        box = self._box()
+        box.setMask(QRegion(0, 0, 1, 1))             # hidden until the slide reveals it
+        super().showPopup()
+        self._down = box.mapToGlobal(QPoint(0, 0)).y() >= self.mapToGlobal(QPoint(0, 0)).y()
+        self._t0 = self._last = time.monotonic()
+        self._slide()
+        self._slide_timer.start()
+
+    def hidePopup(self) -> None:
+        self._slide_timer.stop()
+        self._box().clearMask()
+        super().hidePopup()
+
+    def _slide(self) -> None:
+        box = self._box()
+        t = (time.monotonic() - self._t0) / self.SLIDE_S
+        if not box.isVisible() or t >= 1:
+            self._slide_timer.stop()
+            box.clearMask()
+            return
+        e = 1 - (1 - t) ** 2.2                       # ease out
+        h = max(1, round(box.height() * e))
+        box.setMask(QRegion(0, 0 if self._down else box.height() - h, box.width(), h))
+
+
 class DragGhost(QWidget):
     """The cover that follows the mouse while a game (or folder) is dragged. Our own see-through window (not
     Windows' drag picture, which can't change mid-drag), so it can fade almost away over the trash can.
@@ -1751,16 +1800,20 @@ class DragGhost(QWidget):
         self._timer.start()
 
     def finish(self) -> None:
-        """Stop at once (another drag starting, or the window closing)."""
+        """Done (or stopped early: another drag starting). The real cover is drawn first (done()), and only
+        then does this one go - the other way round, for a frame neither is there and the spot flashes."""
         if self._mode == "gone":
             return
         self._mode = "gone"
         self._timer.stop()
-        self.hide()
-        self.deleteLater()
         done, self._done = self._done, None
         if done is not None:
             done()
+        QTimer.singleShot(40, self._vanish)
+
+    def _vanish(self) -> None:
+        self.hide()
+        self.deleteLater()
 
     def _step(self) -> None:
         now = time.monotonic()
@@ -2579,7 +2632,7 @@ class FontDialog(QDialog):
         lay.setSpacing(10)
         lay.addWidget(hint(tr(f"font.hint_{lang}")))
         row = QHBoxLayout()
-        self.combo = QComboBox(objectName="fontpick")
+        self.combo = ThemedCombo(objectName="fontpick")
         self.combo.setItemDelegate(QStyledItemDelegate(self.combo))    # honours each item's own font
         self.combo.currentIndexChanged.connect(self._show_sample)
         row.addWidget(self.combo, 1)
@@ -2958,7 +3011,7 @@ class SettingsDialog(FitsScreen, QDialog):
             lay.addSpacing(6)
 
         lay.addWidget(self._tx(section(""), "settings.language"))
-        self.lang = QComboBox()
+        self.lang = ThemedCombo()
         self.lang.addItem(tr("lang.en"), "en")
         self.lang.addItem(tr("lang.ja"), "ja")
         for i, key in enumerate(("lang.en", "lang.ja")):
@@ -3000,7 +3053,7 @@ class SettingsDialog(FitsScreen, QDialog):
         lay.addSpacing(3)                      # + the heading's own top space = the same visible gap as above
 
         lay.addWidget(self._tx(section(""), "settings.device"))
-        self.device = QComboBox()
+        self.device = ThemedCombo()
         for slot in SLOTS:
             self.device.addItem(tr("settings.device_n", n=SLOT_NUMBER[slot]), slot)
             self._i18n.append(lambda i=self.device.count() - 1, n=SLOT_NUMBER[slot]:
@@ -3732,7 +3785,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
         self.use_le.setChecked(bool(game and game.use_le))
         grid.addWidget(self.use_luna, 1, 0)
         grid.addWidget(self.use_le, 2, 0)
-        self.status = QComboBox()
+        self.status = ThemedCombo()
         for s in STATUSES:
             self.status.addItem(tr(f"status.{s or 'none'}"), s)
         self.status.setCurrentIndex(STATUSES.index(game.status) if game else 0)
@@ -4310,10 +4363,10 @@ class MainWindow(TaskOwner, QMainWindow):
         self.search.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.search.textChanged.connect(self._apply_filter)
         tl.addWidget(self.search)
-        self.sort = QComboBox()
-        self.sort.currentIndexChanged.connect(self._sort_changed)
+        self.sort = ThemedCombo()
+        self.sort.activated.connect(self._sort_picked)
         tl.addWidget(self.sort)
-        self.filter = QComboBox()
+        self.filter = ThemedCombo()
         self.filter.currentIndexChanged.connect(self._filter_changed)
         tl.addWidget(self.filter)
         self.stats_btn = QPushButton()
@@ -4414,7 +4467,7 @@ class MainWindow(TaskOwner, QMainWindow):
             w.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             info.addWidget(w)
         dl.addLayout(info, 1)
-        self.d_status = QComboBox()
+        self.d_status = ThemedCombo()
         self.d_status.currentIndexChanged.connect(self._status_changed)
         dl.addWidget(self.d_status)
         self.saves_btn = QPushButton()
@@ -5071,9 +5124,15 @@ class MainWindow(TaskOwner, QMainWindow):
             return              # locked for a moment: it's saved with the next change anyway
         self.share_settings()
 
+    def _sort_picked(self, index: int) -> None:
+        """A choice in the sort drop-down. Acted on just after the click: rebuilding the drop-down's list
+        while Qt is still handling the click left it unsure what was selected (the next pick was ignored)."""
+        d = self.sort.itemData(index)
+        if d:
+            QTimer.singleShot(0, lambda: self.choose_sort(d))
+
     @guarded
-    def _sort_changed(self, _i: int) -> None:
-        d = self.sort.currentData()
+    def choose_sort(self, d: str) -> None:
         if not d:
             return
         if d.startswith("place:"):                   # Folders First / Mixed / Folders Last
@@ -5537,11 +5596,12 @@ class MainWindow(TaskOwner, QMainWindow):
         ghost.land(to, end_opacity, self._landed)
 
     def _landed(self) -> None:
-        """The dropped cover has arrived: the real one takes over (no fade: they're in the same place)."""
+        """The dropped cover has arrived: the real one takes over (no fade: they're in the same place). Drawn
+        right now, before the landing cover goes."""
         self._landing = None
         self.drag_dim = 0.0
         self._dim_gid = None
-        self.grid.viewport().update()
+        self.grid.viewport().repaint()
         self._update_anim()
 
     # ------------------------------------------------------------------ covers sliding into new places
@@ -5601,9 +5661,8 @@ class MainWindow(TaskOwner, QMainWindow):
                 changed = True
             if changed:
                 self._save_view_choice()
-        self._read_orders()
         self._fill_sort()
-        self.refresh()
+        self._reshow()
         self._select_item(iid)
         if switched:
             self.statusBar().showMessage(tr("status.now_custom"), 8000)
@@ -5671,12 +5730,12 @@ class MainWindow(TaskOwner, QMainWindow):
             return                 # the game vanished meanwhile (e.g. removed on the other device), or itself
         if on_back:
             self.library.set_folder(gid, "")
-            self.refresh()
+            self._reshow()
             return
         if is_folder(target):
             fid = target[len(FOLDER_PREFIX):]
             self.library.set_folder(gid, fid)
-            self.refresh()
+            self._reshow()
             self._select_item(target)
             return
         other = self.games.get(target)
@@ -5684,13 +5743,22 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         if other.folder:                        # (while searching) joining that game's folder
             self.library.set_folder(gid, other.folder)
-            self.refresh()
+            self._reshow()
             return
         fid = self.library.create_folder(tr("folder.new_name"))
         self.library.set_folder(target, fid)
         self.library.set_folder(gid, fid)
-        self.refresh()
+        self._reshow()
         self._select_item(FOLDER_PREFIX + fid)
+
+    def _reshow(self) -> None:
+        """After a change made here (folders, order): the games and folders read again and the grid redrawn,
+        without a full refresh (no save check, no "Syncing" in the top bar - the saves haven't changed)."""
+        self.games = {g.game_id: g for g in self.library.list_games()}
+        self.folder_names = self.library.list_folders()
+        self._read_orders()
+        self._rebuild()
+        self._own_change()
 
     def _select_item(self, iid: str) -> None:
         for i in range(self.grid.count()):
@@ -6426,6 +6494,7 @@ def main() -> None:
             pass
     app = QApplication(sys.argv)
     app.setApplicationName("Ikemen Reader")
+    app.setEffectEnabled(Qt.UI_AnimateCombo, False)   # drop-downs slide open by themselves (ThemedCombo)
     if hand_over_to_running_copy():
         return                                  # already open: that window comes to the front instead
     install_error_net()

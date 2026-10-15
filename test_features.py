@@ -1645,17 +1645,17 @@ class SortingAndCustomOrder(unittest.TestCase):
         return w, lib, ids, fid
 
     def test_folder_places_and_custom(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
             w, lib, ids, fid = self._window(tmp, ["A", "B", "C"], ["F1", "F2"])
             try:
                 import app
                 shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
                 f = app.FOLDER_PREFIX + fid
                 self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])     # mixed: folder by its latest game
-                w.sort.setCurrentIndex(w.sort.findData("place:first"))
+                w.choose_sort("place:first")
                 self.assertEqual(shown(), [f, ids["A"], ids["B"], ids["C"]])
                 self.assertEqual(w.sort.currentData(), "recent")                   # the sort itself stays
-                w.sort.setCurrentIndex(w.sort.findData("place:last"))
+                w.choose_sort("place:last")
                 self.assertEqual(shown()[-1], f)
                 # drag C between A and B: switches to Custom, starting from what was shown
                 w._dragging = ids["C"]
@@ -1673,7 +1673,7 @@ class SortingAndCustomOrder(unittest.TestCase):
                 w.close()
 
     def test_folder_own_sort(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
             w, lib, ids, fid = self._window(tmp, ["A"], ["Zeta", "Alpha", "Mid"])
             try:
                 import app
@@ -1681,11 +1681,11 @@ class SortingAndCustomOrder(unittest.TestCase):
                 w.open_folder(fid)
                 self.assertEqual(w.sort.currentData(), "follow")                   # untouched: Same as Library
                 self.assertEqual(shown(), [ids["Zeta"], ids["Alpha"], ids["Mid"]])  # recent, like the library
-                w.sort.setCurrentIndex(w.sort.findData("title"))
+                w.choose_sort("title")
                 self.assertEqual(shown(), [ids["Alpha"], ids["Mid"], ids["Zeta"]])
                 self.assertEqual(lib.folder_sort(fid), "title")
                 w.close_folder()
-                w.sort.setCurrentIndex(w.sort.findData("hours"))                  # the library's sort changes...
+                w.choose_sort("hours")                  # the library's sort changes...
                 w.open_folder(fid)
                 self.assertEqual(w.sort.currentData(), "title")                    # ...the folder keeps its own
                 w._dragging = ids["Zeta"]
@@ -1694,13 +1694,13 @@ class SortingAndCustomOrder(unittest.TestCase):
                 self.assertEqual(lib.folder_sort(fid), "custom")
                 self.assertEqual(shown()[0], ids["Zeta"])
                 self.assertEqual(w.folder_games[fid][0].game_id, ids["Zeta"])     # the mosaic follows it
-                w.sort.setCurrentIndex(w.sort.findData("follow"))
+                w.choose_sort("follow")
                 self.assertEqual(lib.folder_sort(fid), "")
             finally:
                 w.close()
 
     def test_onto_or_between(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
             w, lib, ids, fid = self._window(tmp, ["A", "B", "C"])
             try:
                 import app
@@ -1727,7 +1727,7 @@ class DragAndDropFeel(unittest.TestCase):
     def test_moving_a_folder_switches_to_mixed_and_drops_land(self):
         from PySide6.QtCore import QEventLoop, QPoint, QTimer
         t = SortingAndCustomOrder()
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
             w, lib, ids, fid = t._window(tmp, ["A", "B", "C"], ["F1"])
             try:
                 import app
@@ -1736,7 +1736,7 @@ class DragAndDropFeel(unittest.TestCase):
                     loop = QEventLoop()
                     QTimer.singleShot(ms, loop.quit)
                     loop.exec()
-                w.sort.setCurrentIndex(w.sort.findData("place:first"))
+                w.choose_sort("place:first")
                 f = app.FOLDER_PREFIX + fid
                 w._move_to(f, 3)
                 self.assertEqual((w.settings.sort, w.settings.folder_place), ("custom", "mixed"))
@@ -1753,5 +1753,33 @@ class DragAndDropFeel(unittest.TestCase):
                 wait(450)
                 self.assertIsNone(w._landing)
                 self.assertEqual((w.slides, w.drag_dim, w._dim_gid), ({}, 0.0, None))
+            finally:
+                w.close()
+
+
+class SortDropDownClicks(unittest.TestCase):
+    """Picking options one after another by clicking (Qt's activated signal) always applies each pick, and
+    the drop-downs' lists are layered windows (no white first frame) that slide open by themselves."""
+
+    def test_consecutive_picks_apply(self):
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt as QtNS
+        t = SortingAndCustomOrder()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
+            w, lib, ids, fid = t._window(tmp, ["A", "B"], ["F1"])
+            try:
+                def click(data):
+                    w.sort.activated.emit(w.sort.findData(data))
+                    for _ in range(3):
+                        QApplication.processEvents()
+                for place in ("first", "last", "mixed", "first"):
+                    click("place:" + place)
+                    self.assertEqual(w.settings.folder_place, place)
+                    self.assertEqual(w.sort.currentData(), "recent")     # the shown sort stays
+                click("title")
+                click("place:last")
+                self.assertEqual((w.settings.sort, w.settings.folder_place), ("title", "last"))
+                self.assertTrue(w.sort.view().parentWidget().testAttribute(QtNS.WA_TranslucentBackground))
+                self.assertFalse(QApplication.isEffectEnabled(QtNS.UI_AnimateCombo))
             finally:
                 w.close()
