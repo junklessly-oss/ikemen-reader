@@ -20,6 +20,26 @@ from sync_engine import Action, SyncEngine, is_cloud_duplicate
 from test_launcher import FakeGameFolder
 from titles import clean_title
 
+
+# ---------------------------------------------------------------------------------------------------------------
+# Every test runs with a throwaway %APPDATA%: a test that opens a window and changes a setting must never write the
+# owner's real settings (it once replaced the real cloud folder with a test folder, and the library looked empty).
+_APPDATA: dict = {}
+
+
+def setUpModule():
+    _APPDATA["real"] = os.environ.get("APPDATA")
+    _APPDATA["safe"] = tempfile.mkdtemp(prefix="ikemen-test-appdata-")
+    os.environ["APPDATA"] = _APPDATA["safe"]
+
+
+def tearDownModule():
+    import shutil
+    if _APPDATA.get("real") is not None:
+        os.environ["APPDATA"] = _APPDATA["real"]
+    shutil.rmtree(_APPDATA["safe"], ignore_errors=True)
+
+
 IS_WINDOWS = sys.platform == "win32"
 GAME = "Fake VN"
 
