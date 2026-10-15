@@ -1673,7 +1673,7 @@ class _SeparatorDelegate(QStyledItemDelegate):
         line.setAlphaF(0.45)
         p.save()
         p.fillRect(r, QColor(COLORS["input"]))
-        p.fillRect(QRect(r.left() + 8, r.center().y(), r.width() - 16, 1), line)
+        p.fillRect(QRect(r.left(), r.center().y(), r.width(), 1), line)       # edge to edge
         p.restore()
 
     def sizeHint(self, option, index) -> QSize:
