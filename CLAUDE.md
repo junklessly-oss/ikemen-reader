@@ -79,7 +79,12 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   built-in + user-added, each in its own face; Add Font copies the file to %APPDATA%\IkemenReader\fonts).
   LocalSettings font_en/font_ja; ui_families() puts the current language's font first, the other second
   (fallback for missing characters); build_style uses it. Saves immediately like the theme windows.
-- Performance: the animation timer only redraws what moves (hovered tile + shadow; small squares around
+- Performance: NEVER touch the cloud drive while painting. Google Drive's G: answers a file stat in ~0.3 ms when idle
+  and can stall for seconds while busy; the delegate used to stat every cover (CoverCache.get + artwork_path) on
+  every frame (~580/s with 20 covers) -> lag at launch, laggy drags, dropped drags, a 7 s delay on the sort
+  drop-down's tick. Now MainWindow.art() + CoverCache._mtimes remember them until refresh() (_forget_files).
+  Drops/rearranging update memory and write once (_reshow(changed ids) / in-memory order), no full reload.
+- Performance (older): the animation timer only redraws what moves (hovered tile + shadow; small squares around
   each visible light), covers without art are cached pixmaps (CardDelegate._placeholder). Measured ~62 fps,
   ~2 ms/frame with 120 games + background. warm_up() sleeps 10 ms per process so startup stays smooth
   (2 → 35 fps during the first seconds). Theme editor previews throttled to every 80 ms while dragging.

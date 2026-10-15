@@ -966,14 +966,27 @@ class CoverCache:
         from collections import OrderedDict
         self._images: "OrderedDict[tuple[str, float], QImage]" = OrderedDict()
         self._cache: "OrderedDict[tuple, QPixmap]" = OrderedDict()
+        # a cover file's modified time, remembered: covers are drawn dozens of times a second, and asking
+        # the cloud drive (Google Drive's G:) each time made everything lag, badly while it was busy
+        self._mtimes: dict[str, Optional[float]] = {}
+
+    def forget_files(self) -> None:
+        """The library was reloaded: look at the cover files again (a cover may have been changed)."""
+        self._mtimes.clear()
 
     def get(self, path: Optional[Path], crop: tuple[float, float, float] = (1.0, 0.5, 0.5)) -> Optional[QPixmap]:
         if not path:
             return None
-        try:
-            src_key = (str(path), path.stat().st_mtime)
-        except OSError:
+        sp = str(path)
+        if sp not in self._mtimes:
+            try:
+                self._mtimes[sp] = path.stat().st_mtime
+            except OSError:
+                self._mtimes[sp] = None
+        mtime = self._mtimes[sp]
+        if mtime is None:
             return None
+        src_key = (sp, mtime)
         key = src_key + tuple(round(v, 4) for v in crop)
         if key in self._cache:
             self._cache.move_to_end(key)
@@ -1305,7 +1318,7 @@ class CardDelegate(QStyledItemDelegate):
                 mclip.addRoundedRect(r, 5, 5)
                 q.save()
                 q.setClipPath(mclip, Qt.IntersectClip)
-                pm = self.w.covers.get(self.w.library.artwork_path(g), (g.crop_zoom, g.crop_x, g.crop_y))
+                pm = self.w.covers.get(self.w.art(g), (g.crop_zoom, g.crop_x, g.crop_y))
                 if pm:
                     q.drawPixmap(r, pm, QRectF(pm.rect()))
                 else:
@@ -1349,7 +1362,7 @@ class CardDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.State_Selected)
         cover = self.cover_rect(option.rect, self.w.hover.get(gid, 0.0))
         self._shadow(p, cover, e)
-        pm = self.w.covers.get(self.w.library.artwork_path(game), (game.crop_zoom, game.crop_x, game.crop_y))
+        pm = self.w.covers.get(self.w.art(game), (game.crop_zoom, game.crop_x, game.crop_y))
 
         def draw(q: QPainter, rect: QRectF) -> None:
             if pm:
@@ -4310,6 +4323,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self.setMinimumHeight(520)          # room for the bars and at least one row of covers
         self.setAcceptDrops(True)
         self.covers = CoverCache()
+        self._art: dict = {}                          # (game id, cover file name) -> its path, see art()
         self.games: dict[str, Game] = {}
         self.sync_states: dict[str, str] = {}
         self.hover: dict[str, float] = {}       # game_id -> 0..1 hover progress
@@ -4668,8 +4682,21 @@ class MainWindow(TaskOwner, QMainWindow):
                 pass
         self._run(work, lambda _: None, failed)
 
+    def art(self, game: Game) -> Optional[Path]:
+        """A game's cover file (None: no cover). Remembered until the library is reloaded: looking on the
+        cloud drive on every redraw is far too slow (see CoverCache)."""
+        key = (game.game_id, game.artwork)
+        if key not in self._art:
+            self._art[key] = self.library.artwork_path(game)
+        return self._art[key]
+
+    def _forget_files(self) -> None:
+        self._art = {}
+        self.covers.forget_files()
+
     def refresh(self) -> None:
         """Re-read the library from the cloud folder, then rebuild the grid."""
+        self._forget_files()
         games = self.library.list_games() if Path(self.settings.cloud_root).is_dir() else []
         self.games = {g.game_id: g for g in games}
         self.folder_names = self.library.list_folders() if games else {}
@@ -5394,7 +5421,7 @@ class MainWindow(TaskOwner, QMainWindow):
         clip = QPainterPath()
         clip.addRoundedRect(QRectF(0, 0, w, h), 8, 8)
         p.setClipPath(clip)
-        pm = self.covers.get(self.library.artwork_path(g), (g.crop_zoom, g.crop_x, g.crop_y))
+        pm = self.covers.get(self.art(g), (g.crop_zoom, g.crop_x, g.crop_y))
         if pm:
             p.drawPixmap(QRectF(0, 0, w, h), pm, QRectF(pm.rect()))
         else:
@@ -5653,11 +5680,15 @@ class MainWindow(TaskOwner, QMainWindow):
         if self.current_folder:
             fid = self.current_folder
             self.library.set_folder_order(fid, ids)
+            meta = self.folder_meta.setdefault(fid, {"sort": "", "order": []})
+            meta["order"] = list(ids)
             if self.folder_sort(fid) != "custom":
                 self.library.set_folder_sort(fid, "custom")
+                meta["sort"] = "custom"
                 switched = True
         else:
             self.library.set_library_order(ids)
+            self.library_order = list(ids)
             changed = False
             if self.settings.sort != "custom":
                 self.settings.sort = "custom"
@@ -5668,7 +5699,8 @@ class MainWindow(TaskOwner, QMainWindow):
             if changed:
                 self._save_view_choice()
         self._fill_sort()
-        self._reshow()
+        self._rebuild()
+        self._own_change()
         self._select_item(iid)
         if switched:
             self.statusBar().showMessage(tr("status.now_custom"), 8000)
@@ -5736,12 +5768,12 @@ class MainWindow(TaskOwner, QMainWindow):
             return                 # the game vanished meanwhile (e.g. removed on the other device), or itself
         if on_back:
             self.library.set_folder(gid, "")
-            self._reshow()
+            self._reshow((gid,))
             return
         if is_folder(target):
             fid = target[len(FOLDER_PREFIX):]
             self.library.set_folder(gid, fid)
-            self._reshow()
+            self._reshow((gid,))
             self._select_item(target)
             return
         other = self.games.get(target)
@@ -5749,18 +5781,23 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         if other.folder:                        # (while searching) joining that game's folder
             self.library.set_folder(gid, other.folder)
-            self._reshow()
+            self._reshow((gid,))
             return
         fid = self.library.create_folder(tr("folder.new_name"))
         self.library.set_folder(target, fid)
         self.library.set_folder(gid, fid)
-        self._reshow()
+        self._reshow((gid, target))
         self._select_item(FOLDER_PREFIX + fid)
 
-    def _reshow(self) -> None:
-        """After a change made here (folders, order): the games and folders read again and the grid redrawn,
-        without a full refresh (no save check, no "Syncing" in the top bar - the saves haven't changed)."""
-        self.games = {g.game_id: g for g in self.library.list_games()}
+    def _reshow(self, changed: tuple = ()) -> None:
+        """After a change made here (folders, order): only the games that changed are read again, then the grid
+        is redrawn - no full reload, no save check, no "Syncing" in the top bar (the saves haven't changed)."""
+        for gid in changed:
+            g = self.library.get(gid)
+            if g is None:
+                self.games.pop(gid, None)
+            else:
+                self.games[gid] = g
         self.folder_names = self.library.list_folders()
         self._read_orders()
         self._rebuild()
