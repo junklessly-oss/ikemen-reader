@@ -87,7 +87,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Animation pass (2026-10-15, measured under the real event loop; frames are a steady 16.0 ms there):
   CoverCache.prepare/accept: MainWindow._prefetch_covers decodes covers (shown order, then the rest of each
   folder) + checks artwork files in a background task after every _rebuild -> first scroll 84 -> 5 ms, first
-  folder open 180 -> 20 ms. LibraryGrid.visible_range() (binary search) for the per-frame loops (_tick,
+  folder open 180 -> 20-30 ms; it starts PREFETCH_QUIET_MS (500 ms) after the last rebuild (starting at once
+  slowed opening a 600-game library by 0.75 s), and waiting covers + drawn covers stay within MAX_COVERS (_trim_ready).
+  LibraryGrid.visible_range() (binary search) for the per-frame loops (_tick,
   _drop_spot): tick cost no longer grows with the library. DragGhost shrinks its window after the lift.
   Trash/bookmark icons brighten with their growth (no opacity jump); Read pulse settles by time.
   Additions: search/filter changes glide like sorts (_apply_filter: _positions incl. glide offsets, new covers

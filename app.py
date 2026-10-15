@@ -601,6 +601,7 @@ FOLDER_ANIM_MS = 280                 # opening / closing a folder: its games gro
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 LIGHT_FADE_S = 0.45                  # a light changing colour cross-fades this long
+PREFETCH_QUIET_MS = 500              # covers are prepared in the background once nothing has changed this long
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
 RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
 STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
@@ -1060,7 +1061,13 @@ class CoverCache:
             self._cache[key] = QPixmap.fromImage(part)
             while len(self._cache) > self.MAX_COVERS:
                 self._cache.popitem(last=False)
+            self._trim_ready()
         return self._cache[key]
+
+    def _trim_ready(self) -> None:
+        """Covers drawn + covers waiting stay within MAX_COVERS (the least wanted waiting ones go first)."""
+        while self._ready and len(self._cache) + len(self._ready) > self.MAX_COVERS:
+            self._ready.pop(next(reversed(self._ready)))
 
     @staticmethod
     def _key(sp: str, mtime: float, crop) -> tuple:
@@ -1102,9 +1109,8 @@ class CoverCache:
                 continue                               # the file changed meanwhile: decoded again when drawn
             key = self._key(sp, mtime, crop)
             if key not in self._cache:
-                self._ready[key] = part
-        while len(self._ready) > self.MAX_COVERS:
-            self._ready.pop(next(iter(self._ready)))
+                self._ready[key] = part                # (in the order wanted: most wanted first)
+        self._trim_ready()
 
     @staticmethod
     def _decode(path: Path, zoom: float) -> Optional[QImage]:
@@ -4725,6 +4731,13 @@ class MainWindow(TaskOwner, QMainWindow):
         self.setMinimumHeight(520)          # room for the bars and at least one row of covers
         self.setAcceptDrops(True)
         self.covers = CoverCache()
+        # covers are prepared in the background once things are quiet (not while the window opens, or between
+        # keystrokes of a search): a burst of decoding then would slow what you're waiting for
+        self._prefetch_wait = QTimer(self)
+        self._prefetch_wait.setSingleShot(True)
+        self._prefetch_wait.setInterval(PREFETCH_QUIET_MS)
+        self._prefetch_wait.timeout.connect(lambda: self._prefetch_covers(self._prefetch_entries))
+        self._prefetch_entries: list = []
         self._art: dict = {}                          # (game id, cover file name) -> its path, see art()
         self.games: dict[str, Game] = {}
         self.sync_states: dict[str, str] = {}
@@ -5322,7 +5335,8 @@ class MainWindow(TaskOwner, QMainWindow):
         else:
             self._mark_sort()                           # (folders may have come or gone: greyed or not)
         self._update_details()
-        self._prefetch_covers(entries)
+        self._prefetch_entries = entries
+        self._prefetch_wait.start()                    # (restarted by every change: see _prefetch_covers)
 
     def _prefetch_covers(self, entries) -> None:
         """Prepare the covers of what's shown (in order; a folder's first four for its mosaic) in the background,
@@ -5346,6 +5360,7 @@ class MainWindow(TaskOwner, QMainWindow):
         def work():
             arts, wanted = {}, []
             for gid, artwork, crop in todo:
+                time.sleep(0.002)                      # (a breather each time: the window stays smooth)
                 key = (gid, artwork)
                 if key in known:
                     path = known[key]
