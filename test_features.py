@@ -1718,3 +1718,40 @@ class SortingAndCustomOrder(unittest.TestCase):
             finally:
                 w._dragging = None
                 w.close()
+
+
+class DragAndDropFeel(unittest.TestCase):
+    """Moving a folder while Folders First / Last puts the tick on Mixed; drops glide into place and the
+    other covers slide aside (state is clean afterwards)."""
+
+    def test_moving_a_folder_switches_to_mixed_and_drops_land(self):
+        from PySide6.QtCore import QEventLoop, QPoint, QTimer
+        t = SortingAndCustomOrder()
+        with tempfile.TemporaryDirectory() as tmp:
+            w, lib, ids, fid = t._window(tmp, ["A", "B", "C"], ["F1"])
+            try:
+                import app
+
+                def wait(ms):
+                    loop = QEventLoop()
+                    QTimer.singleShot(ms, loop.quit)
+                    loop.exec()
+                w.sort.setCurrentIndex(w.sort.findData("place:first"))
+                f = app.FOLDER_PREFIX + fid
+                w._move_to(f, 3)
+                self.assertEqual((w.settings.sort, w.settings.folder_place), ("custom", "mixed"))
+                # a real drop: lift, move between two covers, let go
+                w._start_game_drag(ids["A"])
+                w._drag_watch.stop()                          # (no real mouse button in a test)
+                wait(200)
+                vp = w.grid.viewport()
+                c = app.CardDelegate.cover_rect(w.grid.visualItemRect(w.grid.item(2)), 0)
+                spot = vp.mapToGlobal(QPoint(int(c.right() + app.GRID_GAP / 2), int(c.center().y())))
+                w._move_game_drag(spot)
+                w._end_game_drag(spot, drop=True)
+                self.assertIsNotNone(w._landing)
+                wait(450)
+                self.assertIsNone(w._landing)
+                self.assertEqual((w.slides, w.drag_dim, w._dim_gid), ({}, 0.0, None))
+            finally:
+                w.close()

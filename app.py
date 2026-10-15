@@ -538,6 +538,7 @@ GRID = {"cover_w": float(COVER_W), "cover_h": float(COVER_H)}
 HOVER_LIFT = 6                       # px the cover rises on hover
 HOVER_GROW = 0.03                    # 3% bigger on hover
 HOVER_MS = 150                       # ease in/out time
+SLIDE_S = 0.22                       # covers sliding aside into their new places after a drop
 FOLDER_ANIM_MS = 280                 # opening / closing a folder: its games grow out of (or back into) its tile
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
@@ -1329,6 +1330,12 @@ class CardDelegate(QStyledItemDelegate):
 
     def paint(self, p: QPainter, option: QStyleOptionViewItem, index) -> None:
         gid = index.data(GAME_ID_ROLE)
+        if gid == self.w._dim_gid and self.w._landing is not None:
+            return                                       # the dropped cover is gliding onto this spot
+        off = self.w.slide_offset(gid)
+        if off is not None:                              # sliding into its new place after a drop
+            option = QStyleOptionViewItem(option)
+            option.rect = option.rect.translated(off)
         if is_folder(gid):
             self._paint_folder(p, option, gid)
             return
@@ -1369,7 +1376,8 @@ class CardDelegate(QStyledItemDelegate):
             self._ring(p, cover)
         self._paint_light(p, self.light_center(cover), self.w.light_state(gid))
         if gid == self.w._dim_gid and self.w.drag_dim > 0:
-            self._fade_into_background(p, option.rect, 0.75 * self.w.drag_dim)
+            # only over the cover itself (not its whole cell: a neighbour may be sliding past through the gap)
+            self._fade_into_background(p, cover.adjusted(-3, -3, 3, 3).toAlignedRect(), 0.75 * self.w.drag_dim)
         p.restore()
 
     def _fade_into_background(self, p: QPainter, rect: QRect, amount: float) -> None:
@@ -1663,26 +1671,68 @@ class StarButton(QPushButton):
 
 
 class DragGhost(QWidget):
-    """The cover that follows the mouse while a game is dragged. Our own see-through window (not Windows'
-    drag picture, which can't change mid-drag), so it can fade almost away over the trash can."""
+    """The cover that follows the mouse while a game (or folder) is dragged. Our own see-through window (not
+    Windows' drag picture, which can't change mid-drag), so it can fade almost away over the trash can.
+    Picked up: it lifts out of its place at full size and shrinks to dragging size under the mouse.
+    Dropped (land): it glides to where it ended up - its new place, into a folder or the trash, or home."""
     NORMAL, OVER_TRASH = 0.85, 0.1
+    SMALL = 0.5                      # dragging size, of the full cover
+    LIFT_S, LAND_S = 0.16, 0.22
 
-    def __init__(self, pm: QPixmap):
+    def __init__(self, pm: QPixmap, start: QRectF):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint |
                          Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus | Qt.NoDropShadowWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.pm = pm
-        self.setFixedSize(pm.size() / pm.devicePixelRatio())
-        self.opacity = self.target = self.NORMAL
-        self._t = time.monotonic()
+        self.full = QSizeF(pm.width() / pm.devicePixelRatio(), pm.height() / pm.devicePixelRatio())
+        self.opacity, self.target = 1.0, self.NORMAL       # fades to see-through as it lifts
+        self.cursor = QPointF(QCursor.pos())
+        self._from, self._to = QRectF(start), QRectF(start)
+        self._mode = "lift"
+        self._t0 = self._last_frame = self._t = time.monotonic()
+        self._land_opacity = (1.0, 1.0)
+        self._done: Optional[Callable] = None
         self._timer = QTimer(self)
-        self._timer.setInterval(16)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.setInterval(0)                           # frames paced by time (see FolderTransition)
         self._timer.timeout.connect(self._step)
+        self._place()
+        self._timer.start()
+
+    @staticmethod
+    def _ease(t: float) -> float:
+        return 1 - (1 - max(0.0, min(1.0, t))) ** 2.2
+
+    @staticmethod
+    def _lerp(a: QRectF, b: QRectF, e: float) -> QRectF:
+        return QRectF(a.x() + (b.x() - a.x()) * e, a.y() + (b.y() - a.y()) * e,
+                      a.width() + (b.width() - a.width()) * e, a.height() + (b.height() - a.height()) * e)
+
+    def _drag_rect(self) -> QRectF:
+        w, h = self.full.width() * self.SMALL, self.full.height() * self.SMALL
+        return QRectF(self.cursor.x() - w / 2, self.cursor.y() - h / 2, w, h)
+
+    def current(self) -> QRectF:
+        """Where the cover is on screen right now (screen coordinates)."""
+        t = (time.monotonic() - self._t0)
+        if self._mode == "lift":
+            return self._lerp(self._from, self._drag_rect(), self._ease(t / self.LIFT_S))
+        if self._mode == "land":
+            return self._lerp(self._from, self._to, self._ease(t / self.LAND_S))
+        return self._drag_rect()
+
+    def _place(self) -> None:
+        """While lifting / dragging: a window round the mouse, big enough for the full-size cover."""
+        w, h = int(self.full.width() * 2.2), int(self.full.height() * 2.2)
+        self.setGeometry(int(self.cursor.x()) - w // 2, int(self.cursor.y()) - h // 2, w, h)
 
     def follow(self, global_pos: QPoint) -> None:
-        self.move(global_pos - QPoint(self.width() // 2, self.height() // 2))
+        self.cursor = QPointF(global_pos)
+        if self._mode != "land":
+            self._place()
+            self.update()
 
     def set_faded(self, on: bool) -> None:
         target = self.OVER_TRASH if on else self.NORMAL
@@ -1691,20 +1741,57 @@ class DragGhost(QWidget):
             self._t = time.monotonic()
             self._timer.start()
 
+    def land(self, to: QRectF, end_opacity: float, done: Callable) -> None:
+        """Glide from where it is to `to`, fading to end_opacity, then disappear and call done()."""
+        self._from = self.current()
+        self._to = QRectF(to)
+        self._land_opacity = (self.opacity, end_opacity)
+        self._mode, self._t0, self._done = "land", time.monotonic(), done
+        self.setGeometry(self._from.united(self._to).adjusted(-4, -4, 4, 4).toAlignedRect())
+        self._timer.start()
+
+    def finish(self) -> None:
+        """Stop at once (another drag starting, or the window closing)."""
+        if self._mode == "gone":
+            return
+        self._mode = "gone"
+        self._timer.stop()
+        self.hide()
+        self.deleteLater()
+        done, self._done = self._done, None
+        if done is not None:
+            done()
+
     def _step(self) -> None:
         now = time.monotonic()
-        dt, self._t = now - self._t, now
-        self.opacity += (self.target - self.opacity) * min(1.0, dt * 16)     # a quick, smooth fade
-        if abs(self.target - self.opacity) < 0.01:
-            self.opacity = self.target
-            self._timer.stop()
-        self.update()
+        if self._mode == "land":
+            if now - self._t0 >= self.LAND_S:
+                self.finish()
+                return
+        else:
+            dt, self._t = now - self._t, now
+            self.opacity += (self.target - self.opacity) * min(1.0, dt * 16)     # a quick, smooth fade
+            if abs(self.target - self.opacity) < 0.01:
+                self.opacity = self.target
+            if self._mode == "lift" and now - self._t0 >= self.LIFT_S:
+                self._mode = "drag"
+            if self._mode == "drag" and self.opacity == self.target:
+                self._timer.stop()                           # still: redrawn when the mouse moves
+        if now - self._last_frame >= 0.007:
+            self._last_frame = now
+            self.repaint()
 
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
-        p.setOpacity(self.opacity)
-        p.drawPixmap(self.rect(), self.pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        if self._mode == "land":
+            a, b = self._land_opacity
+            p.setOpacity(a + (b - a) * self._ease((time.monotonic() - self._t0) / self.LAND_S))
+        else:
+            p.setOpacity(self.opacity)
+        r = self.current().translated(-self.x(), -self.y())
+        p.drawPixmap(r, self.pm, QRectF(self.pm.rect()))
         p.end()
 
 
@@ -4194,6 +4281,9 @@ class MainWindow(TaskOwner, QMainWindow):
         self._press: Optional[tuple] = None           # (position, game id) for starting a drag
         self._ghost: Optional[DragGhost] = None       # the cover following the mouse while a game is dragged
         self._dragging: Optional[str] = None
+        self._landing: Optional[DragGhost] = None     # a dropped cover gliding into place
+        self.slides: dict[str, tuple] = {}            # item id -> (dx, dy): sliding from its old place
+        self._slide_t0 = 0.0
         self._dim_gid: Optional[str] = None           # the picked-up game, faded in its place
         self.drag_dim = 0.0                           # 0..1 how far it has faded
 
@@ -5226,9 +5316,10 @@ class MainWindow(TaskOwner, QMainWindow):
         g = self.games.get(gid)
         if g is None:
             return
-        # a small copy of the cover follows the mouse (see-through: DragGhost sets the opacity)
+        # a copy of the cover follows the mouse (see-through: DragGhost sets the opacity); full size, so it's
+        # sharp when it lifts out of and lands back in the grid
         dpr = self.devicePixelRatioF()
-        w, h = COVER_W // 2, COVER_H // 2
+        w, h = round(GRID["cover_w"]), round(GRID["cover_h"])
         img = QPixmap(round(w * dpr), round(h * dpr))
         img.setDevicePixelRatio(dpr)
         img.fill(Qt.transparent)
@@ -5236,7 +5327,7 @@ class MainWindow(TaskOwner, QMainWindow):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         clip = QPainterPath()
-        clip.addRoundedRect(QRectF(0, 0, w, h), 6, 6)
+        clip.addRoundedRect(QRectF(0, 0, w, h), 8, 8)
         p.setClipPath(clip)
         pm = self.covers.get(self.library.artwork_path(g), (g.crop_zoom, g.crop_x, g.crop_y))
         if pm:
@@ -5249,10 +5340,29 @@ class MainWindow(TaskOwner, QMainWindow):
         p.end()
         self._begin_drag(gid, img)
 
+    def _cover_global(self, iid: str) -> Optional[QRectF]:
+        """Where an item's cover is on screen (None when it isn't in view)."""
+        for i in range(self.grid.count()):
+            it = self.grid.item(i)
+            if it.data(GAME_ID_ROLE) == iid:
+                r = self.grid.visualItemRect(it)
+                if not r.intersects(self.grid.viewport().rect()):
+                    return None
+                c = CardDelegate.cover_rect(r, self.hover.get(iid, 0.0))
+                o = self.grid.viewport().mapToGlobal(QPoint(0, 0))
+                return c.translated(o.x(), o.y())
+        return None
+
     def _begin_drag(self, gid: str, img: QPixmap) -> None:
+        if self._landing is not None:
+            self._landing.finish()                      # the last drop is still gliding: put it down now
+        start = self._cover_global(gid)
+        if start is None:
+            size = QSizeF(img.width() / img.devicePixelRatio(), img.height() / img.devicePixelRatio())
+            start = QRectF(QPointF(QCursor.pos()) - QPointF(size.width() / 2, size.height() / 2), size)
         self._dragging = gid
         self._dim_gid = gid
-        self._ghost = DragGhost(img)
+        self._ghost = DragGhost(img, start)
         self._ghost.follow(QCursor.pos())
         self._ghost.show()
         QApplication.setOverrideCursor(Qt.ClosedHandCursor)
@@ -5314,16 +5424,7 @@ class MainWindow(TaskOwner, QMainWindow):
             shot = self.grid.viewport().grab(r.toAlignedRect())
         finally:
             self.grid.bare = False
-        dpr = self.devicePixelRatioF()
-        w, h = COVER_W // 2, COVER_H // 2
-        img = QPixmap(round(w * dpr), round(h * dpr))
-        img.setDevicePixelRatio(dpr)
-        img.fill(Qt.transparent)
-        p = QPainter(img)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
-        p.drawPixmap(QRectF(0, 0, w, h), shot, QRectF(shot.rect()))
-        p.end()
-        self._begin_drag(iid, img)
+        self._begin_drag(iid, shot)
 
     def _check_drag_button(self) -> None:
         if self._ghost is not None and not (QApplication.mouseButtons() & Qt.LeftButton):
@@ -5395,24 +5496,82 @@ class MainWindow(TaskOwner, QMainWindow):
         self._drag_watch.stop()
         self._drag_scroll.stop()
         QApplication.instance().removeEventFilter(self._esc)
-        self._ghost.hide()
-        self._ghost.deleteLater()
-        self._ghost = None
+        ghost, self._ghost = self._ghost, None
+        self._landing = ghost
         self._dragging = None
         QApplication.restoreOverrideCursor()
         self.trash_btn.set_hot(False)
         self._set_hovered(None)
-        self._update_anim()                           # (the picked-up game fades back in)
-        if not gid or kind is None:
-            return
-        if kind == "trash":
+        before = self._positions()
+
+        def shrink_into(rect: Optional[QRectF], scale: float = 0.3) -> Optional[QRectF]:
+            if rect is None:
+                return None
+            c = rect.center()
+            w, h = ghost.full.width() * ghost.SMALL * scale, ghost.full.height() * ghost.SMALL * scale
+            return QRectF(c.x() - w / 2, c.y() - h / 2, w, h)
+
+        def widget_rect(w: QWidget) -> QRectF:
+            return QRectF(QPointF(w.mapToGlobal(QPoint(0, 0))), QSizeF(w.size()))
+
+        to, end_opacity = None, 1.0
+        if gid and kind == "trash":
+            to, end_opacity = shrink_into(widget_rect(self.trash_btn)), 0.0
             QTimer.singleShot(0, lambda: self.remove_game(gid))
-        elif kind == "back":
+        elif gid and kind == "back":
             self._drop_game(gid, None, True)
-        elif spot and spot[0] == "onto":
+            to, end_opacity = shrink_into(widget_rect(self.back_btn)), 0.0
+        elif gid and spot and spot[0] == "onto":
             self._drop_game(gid, spot[1], False)
-        elif spot and spot[0] == "between":
+            g = self.games.get(gid)
+            home = FOLDER_PREFIX + g.folder if g is not None and g.folder else spot[1]
+            to, end_opacity = shrink_into(self._cover_global(home)), 0.0
+        elif gid and spot and spot[0] == "between":
             self._move_to(gid, spot[1])
+            to = self._cover_global(gid)
+        else:
+            to = self._cover_global(gid) if gid else None      # nothing happened: back home
+        self._slide_from(before, skip=gid)
+        if to is None:                                       # (off screen) just fade where it is
+            to, end_opacity = shrink_into(ghost.current(), 2.0), 0.0
+        ghost.land(to, end_opacity, self._landed)
+
+    def _landed(self) -> None:
+        """The dropped cover has arrived: the real one takes over (no fade: they're in the same place)."""
+        self._landing = None
+        self.drag_dim = 0.0
+        self._dim_gid = None
+        self.grid.viewport().update()
+        self._update_anim()
+
+    # ------------------------------------------------------------------ covers sliding into new places
+    def _positions(self) -> dict:
+        return {self.grid.item(i).data(GAME_ID_ROLE): self.grid.visualItemRect(self.grid.item(i)).topLeft()
+                for i in range(self.grid.count())}
+
+    def _slide_from(self, before: dict, skip: Optional[str] = None) -> None:
+        """After the grid changed: every cover that moved slides from where it was to its new place."""
+        self.grid.doItemsLayout()
+        now = self._positions()
+        self.slides = {}
+        for iid, p in now.items():
+            old = before.get(iid)
+            if old is not None and iid != skip and old != p:
+                self.slides[iid] = (old.x() - p.x(), old.y() - p.y())
+        if self.slides:
+            self._slide_t0 = time.monotonic()
+            self.grid.viewport().update()
+            self._update_anim()
+
+    def slide_offset(self, iid: str) -> Optional[QPoint]:
+        d = self.slides.get(iid)
+        if d is None:
+            return None
+        t = (time.monotonic() - self._slide_t0) / SLIDE_S
+        if t >= 1:
+            return None
+        k = (1 - t) ** 2.2                               # ease out: quick start, gentle landing
+        return QPoint(round(d[0] * k), round(d[1] * k))
 
     @guarded
     def _move_to(self, iid: str, index: int) -> None:
@@ -5433,10 +5592,15 @@ class MainWindow(TaskOwner, QMainWindow):
                 switched = True
         else:
             self.library.set_library_order(ids)
+            changed = False
             if self.settings.sort != "custom":
                 self.settings.sort = "custom"
+                changed = switched = True
+            if is_folder(iid) and self.settings.folder_place != "mixed":
+                self.settings.folder_place = "mixed"     # you're placing folders yourself now
+                changed = True
+            if changed:
                 self._save_view_choice()
-                switched = True
         self._read_orders()
         self._fill_sort()
         self.refresh()
@@ -5560,7 +5724,8 @@ class MainWindow(TaskOwner, QMainWindow):
     def _update_anim(self) -> None:
         needed = (self.settings.pulse or self.hovered is not None or bool(self.hover)
                   or self.sb_alpha > 0 or self._sb_target() > 0   # keep ticking until it has faded out
-                  or self._ghost is not None or self.drag_dim > 0)
+                  or self._ghost is not None or self.drag_dim > 0
+                  or self._landing is not None or bool(self.slides))
         if needed and not self.anim.isActive():
             self._last_tick = time.monotonic()
             self.anim.start()
@@ -5585,7 +5750,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 self.hover.pop(gid, None)
             else:
                 self.hover[gid] = new
-        dim_target = 1.0 if self._ghost is not None else 0.0
+        dim_target = 1.0 if (self._ghost is not None or self._landing is not None) else 0.0
         if self.drag_dim != dim_target:
             d = (step * HOVER_MS) / 120                  # a quick fade, ~0.12 s
             self.drag_dim = min(dim_target, self.drag_dim + d) if dim_target > self.drag_dim \
@@ -5618,6 +5783,11 @@ class MainWindow(TaskOwner, QMainWindow):
                 c = CardDelegate.light_center(CardDelegate.cover_rect(r, self.hover.get(iid, 0.0)))
                 rad = int(LIGHT_R * 2.9) + 2
                 region += QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
+        if self.slides:                                   # covers sliding: the whole grid moves
+            if time.monotonic() - self._slide_t0 >= SLIDE_S:
+                self.slides = {}
+            region = QRegion(view)
+            changed = True
         if not region.isEmpty() and not self.backdrop.findChildren(FolderTransition):
             # (not while a folder opens / closes: the animation covers the grid, and each of these little
             # updates would make it redraw out of step)
@@ -6003,9 +6173,11 @@ class MainWindow(TaskOwner, QMainWindow):
         if g is None or self.worker is not None:
             return
         if confirm_remove(self, g.title):
+            before = self._positions()
             self.library.remove(gid)
             self.clear_selection()
             self.refresh()
+            self._slide_from(before)                     # the others close the gap
 
     @guarded
     def _set_status(self, gid: str, status: str) -> None:
