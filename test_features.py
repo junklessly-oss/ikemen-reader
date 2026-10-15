@@ -1651,26 +1651,63 @@ class SortingAndCustomOrder(unittest.TestCase):
                 import app
                 shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
                 f = app.FOLDER_PREFIX + fid
-                self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])     # folder among games, by its latest game
                 self.assertEqual([w.sort.itemData(i) for i in range(w.sort.count()) if w.sort.itemData(i)],
-                                 ["recent", "hours", "title", "place:first", "place:last", "custom"])
-                w.choose_sort("place:first")                                       # a move: My Arrangement
+                                 ["title", "hours", "recent", "place:mixed", "place:first", "place:last", "custom"])
+                self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])     # mixed in, by its latest game
+                w.choose_sort("place:first")                                       # a setting: stays a sort
                 self.assertEqual(shown(), [f, ids["A"], ids["B"], ids["C"]])
-                self.assertEqual((w.settings.sort, w.sort.currentData()), ("custom", "custom"))
-                self.assertEqual(lib.library_order(), shown())                    # saved in the cloud folder
-                w.choose_sort("place:last")                                        # also works in My Arrangement
-                self.assertEqual(shown(), [ids["A"], ids["B"], ids["C"], f])
-                w._dragging = ids["C"]                                             # drag C between A and B
-                w._move_to(ids["C"], 1)
+                self.assertEqual(w.sort.currentData(), "recent")
+                w.choose_sort("title")                                             # remembered in the other sorts
+                self.assertEqual(shown()[0], f)
+                w.choose_sort("place:last")
+                self.assertEqual(shown()[-1], f)
+                w._dragging = ids["C"]                                             # drag: My Arrangement
+                w._move_to(ids["C"], 0)
                 w._dragging = None
-                self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
-                w.choose_sort("title")                                             # swap off it...
-                self.assertEqual(w.sort.currentData(), "title")
-                w.choose_sort("custom")                                            # ...and back: where you left things
-                self.assertEqual(shown(), [ids["A"], ids["C"], ids["B"], f])
+                self.assertEqual((w.settings.sort, w.settings.last_sort), ("custom", "title"))
+                self.assertEqual(shown(), [ids["C"], ids["A"], ids["B"], f])
+                w.choose_sort("place:first")                                       # in My Arrangement: folders moved
+                self.assertEqual(shown(), [f, ids["C"], ids["A"], ids["B"]])       # games keep your order
+                self.assertEqual(w.sort.currentData(), "custom")                   # (never switches sort)
+                w.choose_sort("hours")
+                w.choose_sort("custom")                                            # your arrangement is back
+                self.assertEqual(shown(), [f, ids["C"], ids["A"], ids["B"]])
                 new = lib.add_game("New", "PC")
                 w.refresh()
                 self.assertEqual(shown()[-1], new.game_id)                          # new games at the end
+            finally:
+                w.close()
+
+    def test_mixed_in_my_arrangement_takes_the_sorts_spots(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            w, lib, ids, fid = self._window(tmp, ["A", "B", "C", "D"], ["F1"])
+            try:
+                import app
+                shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+                f = app.FOLDER_PREFIX + fid
+                for t, h in (("A", 1), ("B", 50), ("C", 2), ("D", 3), ("F1", 10)):
+                    lib.add_playtime(ids[t], "PC", h * 3600.0)
+                w.refresh()
+                w.choose_sort("hours")                                              # B 50, F1 10, D 3, C 2, A 1
+                self.assertEqual(shown(), [ids["B"], f, ids["D"], ids["C"], ids["A"]])
+                w.choose_sort("place:last")
+                w._dragging = ids["A"]
+                w._move_to(ids["A"], 0)                                             # My Arrangement: A B D C F
+                w._dragging = None
+                self.assertEqual(shown(), [ids["A"], ids["B"], ids["D"], ids["C"], f])
+                w.choose_sort("place:mixed")                                        # F back to Most Played's 2nd spot
+                self.assertEqual(shown(), [ids["A"], f, ids["B"], ids["D"], ids["C"]])
+            finally:
+                w.close()
+
+    def test_folder_options_greyed_without_folders(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            w, lib, ids, fid = self._window(tmp, ["A", "B"])
+            try:
+                model = w.sort.model()
+                for p in ("mixed", "first", "last"):
+                    self.assertFalse(model.item(w.sort.findData("place:" + p)).isEnabled())
+                self.assertTrue(model.item(w.sort.findData("custom")).isEnabled())
             finally:
                 w.close()
 
@@ -1780,11 +1817,9 @@ class SortDropDownClicks(unittest.TestCase):
                 for pick, first in (("place:first", True), ("place:last", False), ("place:first", True)):
                     click(pick)
                     self.assertEqual(shown()[0] == f, first)
-                    self.assertEqual(w.sort.currentData(), "custom")
-                click("hours")
-                self.assertEqual(w.sort.currentData(), "hours")
-                click("custom")
-                self.assertEqual(shown()[0], f)                           # back to where things were moved
+                    self.assertEqual(w.sort.currentData(), "recent")             # the sort stays
+                click("title")
+                self.assertEqual((w.sort.currentData(), shown()[0]), ("title", f))
                 self.assertTrue(w.sort.view().parentWidget().testAttribute(QtNS.WA_TranslucentBackground))
                 self.assertFalse(QApplication.isEffectEnabled(QtNS.UI_AnimateCombo))
             finally:

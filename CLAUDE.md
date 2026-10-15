@@ -304,13 +304,16 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    Folder placement LocalSettings.folder_place (END field, Ikemen Sync shared), greyed while Custom; sort drop-down
    items via _sort_choices/_fill_sort (tick icon); in a folder: Same as Library + 4 sorts. Library.set_folder takes a
    game out of the list it leaves (so it lands at the end of the new one). Search/filter: no rearranging.
-   FINAL owner decision (2026-10-15): menu = Recently Played / Most Played / Title | Folders First / Folders Last
-   / My Arrangement, nothing ticked. Automatic sorts: folders among the games by that sort. MY ARRANGEMENT
-   (sort "custom", 自分の並び) = your hand-made order, kept when you switch away; picking it restores it.
-   Folders First / Last are ACTIONS (not settings): every folder to the front / back of what's on screen (rest
-   keeps its order) -> saved as My Arrangement (counts as a move, replaces the saved one); work in My
-   Arrangement too. Dragging anything -> My Arrangement from what was on screen. LocalSettings.folder_place is
-   no longer used. (Earlier "Mixed" / "Folders Mixed" settings were tried and dropped as confusing.) Sort/placement picks go
+   FINAL owner decision (2026-10-15, after several rounds): menu = Title / Most Played / Recently Played |
+   Folders Mixed / Folders First / Folders Last / My Arrangement; NO ticks; folder options greyed when there are no
+   folders. Folder options = a remembered setting (folder_place, saved, Ikemen Sync) for the three automatic sorts
+   (folders mixed in / grouped front / back, always in that sort's order; folders placed by name / total hours /
+   latest game - their inner order never matters). They never switch to My Arrangement. MY ARRANGEMENT (sort
+   "custom", 自分の並び): hand-made order, kept when you switch away, restored when picked; dragging anything
+   switches to it from what's on screen. In My Arrangement the folder options re-place the folders by
+   LocalSettings.last_sort (the automatic sort used last, default hours; set when picking a sort, dragging away
+   from one, or picking My Arrangement), games keep your order: First/Last group them, Mixed puts them in the
+   exact slots that sort would give them (_place_folders). Inside a folder: Same as Library + 3 sorts | My Arrangement. Sort/placement picks go
    through activated -> choose_sort (deferred) and glide (_positions/_slide_from); no refresh/save check.
    Drop-downs are ThemedCombo (layered popup + own mask slide: no white first frame). Top-bar status label has
    a fixed width (longest of Synced/Syncing/Error) so the bar never shifts.

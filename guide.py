@@ -93,14 +93,17 @@ GUIDE = {
             "Error to jump to those games).",
         ]),
         ("Your Library", [
-            "- Search by title, sort by Recently Played, Most Played, Title or My Arrangement, and filter by reading status.",
-            "- In the automatic sorts, folders sit among the games, in the same order.",
+            "- Search by title, sort by Title, Most Played, Recently Played or My Arrangement, and filter by reading status.",
+            "- Folders Mixed / Folders First / Folders Last (in the same menu) choose where folders go in Title, Most "
+            "Played and Recently Played: among the games, or grouped at the front or back, always in that sort's order. "
+            "Your choice stays until you press another one. With no folders, they're greyed out.",
             "- My Arrangement is your own order: drag a cover into the gap between two others to move it there (a "
             "thin line shows where it will land). Doing that switches to My Arrangement, starting from exactly what "
             "you were looking at. It's kept when you switch to another sort: pick My Arrangement to get it back. New "
             "games go at the end; folders are dragged the same way.",
-            "- Folders First / Folders Last (in the same menu) move every folder to the front or back of what's on "
-            "screen, the rest staying in its order. That's a move too, so it becomes My Arrangement.",
+            "- In My Arrangement, the folder options re-place your folders, sorted by the sort you used last (Title, "
+            "Most Played or Recently Played), while your games keep your order: First and Last group them, Mixed puts "
+            "them in the spots that sort would give them. You can move them by hand afterwards.",
             "- Each folder has its own sort, found in the same menu while the folder is open. It starts as Same as "
             "Library and follows the main page until you pick something else for it. A folder's own order and "
             "sort are shared with the other device.",
@@ -203,10 +206,10 @@ GUIDE = {
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
         ("ライブラリ", [
-            "- タイトルで検索、「最近プレイした順」「プレイ時間が長い順」「タイトル順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。",
-            "- 自動の並び順では、フォルダーもゲームと同じ順番で混ざって並びます。",
+            "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。",
+            "- 同じメニューの「フォルダーを混在」「フォルダーを先に」「フォルダーを後に」で、タイトル順・プレイ時間順・最近プレイした順でのフォルダーの位置を選べます（ゲームの間に混ぜる、または前・後ろにまとめる。どれもその並び順で並びます）。別のものを押すまで保持されます。フォルダーがないときは選べません。",
             "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。",
-            "- 同じメニューの「フォルダーを先に」「フォルダーを後に」は、表示中のすべてのフォルダーを前または後ろにまとめて移動します（他は今の順番のまま）。これも移動なので「自分の並び」になります。",
+            "- 「自分の並び」でフォルダーの位置を押すと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先に」「後に」はまとめて、「混在」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではメインページに合わせます。"
             "フォルダーの並び順はもう一方の端末とも共有されます。",
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーのプレイ時間と最終プレイ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",

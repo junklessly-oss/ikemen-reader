@@ -132,7 +132,8 @@ class LocalSettings:
     show_stats: bool = True           # playtime / last played on the covers and the bottom bar
     show_bookmarks: bool = True       # reading-status bookmarks on the covers
     auto_update: bool = False         # install new versions by itself (off: asks when one is available)
-    folder_place: str = "mixed"       # (no longer used: Folders First / Last are now one-off moves)
+    folder_place: str = "mixed"       # where folders go in the automatic sorts: one of FOLDER_PLACES
+    last_sort: str = "hours"          # the automatic sort used last (My Arrangement's folder options use it)
 
 
 def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSettings]:
@@ -152,6 +153,8 @@ def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSetting
         s.language = "en"
     if s.folder_place not in FOLDER_PLACES:
         s.folder_place = "mixed"
+    if s.last_sort not in ("recent", "hours", "title"):
+        s.last_sort = "hours"
     if s.sort not in SORTS:
         s.sort = "recent"
     if s.status_filter != "all" and s.status_filter not in STATUSES[1:]:

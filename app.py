@@ -4825,9 +4825,10 @@ class MainWindow(TaskOwner, QMainWindow):
         top += [("folder", fid) for fid in self.folder_games]
         if sort == "custom":                             # My Arrangement: exactly your order
             top = in_order(top, self._entry_id, self.library_order)
-        else:                                            # folders among the games, by the same sort
-            top.sort(key=lambda e: self._sort_key(e))
-        self._top_ids = [self._entry_id(e) for e in top]   # the main page as arranged now (Mixed starts from it)
+        else:                                            # folders mixed in / first / last, by the same sort
+            top = self._auto_order(top, sort, self.settings.folder_place)
+        self._top_entries = top
+        self._top_ids = [self._entry_id(e) for e in top]   # the main page as arranged now
         if self.current_folder:
             entries = [("game", g) for g in self.folder_games[self.current_folder] if keep(g)]
         elif flat:
@@ -4864,6 +4865,8 @@ class MainWindow(TaskOwner, QMainWindow):
             self.folder_title.setText(self.folder_name(self.current_folder))
         if self._sort_mode != self.current_folder:
             self._fill_sort()                           # the library's choices, or this folder's
+        else:
+            self._mark_sort()                           # (folders may have come or gone: greyed or not)
         self._update_details()
 
     @staticmethod
@@ -4888,11 +4891,11 @@ class MainWindow(TaskOwner, QMainWindow):
         """(label, data) for the sort drop-down: the three automatic sorts, then under a divider Folders First,
         Folders Last (actions: they move the folders) and My Arrangement. Inside a folder: Same as Library, the
         three sorts, then My Arrangement."""
-        sorts = [(tr(f"sort.{s}"), s) for s in ("recent", "hours", "title")]
+        sorts = [(tr(f"sort.{s}"), s) for s in ("title", "hours", "recent")]
         mine = (tr("sort.custom"), "custom")
         if inside:
             return [(tr("sort.follow"), "follow")] + sorts + [None, mine]
-        return sorts + [None, (tr("place.first"), "place:first"), (tr("place.last"), "place:last"), mine]
+        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("mixed", "first", "last")] + [mine]
 
     def _fill_sort(self) -> None:
         c = self.sort
@@ -4916,10 +4919,35 @@ class MainWindow(TaskOwner, QMainWindow):
         current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
         c.blockSignals(True)
         c.setCurrentIndex(max(0, c.findData(current)))
+        has_folders = bool(self.folder_games)              # no folders: nothing for the folder options to do
+        for i in range(c.count()):
+            d = c.itemData(i)
+            if d and d.startswith("place:"):
+                c.model().item(i).setEnabled(has_folders)
         c.blockSignals(False)
 
-    def _sort_key(self, entry) -> tuple:
+    def _place_folders(self, place: str) -> list[str]:
+        """My Arrangement + a folder option: the folders re-placed, sorted by the automatic sort used last (games
+        keep your order). First / Last: all folders at the front / back. Mixed: the folders take the very spots
+        that sort would give them, your games filling the others in your order."""
+        sort = self.settings.last_sort
+        entries = list(getattr(self, "_top_entries", []))
+        games = [e for e in entries if e[0] == "game"]
+        folders = sorted((e for e in entries if e[0] == "folder"), key=lambda e: self._sort_key(e, sort))
+        if place == "first":
+            arranged = folders + games
+        elif place == "last":
+            arranged = games + folders
+        else:
+            slots = {i for i, e in enumerate(self._auto_order(entries, sort, "mixed")) if e[0] == "folder"}
+            fi, gi, arranged = iter(folders), iter(games), []
+            for i in range(len(entries)):
+                arranged.append(next(fi) if i in slots else next(gi))
+        return [self._entry_id(e) for e in arranged]
+
+    def _sort_key(self, entry, sort: Optional[str] = None) -> tuple:
         from library import title_sort_key
+        sort = sort or self.settings.sort
         kind, obj = entry
         if kind == "game":
             last, hours, title = obj.last_played, obj.total_playtime, obj.title
@@ -4928,11 +4956,20 @@ class MainWindow(TaskOwner, QMainWindow):
             last = max(g.last_played for g in gs)
             hours = sum(g.total_playtime for g in gs)
             title = self.folder_name(obj)
-        if self.settings.sort == "hours":
+        if sort == "hours":
             return (-hours, title_sort_key(title))
-        if self.settings.sort == "title":
+        if sort == "title":
             return (title_sort_key(title),)
         return (-last, title_sort_key(title))
+
+    def _auto_order(self, entries: list, sort: str, place: str) -> list:
+        """entries in an automatic sort, folders mixed in / first / last (each group in that sort)."""
+        out = sorted(entries, key=lambda e: self._sort_key(e, sort))
+        if place != "mixed":
+            folders = [e for e in out if e[0] == "folder"]
+            loose = [e for e in out if e[0] == "game"]
+            out = folders + loose if place == "first" else loose + folders
+        return out
 
     def selected_id(self) -> Optional[str]:
         items = self.grid.selectedItems()
@@ -5146,24 +5183,24 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         before = self._positions()                   # every change glides: covers slide to their new places
         if d.startswith("place:"):
-            # Folders First / Folders Last: move every folder to the front / back of what's on screen, the rest in
-            # the order it's in. Moving things = My Arrangement (it replaces the one saved before)
-            ids = list(getattr(self, "_top_ids", []))
-            folders = [x for x in ids if is_folder(x)]
-            games = [x for x in ids if not is_folder(x)]
-            order = folders + games if d == "place:first" else games + folders
-            self.library.set_library_order(order)
-            self.library_order = order
-            switched = self.settings.sort != "custom"
-            self.settings.sort = "custom"
-            self._own_change()
-            if switched:
-                self.statusBar().showMessage(tr("status.now_custom"), 8000)
+            # Folders Mixed / First / Last: remembered for the automatic sorts (until another is pressed). In My
+            # Arrangement they also rearrange the folders, by the automatic sort used last (see _place_folders)
+            place = d[len("place:"):]
+            self.settings.folder_place = place
+            if self.settings.sort == "custom" and not self.current_folder:
+                order = self._place_folders(place)
+                self.library.set_library_order(order)
+                self.library_order = order
+                self._own_change()
+        elif d in ("recent", "hours", "title") and not self.current_folder:
+            self.settings.sort = self.settings.last_sort = d
         elif self.current_folder:                    # this folder's own sort ("follow" = the library's)
             self.library.set_folder_sort(self.current_folder, "" if d == "follow" else d)
             self._read_orders()
             self._own_change()
-        else:
+        else:                                        # My Arrangement (remembering the sort you came from)
+            if self.settings.sort in ("recent", "hours", "title"):
+                self.settings.last_sort = self.settings.sort
             self.settings.sort = d
         self._save_view_choice()
         self._mark_sort()
@@ -5674,6 +5711,7 @@ class MainWindow(TaskOwner, QMainWindow):
             self.library.set_library_order(ids)
             self.library_order = list(ids)
             if self.settings.sort != "custom":           # My Arrangement, starting from what was on screen
+                self.settings.last_sort = self.settings.sort   # (its folder options use the sort you came from)
                 self.settings.sort = "custom"
                 switched = True
                 self._save_view_choice()
