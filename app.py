@@ -4926,7 +4926,7 @@ class MainWindow(TaskOwner, QMainWindow):
         sorts = [(tr(f"sort.{s}"), s) for s in SORTS]
         if inside:
             return [(tr("sort.follow"), "follow")] + sorts
-        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("first", "mixed", "last")]
+        return sorts + [None] + [(tr(f"place.{p}"), "place:" + p) for p in ("mixed", "first", "last")]
 
     def _fill_sort(self) -> None:
         c = self.sort

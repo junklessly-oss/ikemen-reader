@@ -94,8 +94,8 @@ GUIDE = {
         ]),
         ("Your Library", [
             "- Search by title, sort by Recently Played, Most Played, Title or Custom, and filter by reading status.",
-            "- Below the sorts in the same menu, choose where folders go: Folders First or Folders Last, or Mixed: "
-            "your own arrangement, starting from exactly what's on screen, where you can move anything.",
+            "- Below the sorts in the same menu, choose where folders go: Mixed (your own arrangement, "
+            "starting from exactly what's on screen, where you can move anything), Folders First, or Folders Last.",
             "- Custom is your own order: drag a cover into the gap between two others to move it there (a thin "
             "line shows where it will land). Doing that switches to Custom and Mixed, starting from the order "
             "you were looking at. New games go at the end. Folders can be dragged the same way.",
@@ -202,7 +202,7 @@ GUIDE = {
         ]),
         ("ライブラリ", [
             "- タイトルで検索、「最近プレイした順」「プレイ時間が長い順」「タイトル順」「カスタム」で並べ替え、プレイ状況で絞り込みができます。",
-            "- 同じメニューの下の方で、フォルダーの位置を選べます。「フォルダーを先に」「フォルダーを後に」、または「混在」（今表示されている並びから始まる自分だけの並びで、何でも自由に動かせます）。",
+            "- 同じメニューの下の方で、フォルダーの位置を選べます。「混在」（今表示されている並びから始まる自分だけの並びで、何でも自由に動かせます）、「フォルダーを先に」、「フォルダーを後に」。",
             "- 「カスタム」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。"
             "これを行うと、表示していた順番のまま「カスタム」と「混在」に切り替わります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではメインページに合わせます。"
