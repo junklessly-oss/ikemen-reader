@@ -240,7 +240,10 @@ try {{
     if (-not (Test-Path -LiteralPath $t)) {{ Move-Item -LiteralPath (Join-Path $previous $name) -Destination $t -Force }}
   }}
 }}
-if ($ok) {{ Remove-Item -LiteralPath {_ps(folder / 'new')} -Recurse -Force -ErrorAction SilentlyContinue }}
+if ($ok) {{
+  Remove-Item -LiteralPath {_ps(folder / 'new')} -Recurse -Force -ErrorAction SilentlyContinue
+  Get-ChildItem -LiteralPath {_ps(folder)} -Filter '*.zip' | Remove-Item -Force -ErrorAction SilentlyContinue
+}}
 {"Start-Process -FilePath (Join-Path $program " + _ps(EXE) + ")" if restart else ""}
 """
 
@@ -257,7 +260,9 @@ def install_on_exit(folder: Path, new: Path, restart: bool, program: Optional[Pa
     script.write_text(helper_script(program, new, folder, pid or os.getpid(), restart), "utf-8-sig")
     if run:
         import outside
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        # a hidden console (not DETACHED_PROCESS: PowerShell quits at once without any console). It keeps running
+        # after Ikemen Reader exits.
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         outside.popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
                        "-File", str(script)], cwd=str(folder), creationflags=flags)
     return script

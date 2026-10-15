@@ -5810,10 +5810,7 @@ class MainWindow(TaskOwner, QMainWindow):
             QTimer.singleShot(5000, self._offer_update)
             return
         self._update_asked = True
-        notes = _release_notes(r.notes)
-        text = tr("update.available", version=r.version, current=APP_VERSION)
-        if notes:
-            text += "\n\n" + tr("update.whats_new") + "\n" + notes
+        text = tr("update.available", version=r.version, current=APP_VERSION)    # (kept simple: no notes)
         if message(self, text, tr("update.available_title"),
                    [("now", tr("update.now")), ("later", tr("update.later"))], dismiss="later") != "now":
             return
@@ -5874,24 +5871,6 @@ class MainWindow(TaskOwner, QMainWindow):
             except (OSError, ValueError):
                 pass
         e.accept()                        # other background work: see wait_for_tasks() in main()
-
-
-def _release_notes(markdown: str, lines: int = 10) -> str:
-    """A release's description as a few plain lines for the update question (headings and the install
-    instructions left out)."""
-    out = []
-    for raw in (markdown or "").replace("\r", "").split("\n"):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            if line.lower().lstrip("# ").startswith(("install", "インストール")):
-                break
-            continue
-        line = re.sub(r"\*\*|__|`", "", line)
-        line = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", line)       # [text](link) -> text
-        out.append("• " + line[2:] if line.startswith(("- ", "* ")) else line)
-        if len(out) >= lines:
-            break
-    return "\n".join(out)
 
 
 def user_fonts_dir() -> Path:

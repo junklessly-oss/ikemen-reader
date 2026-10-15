@@ -518,7 +518,6 @@ S: dict[str, tuple[str, str]] = {
     "update.available_title":   ("Update Available", "アップデートがあります"),
     "update.available":         ("Ikemen Reader {version} is available. You have {current}.",
                                  "イケメンリーダー {version} が利用できます（現在のバージョン：{current}）。"),
-    "update.whats_new":         ("What's new:", "主な変更点："),
     "update.now":               ("Update Now", "今すぐアップデート"),
     "update.later":             ("Later", "後で"),
     "update.downloading":       ("Downloading Ikemen Reader {version}... {done} / {total} MB",

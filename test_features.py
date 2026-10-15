@@ -1450,24 +1450,24 @@ class Updates(unittest.TestCase):
             (program / "Google Drive.lnk").write_text("keep me")
             folder = updater.update_dir(Path(tmp) / "appdata", program)
             self.assertEqual(folder, program / "update")
-            new = updater.stage(self._zip(Path(tmp), "new exe"), folder)
+            z = self._zip(Path(tmp), "new exe")
+            (folder / z.name).write_bytes(z.read_bytes())                           # the download
+            new = updater.stage(folder / z.name, folder)
             # "Ikemen Reader" = a process that closes after a moment
             proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
-            script = updater.install_on_exit(folder, new, restart=False, program=program, pid=proc.pid, run=False)
-            started = time.time()
-            subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-                           check=True, timeout=60, capture_output=True)
-            self.assertGreaterEqual(time.time() - started, 1.0)                     # waited for it to close
+            # started exactly as the app starts it (hidden, on its own: it once quit at once when "detached")
+            updater.install_on_exit(folder, new, restart=False, program=program, pid=proc.pid)
+            time.sleep(0.8)
+            self.assertEqual((program / "Ikemen Reader.exe").read_text(), "old exe")   # still waiting for it to close
             proc.wait()
+            end = time.time() + 30
+            while time.time() < end and not (folder / "update.log").exists():
+                time.sleep(0.2)
+            time.sleep(0.5)
             self.assertEqual((program / "Ikemen Reader.exe").read_text(), "new exe")
             self.assertEqual((program / "_internal" / "lib.dll").read_text(), "new lib")
             self.assertEqual((program / "Google Drive.lnk").read_text(), "keep me")  # not ours: untouched
             self.assertEqual((folder / "previous" / "Ikemen Reader.exe").read_text(), "old exe")   # backup
             self.assertFalse((folder / "new").exists())                              # tidied up
+            self.assertEqual(list(folder.glob("*.zip")), [])
             self.assertIn("updated", (folder / "update.log").read_text("utf-8"))
-
-    def test_release_notes_for_the_question(self):
-        import app
-        notes = app._release_notes("## Ikemen Reader 1.0.1\r\n\r\n- **Bookmarks** on covers\r\n- [Guide](x) updated"
-                                   "\r\n\r\n### Install\r\n1. Download it")
-        self.assertEqual(notes, "• Bookmarks on covers\n• Guide updated")
