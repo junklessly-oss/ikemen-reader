@@ -640,6 +640,7 @@ SLIDE_S = 0.22                       # covers sliding aside into their new place
 # and fades back in at its new place; covers that keep their place stay still. OUT first, then IN, so two pictures
 # never blend in one place; and the grid only changes once typing pauses for SEARCH_PAUSE_MS
 SEARCH_PAUSE_MS = 120
+VIEW_SAVE_DELAY_MS = 900             # sort / filter / view choices are saved once the fade has finished
 LEAVE_S = 0.16                       # OUT: fade + shrink this long ...
 LEAVE_SHRINK = 0.12
 ARRIVE_WAIT = 0.1                    # ... IN starts this much after a change that takes covers away ...
@@ -6043,6 +6044,20 @@ class MainWindow(TaskOwner, QMainWindow):
         self._update_anim()                      # the bookmarks fade in / out (see _tick)
 
     def _save_view_choice(self) -> None:
+        """Remember a view choice (sort, filter, statistics, bookmarks...) and share it for Ikemen Sync - once
+        things have settled: writing the files right away competed with the fade it starts (late frames), and
+        quick changes in a row are saved once. Closing saves at once (_flush_view_choice)."""
+        if not hasattr(self, "_view_save"):
+            self._view_save = QTimer(self, singleShot=True, interval=VIEW_SAVE_DELAY_MS)
+            self._view_save.timeout.connect(self._save_view_choice_now)
+        self._view_save.start()
+
+    def _flush_view_choice(self) -> None:
+        if hasattr(self, "_view_save") and self._view_save.isActive():
+            self._view_save.stop()
+            self._save_view_choice_now()
+
+    def _save_view_choice_now(self) -> None:
         try:
             save_local_settings(self.settings)
         except OSError:
@@ -6060,7 +6075,6 @@ class MainWindow(TaskOwner, QMainWindow):
     def choose_sort(self, d: str) -> None:
         if not d:
             return
-        before = self._positions()                   # every change glides: covers slide to their new places
         if d.startswith("place:"):
             # Folders Mixed / First / Last: remembered for the automatic sorts (until another is pressed). In My
             # Arrangement they also rearrange the folders, by the automatic sort used last (see _place_folders)
@@ -6083,8 +6097,8 @@ class MainWindow(TaskOwner, QMainWindow):
             self.settings.sort = d
         self._save_view_choice()
         self._mark_sort()
-        self._rebuild()                              # (no reload or save check: only the order changed)
-        self._slide_from(before)
+        # like search: covers whose place changes fade out there and back in at their new place (no sliding)
+        self._apply_filter()                         # (no reload or save check: only the order changed)
 
     def _filter_changed(self, _i: int) -> None:
         self.settings.status_filter = self.filter.currentData() or "all"
@@ -7396,6 +7410,7 @@ class MainWindow(TaskOwner, QMainWindow):
             message(self, tr("close.syncing"))      # stopping mid-sync could leave saves half-uploaded
             e.ignore()
             return
+        self._flush_view_choice()                   # (a view choice made just now)
         if self.worker:
             g = self.games.get(self.playing_id)
             if not ask_yes_no(self, tr("close.body", title=g.title if g else ""), tr("close.title"),

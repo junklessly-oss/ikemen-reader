@@ -1748,6 +1748,21 @@ class SortingAndCustomOrder(unittest.TestCase):
             qa.processEvents()
         return w, lib, ids, fid
 
+    def test_view_choice_saved_after_the_fade_and_on_closing(self):
+        from library import load_local_settings
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, \
+                __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            w, lib, ids, fid = self._window(tmp, ["A", "B", "C"])
+            import app
+            try:
+                w.choose_sort("title")
+                self.assertTrue(w._view_save.isActive())          # not written during the fade ...
+                w.close()                                         # ... but closing saves it at once
+                self.assertFalse(w._view_save.isActive())
+                self.assertEqual(load_local_settings().sort, "title")
+            finally:
+                app.wait_for_tasks(5)
+
     def test_search_finds_folders_by_name(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             w, lib, ids, fid = self._window(tmp, ["Alpha", "Beta"], ["Saga One", "Saga Two"])

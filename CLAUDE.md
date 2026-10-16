@@ -426,7 +426,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
     earlier fade short (was ~27 pops/run); snapshots include arriving covers (bare paint draws them), so a cover
     taken away mid-arrival fades from how it looked. Arrivals drawn beneath (under_pass), held while a leaving
     picture still shows in their place (_hold_blocked_arrivals). Rejected on the way: spring glides, row-change
-    swaps + gliding mix ("sliding on some things and not on others is awful"). Drag-and-drop slides unchanged.
+    swaps + gliding mix ("sliding on some things and not on others is awful"). Drag-and-drop slides unchanged. SORT changes fade the same way
+    (choose_sort -> _apply_filter; measured: no late frames during the fade, slides had 34-54). View choices are
+    saved VIEW_SAVE_DELAY_MS 900 later (_save_view_choice; closeEvent flushes) so saving never competes with a fade.
     Checks: overlap.py 0 blended frames, pops.py 0, searchfuzz 0 errors.
   * "No Results Found" / 見つかりませんでした (grid.no_results): drawn faint in LibraryGrid.paintEvent, fades
     (no_results 0..1, NO_RESULTS_S) when searching/filtering and nothing matches. 2.7x the UI font; centred on
