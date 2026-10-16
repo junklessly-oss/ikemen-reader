@@ -668,7 +668,9 @@ def matches_search(game: "Game", query: str) -> bool:
     - with kanji: the name contains it, anywhere ("刻" finds サクラノ刻);
     - kana: the name starts with it ("まま" finds ままごと and ママトモ);
     - Latin letters / numbers: the start of a word ("ind" finds Indigo, "toki" and "sakura no" find
-      Sakura no Toki, "sakuranotoki" too); a single letter finds only words that start with it."""
+      Sakura no Toki, "sakuranotoki" too). A single letter only finds names that START with it: every
+      English title / alias has some word starting with almost any letter ("a" found Bunny's through
+      "Bunny's Rent-a-Mom Agency")."""
     key = search_key(query)
     if not key:
         return True
@@ -680,13 +682,16 @@ def matches_search(game: "Game", query: str) -> bool:
     qw = _words(query)
     if not qw:
         return False
+    if len(key) == 1:                                   # one letter: names that begin with it, nothing else
+        return any(search_key(n).startswith(key) for n in names)
     for n in names:
         words = _words(n)
         for i in range(len(words)):
             if len(qw) == 1:
                 if "".join(words[i:]).startswith(qw[0]):
                     return True
-            elif words[i:i + len(qw) - 1] == qw[:-1] and i + len(qw) - 1 < len(words)                     and words[i + len(qw) - 1].startswith(qw[-1]):
+            elif words[i:i + len(qw) - 1] == qw[:-1] and i + len(qw) - 1 < len(words) \
+                    and words[i + len(qw) - 1].startswith(qw[-1]):
                 return True
     return False
 

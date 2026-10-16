@@ -1374,7 +1374,11 @@ class SearchByOtherNames(unittest.TestCase):
         self.assertFalse(matches_search(g, "oratoto"))                       # not a word start
         self.assertFalse(matches_search(g, "q"))                             # no word starts with q
         self.assertTrue(matches_search(g, "t"))                              # The / to
-        self.assertTrue(matches_search(g, "s"))                              # Stray
+        self.assertFalse(matches_search(g, "s"))                             # one letter: only names starting with it
+        self.assertTrue(matches_search(g, "st"))                             # two: any word (Stray)
+        self.assertFalse(matches_search(Game("b", "Bunny's ママ代行サービス", names=["Bunny's Rent-a-Mom Agency"]), "a"))
+        self.assertTrue(matches_search(Game("b", "Bunny's ママ代行サービス", names=["Bunny's Rent-a-Mom Agency"]), "ag"))
+        self.assertFalse(matches_search(Game("g", "ガールズ・ブック・メイカー 1"), "1"))
         self.assertTrue(matches_search(g, "heart"))
         self.assertTrue(matches_search(g, "皇女"))                           # kanji: anywhere
         self.assertFalse(matches_search(g, "とおうじょ"))                     # kana: only from the start
