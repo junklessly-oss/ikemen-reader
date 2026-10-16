@@ -778,6 +778,23 @@ class IkemenSync(unittest.TestCase):
             self.assertEqual(devsync.read(tmp, "PC"), dict(devsync.read(tmp, "PC"), computer="LAPTOP", theme="light"))
             self.assertEqual(sorted(p.name for p in base.iterdir()), ["Device 1", "Device 2"])
 
+    def test_other_device_on_an_older_version(self):
+        """1.0.1 on the other device still shares into "Laptop": its newer copy wins over a stale "Device 2"."""
+        import devsync
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "device_settings"
+            for name, theme, when in (("Device 2", "dark", 100), ("Laptop", "light", 200)):
+                (base / name).mkdir(parents=True)
+                (base / name / "settings.json").write_text(json.dumps({"computer": "LAPTOP", "theme": theme,
+                                                                       "shared_at": when}), "utf-8")
+            devsync.publish(LocalSettings("PC", tmp), "DESKTOP", {})
+            self.assertEqual(devsync.read(tmp, "Laptop")["theme"], "light")
+            self.assertEqual(sorted(p.name for p in base.iterdir()), ["Device 1", "Device 2"])
+            (base / "Laptop").mkdir()                                            # an older, stale leftover
+            (base / "Laptop" / "settings.json").write_text(json.dumps({"theme": "dark", "shared_at": 50}), "utf-8")
+            devsync.publish(LocalSettings("PC", tmp), "DESKTOP", {})
+            self.assertEqual(devsync.read(tmp, "Laptop")["theme"], "light")
+
     def test_damaged_or_missing(self):
         import devsync
         with tempfile.TemporaryDirectory() as tmp:

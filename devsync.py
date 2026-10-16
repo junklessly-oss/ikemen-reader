@@ -40,6 +40,15 @@ def _owner(d: Path) -> Optional[str]:
     return c if isinstance(c, str) and c else None
 
 
+def _shared_at(d: Path) -> float:
+    """When the settings in this folder were shared (0 if unknown)."""
+    try:
+        t = json.loads((d / "settings.json").read_text("utf-8")).get("shared_at")
+    except (OSError, ValueError, AttributeError):
+        return 0.0
+    return float(t) if isinstance(t, (int, float)) else 0.0
+
+
 def _tidy_folders(cloud_root: str, slot: str, computer: str) -> None:
     """Keep the folder names in step with the device numbers:
     - folders from older versions ("PC" / "Laptop") become "Device 1" / "Device 2";
@@ -50,7 +59,9 @@ def _tidy_folders(cloud_root: str, slot: str, computer: str) -> None:
         o, n = base / old, base / new
         if o.is_dir():
             try:
-                if not n.exists():
+                if n.exists() and _shared_at(o) > _shared_at(n):
+                    shutil.rmtree(n)                    # an older version on the other device still shares into
+                if not n.exists():                      # the old folder: its copy is the newer one, keep that
                     o.rename(n)
                 else:                                   # already moved by the other device: the old one is stale
                     shutil.rmtree(o)
