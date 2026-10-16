@@ -380,12 +380,17 @@ class LibraryGrid(QListWidget):
                 p.setOpacity(1.0)
             if self.w.no_results > 0:                   # searching / filtering found nothing
                 f = QFont(self.font())
-                f.setPointSizeF(f.pointSizeF() * 1.35)
+                f.setPointSizeF(f.pointSizeF() * 2.7)
                 p.setFont(f)
                 c = QColor(COLORS["muted"])
                 c.setAlphaF(0.7 * ease(self.w.no_results))
                 p.setPen(c)
-                p.drawText(self.viewport().rect(), Qt.AlignCenter, tr("grid.no_results"))
+                # centred on the grid itself, not its viewport: the viewport's margins change while results come
+                # and go (scroll bar shown / hidden, covers re-centred) and the text moved with them
+                centre = self.viewport().mapFrom(self, self.rect().center())
+                box = QRect(0, 0, 4000, 400)
+                box.moveCenter(centre)
+                p.drawText(box, Qt.AlignCenter, tr("grid.no_results"))
             p.end()
         super().paintEvent(ev)
         if self.marker is not None and not self.bare:
@@ -1091,6 +1096,19 @@ class CoverCache:
             self._trim_ready()
         return self._cache[key]
 
+    def ready(self, path: Optional[Path], crop) -> bool:
+        """Can this cover be drawn right now without reading or decoding anything?"""
+        if not path:
+            return True
+        sp = str(path)
+        if sp not in self._mtimes:
+            return False
+        mtime = self._mtimes[sp]
+        if mtime is None:
+            return True                                 # (no file: nothing to decode)
+        key = self._key(sp, mtime, crop)
+        return key in self._cache or key in self._ready
+
     def _trim_ready(self) -> None:
         """Covers drawn + covers waiting stay within MAX_COVERS (the least wanted waiting ones go first)."""
         while self._ready and len(self._cache) + len(self._ready) > self.MAX_COVERS:
@@ -1129,7 +1147,8 @@ class CoverCache:
                 out.append((path, mtime, crop, cls._cut(img, crop)))
         return out
 
-    def accept(self, prepared: list) -> None:
+    def accept(self, prepared: list, urgent: bool = False) -> None:
+        """urgent: covers about to be drawn (a search lets them in): kept even past the budget, until drawn."""
         for path, mtime, crop, part in prepared:
             sp = str(path)
             if self._mtimes.setdefault(sp, mtime) != mtime:
@@ -1137,7 +1156,10 @@ class CoverCache:
             key = self._key(sp, mtime, crop)
             if key not in self._cache:
                 self._ready[key] = part                # (in the order wanted: most wanted first)
-        self._trim_ready()
+                if urgent:
+                    self._ready = {key: self._ready.pop(key), **self._ready}   # (trimmed last)
+        if not urgent:
+            self._trim_ready()
 
     @staticmethod
     def _decode(path: Path, zoom: float) -> Optional[QImage]:
@@ -1476,7 +1498,14 @@ class CardDelegate(QStyledItemDelegate):
         if not amp:
             if self._tiles:
                 self._tiles.clear()
-            fade = self.w.appear_fade(index.data(GAME_ID_ROLE))
+            iid = index.data(GAME_ID_ROLE)
+            if iid in self.w.appearing and not self.w.cover_ready(iid):
+                # arriving, but its cover would have to be read and decoded right now (a frame-long freeze):
+                # it loads in the background meanwhile and starts arriving once it's ready
+                self.w.want_cover(iid)
+                self.w.appearing[iid] = max(self.w.appearing[iid], time.monotonic() - self.w._appear_t0)
+                return
+            fade = self.w.appear_fade(iid)
             if fade <= 0:
                 self._paint_item(p, option, index)
                 return
@@ -4875,6 +4904,9 @@ class MainWindow(TaskOwner, QMainWindow):
         self.appearing: dict[str, float] = {}         # item id -> delay: fading in (search / filter let them in)
         self._appear_t0 = 0.0
         self.springs: dict[str, list] = {}            # item id -> [x, y, vx, vy]: gliding on a spring (search)
+        self._cover_wanted: set = set()               # tiles waiting for their covers to load (search arrivals)
+        self._cover_loading = False
+        self._cover_given_up: set = set()
         self._spring_last = 0.0
         self.no_results = 0.0                         # "No Results Found" shown 0..1 (it fades)
         self.bookmark_alpha = 1.0 if settings.show_bookmarks else 0.0   # bookmarks shown 0..1 (they fade)
@@ -5246,8 +5278,79 @@ class MainWindow(TaskOwner, QMainWindow):
             self._art[key] = self.library.artwork_path(game)
         return self._art[key]
 
+    def cover_ready(self, iid: str) -> bool:
+        """Can this tile be drawn without reading or decoding a cover file (a folder: its mosaic)?"""
+        if iid in self._cover_given_up:
+            return True
+        games = self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4] if is_folder(iid) else \
+            [self.games[iid]] if iid in self.games else []
+        for g in games:
+            if not g.artwork:
+                continue
+            key = (g.game_id, g.artwork)
+            if key not in self._art or not self.covers.ready(self._art[key], (g.crop_zoom, g.crop_x, g.crop_y)):
+                return False
+        return True
+
+    def want_cover(self, iid: str) -> None:
+        """Load this tile's cover(s) in the background (it arrives once they're ready; see CardDelegate.paint)."""
+        if iid not in self._cover_wanted:
+            self._cover_wanted.add(iid)
+            if not self._cover_loading:
+                QTimer.singleShot(0, self._load_wanted_covers)
+
+    def _load_wanted_covers(self) -> None:
+        ids, self._cover_wanted = set(self._cover_wanted), set()
+        if not ids or self._cover_loading:
+            self._cover_wanted |= ids
+            return
+        games = []
+        for iid in ids:
+            games += self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4] if is_folder(iid) else \
+                [self.games[iid]] if iid in self.games else []
+        todo = [(g.game_id, g.artwork, (g.crop_zoom, g.crop_x, g.crop_y)) for g in games if g.artwork]
+        art_dir, known, skip = self.library.art_dir, dict(self._art), self.covers.cached()
+        self._cover_loading = True
+
+        def work():
+            arts, wanted = {}, []
+            for gid, artwork, crop in todo:
+                key = (gid, artwork)
+                path = known[key] if key in known else arts.setdefault(key, (art_dir / artwork) if (art_dir / artwork).is_file() else None)
+                if path:
+                    wanted.append((path, crop))
+            mtimes = {}
+            for path, _ in wanted:
+                try:
+                    mtimes[str(path)] = path.stat().st_mtime
+                except OSError:
+                    mtimes[str(path)] = None
+            return arts, mtimes, CoverCache.prepare(wanted, skip)
+
+        def done(result):
+            self._cover_loading = False
+            arts, mtimes, prepared = result
+            for key, path in arts.items():
+                self._art.setdefault(key, path)
+            for sp, m in mtimes.items():
+                self.covers._mtimes.setdefault(sp, m)
+            self.covers.accept(prepared, urgent=True)
+            for iid in ids:
+                if not self.cover_ready(iid):
+                    self._cover_given_up.add(iid)         # (damaged / unreadable: drawn the usual way)
+            self.grid.viewport().update()
+            if self._cover_wanted:
+                self._load_wanted_covers()
+
+        def failed(_):
+            self._cover_loading = False
+            self._cover_given_up |= ids
+            self.grid.viewport().update()
+        self._run(work, done, failed)
+
     def _forget_files(self) -> None:
         self._art = {}
+        self._cover_given_up = set()
         self.covers.forget_files()
 
     def refresh(self) -> None:

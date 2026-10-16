@@ -420,7 +420,12 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
     APPEAR_RISE 10 px, staggered APPEAR_STAGGER 35 ms (max 0.2 s), drawn with opacity (no backdrop redraw).
     Leaving: LEAVE_S 0.26 fade + shrink LEAVE_SHRINK. _settle_grid() on folder open/close.
   * "No Results Found" / 見つかりませんでした (grid.no_results): drawn faint in LibraryGrid.paintEvent, fades
-    (no_results 0..1, NO_RESULTS_S) when searching/filtering and nothing matches.
+    (no_results 0..1, NO_RESULTS_S) when searching/filtering and nothing matches. 2.7x the UI font; centred on
+    the grid widget's own rect (NOT the viewport: its margins change with the scroll bar / re-centring).
+  * Search arrivals never decode covers mid-frame: an arriving tile whose cover isn't in memory
+    (MainWindow.cover_ready / CoverCache.ready) stays hidden, its delay sliding on, while want_cover ->
+    _load_wanted_covers decodes it in the background (accept(urgent=True): kept past the budget until drawn);
+    unreadable ones -> _cover_given_up (drawn the usual way). Cold reveal of 22 covers: 100-120 ms freeze -> none.
   * Matching (owner's rules): kanji in query -> substring anywhere; kana -> title starts with it; Latin/numbers ->
     start of a word (_words: Latin/number runs; one query word may run on across words: "sakuranotoki"; several
     must align). Over title + VNDB names. Fold: NFKC, casefold, katakana->hiragana, apostrophes dropped.
