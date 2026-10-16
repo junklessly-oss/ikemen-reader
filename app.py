@@ -361,13 +361,13 @@ class LibraryGrid(QListWidget):
 
     def paintEvent(self, ev) -> None:
         backdrop = getattr(self.w, "backdrop", None)
-        if backdrop is not None and not self.bare:
+        if backdrop is not None:
             p = QPainter(self.viewport())
-            origin = self.viewport().mapTo(backdrop, QPoint(0, 0)) - backdrop.library_area().topLeft()
-            backdrop.paint_into(p, ev.rect(), origin)
-            leaving = self.w.leaving_frame()
-            if leaving is not None:                     # covers a search / filter took away, fading out
-                pm, rects, opacity, scale = leaving
+            if not self.bare:
+                origin = self.viewport().mapTo(backdrop, QPoint(0, 0)) - backdrop.library_area().topLeft()
+                backdrop.paint_into(p, ev.rect(), origin)
+            for pm, rects, opacity, scale in (self.w.leaving_frame() if not self.bare else []):
+                # covers search / filter changes took away, fading out (each change's own picture)
                 dpr = pm.devicePixelRatio()
                 p.setOpacity(opacity)
                 p.setRenderHint(QPainter.SmoothPixmapTransform)
@@ -378,7 +378,9 @@ class LibraryGrid(QListWidget):
                         to.moveCenter(c)
                         p.drawPixmap(to, pm, QRectF(r.x() * dpr, r.y() * dpr, r.width() * dpr, r.height() * dpr))
                 p.setOpacity(1.0)
-            if self.w.appearing:                        # arriving covers, beneath the ones gliding past them
+            # arriving covers, beneath the ones gliding past them (also in snapshots: a cover taken away while
+            # still arriving then fades out from how it looked, instead of vanishing)
+            if self.w.appearing:
                 delegate = self.itemDelegate()
                 delegate.under_pass = True
                 try:
@@ -394,7 +396,7 @@ class LibraryGrid(QListWidget):
                                 delegate.paint(p, opt, index)
                 finally:
                     delegate.under_pass = False
-            if self.w.no_results > 0:                   # searching / filtering found nothing
+            if self.w.no_results > 0 and not self.bare:  # searching / filtering found nothing
                 f = QFont(self.font())
                 f.setPointSizeF(f.pointSizeF() * 2.7)
                 p.setFont(f)
@@ -634,18 +636,20 @@ HOVER_LIFT = 6                       # px the cover rises on hover
 HOVER_GROW = 0.03                    # 3% bigger on hover
 HOVER_MS = 150                       # ease in/out time
 SLIDE_S = 0.22                       # covers sliding aside into their new places after a drop
-# search / filter: the covers that stay glide on springs (a new keystroke redirects them without a jolt: they keep
-# their speed), the ones let back in rise, grow and fade in one after another, the ones taken away fade and shrink
-SPRING_W = 11.0                      # spring stiffness (critically damped): settles in ~0.4 s
-APPEAR_S = 0.45                      # a cover let back in takes this long to arrive ...
-APPEAR_GROW = 0.14                   # ... starting this much smaller
-APPEAR_RISE = 10                     # ... and this many px lower
-APPEAR_STAGGER = 0.035               # each one a little after the one before it (in grid order) ...
-APPEAR_STAGGER_MAX = 0.2             # ... the last at most this much later
-LEAVE_S = 0.2                        # a cover taken away fades and shrinks this long (first, and quickly) ...
-LEAVE_SHRINK = 0.2
-GLIDE_WAIT = 0.1                     # ... the covers that stay start gliding this much later (only if some leave)
-ARRIVE_CLEAR = 0.12                  # a cover arrives once whatever was leaving its place is fainter than this
+# search / filter: nothing slides. A cover whose place changes fades out where it was (with the ones taken away)
+# and fades back in at its new place; covers that keep their place stay still. OUT first, then IN, so two pictures
+# never blend in one place; and the grid only changes once typing pauses for SEARCH_PAUSE_MS
+SEARCH_PAUSE_MS = 120
+LEAVE_S = 0.16                       # OUT: fade + shrink this long ...
+LEAVE_SHRINK = 0.12
+ARRIVE_WAIT = 0.1                    # ... IN starts this much after a change that takes covers away ...
+APPEAR_S = 0.36                      # ... and takes this long (fade + grow + rise) ...
+APPEAR_GROW = 0.1                    # ... starting this much smaller ...
+APPEAR_RISE = 8                      # ... and this many px lower ...
+APPEAR_STAGGER = 0.025               # ... each one a little after the one before it (in grid order) ...
+APPEAR_STAGGER_MAX = 0.15            # ... the last at most this much later
+ARRIVE_CLEAR = 0.12                  # (a place is clear once whatever was leaving it is fainter than this)
+MAX_LEAVING_GROUPS = 4               # leaving pictures from earlier changes still finishing
 NO_RESULTS_S = 0.3                   # "No Results Found" fades in (once the last cover has gone) ...
 NO_RESULTS_RISE = 8                  # ... rising this many px into place ...
 NO_RESULTS_Y = 0.44                  # ... at this height of the library (the optical centre); it goes at once
@@ -4930,14 +4934,13 @@ class MainWindow(TaskOwner, QMainWindow):
         self.slides: dict[str, tuple] = {}            # item id -> (dx, dy): sliding from its old place
         self.appearing: dict[str, float] = {}         # item id -> delay: fading in (search / filter let them in)
         self._appear_t0 = 0.0
-        self.springs: dict[str, list] = {}            # item id -> [x, y, vx, vy]: gliding on a spring (search)
         self._cover_wanted: set = set()               # tiles waiting for their covers to load (search arrivals)
         self._cover_loading = False
         self._cover_given_up: set = set()
-        self._spring_last = 0.0
         self.no_results = 0.0                         # "No Results Found" shown 0..1 (it fades)
         self.bookmark_alpha = 1.0 if settings.show_bookmarks else 0.0   # bookmarks shown 0..1 (they fade)
-        self._leaving = None                           # (snapshot, rects, start): covers fading out
+        self._leaving: list = []                       # [(snapshot, rects, start)]: covers fading out (each change
+                                                       # adds one; earlier ones finish their fade, never cut short)
         self._slide_t0 = 0.0
         self._dim_gid: Optional[str] = None           # the picked-up game, faded in its place
         self.drag_dim = 0.0                           # 0..1 how far it has faded
@@ -4965,7 +4968,10 @@ class MainWindow(TaskOwner, QMainWindow):
         self.search.setMinimumWidth(120)
         self.search.setMaximumWidth(220)
         self.search.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.search.textChanged.connect(self._apply_filter)
+        # the grid rearranges once typing pauses (holding Backspace / fast typing: one calm change at the end)
+        self._search_pause = QTimer(self, singleShot=True, interval=SEARCH_PAUSE_MS)
+        self._search_pause.timeout.connect(self._apply_filter)
+        self.search.textChanged.connect(self._search_pause.start)
         tl.addWidget(self.search)
         self.sort = ThemedCombo()
         self.sort.activated.connect(self._sort_picked)
@@ -5819,7 +5825,7 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _settle_grid(self) -> None:
         """Everything in the grid at its place at once (a folder opens or closes: the other view starts still)."""
-        self.slides, self.springs, self.appearing, self._leaving = {}, {}, {}, None
+        self.slides, self.appearing, self._leaving = {}, {}, []
         self.no_results = 0.0
 
     def _covers_snapshot(self) -> Optional[QPixmap]:
@@ -5962,7 +5968,6 @@ class MainWindow(TaskOwner, QMainWindow):
         """Search / filter: the covers that stay glide to their new places, the ones let in fade in and the
         ones taken away fade out where they were (drawn from a picture of the grid taken just before)."""
         before = self._positions() if self.isVisible() else {}
-        old_scroll = self.grid.verticalScrollBar().value()
         snap = self._grid_snapshot() if before else None
         rects = {}
         if snap is not None:
@@ -5971,18 +5976,20 @@ class MainWindow(TaskOwner, QMainWindow):
                 it = self.grid.item(i)
                 iid = it.data(GAME_ID_ROLE)
                 rects[iid] = QRect(before[iid], self.grid.visualItemRect(it).size()).adjusted(-2, -2, 2, 2) & view
+        self._search_pause.stop()                        # (called directly: no second run when the pause ends)
         self._rebuild()
         if not self.showing_no_results():
             self.no_results = 0.0                        # covers coming back: the text goes in that same frame
         if before:
-            moved = self._slide_from(before, appear=True, old_scroll=old_scroll)
+            moved = self._slide_from(before, appear=True)
             kept = {self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
             gone = []
             for iid, r in rects.items():
                 if (iid not in kept or iid in moved) and not r.isEmpty():
                     if not any((r & g).width() * (r & g).height() > 0.3 * r.width() * r.height() for g in gone):
                         gone.append(r)                   # (two covers caught on top of each other: one picture)
-            self._leaving = (snap, gone, time.monotonic()) if gone else None
+            if gone:
+                self._leaving = (self._leaving + [(snap, gone, time.monotonic())])[-MAX_LEAVING_GROUPS:]
         self._update_anim()                              # (also fades "No Results Found" in)
 
     def _grid_snapshot(self) -> Optional[QPixmap]:
@@ -6003,17 +6010,15 @@ class MainWindow(TaskOwner, QMainWindow):
             p.end()
         return pm
 
-    def leaving_frame(self):
-        """(snapshot, rects, opacity, scale) for covers fading out after a search / filter, or None."""
-        lv = self._leaving
-        if lv is None:
-            return None
-        t = (time.monotonic() - lv[2]) / LEAVE_S
-        if t >= 1:
-            self._leaving = None
-            return None
-        k = 1 - (1 - t) ** 3                             # ease out
-        return lv[0], lv[1], 1 - k, 1 - LEAVE_SHRINK * k
+    def leaving_frame(self) -> list:
+        """[(snapshot, rects, opacity, scale)] for covers fading out after search / filter changes (oldest first)."""
+        now = time.monotonic()
+        self._leaving = [g for g in self._leaving if now - g[2] < LEAVE_S]
+        out = []
+        for pm, rects, t0 in self._leaving:
+            k = 1 - (1 - (now - t0) / LEAVE_S) ** 3      # ease out
+            out.append((pm, rects, 1 - k, 1 - LEAVE_SHRINK * k))
+        return out
 
     def showing_no_results(self) -> bool:
         """Searching / filtering and nothing matches."""
@@ -6546,61 +6551,37 @@ class MainWindow(TaskOwner, QMainWindow):
             out[iid] = pos + off if off is not None else pos
         return out
 
-    def _slide_from(self, before: dict, skip: Optional[str] = None, appear: bool = False,
-                    old_scroll: Optional[int] = None) -> set:
+    def _slide_from(self, before: dict, skip: Optional[str] = None, appear: bool = False) -> set:
         """After the grid changed: every cover that moved slides from where it was to its new place.
-        appear (search / filter): covers that stay in their row glide on springs that keep their speed from the
-        last keystroke (they keep their order, so they never pass over each other); covers that change rows
-        would cross the others diagonally, so they fade out where they were and arrive at their new place, like
-        the covers a search lets in, one after another. Returns the ones that changed rows."""
+        appear (search / filter): nothing slides. Covers that weren't there before, and covers whose place
+        changed, arrive (fade in) at their place one after another, after the covers leaving have faded out;
+        returns the ones whose place changed (the caller fades them out where they were)."""
         self.grid.doItemsLayout()
         now = {self.grid.item(i).data(GAME_ID_ROLE): self.grid.visualItemRect(self.grid.item(i)).topLeft()
-               for i in range(self.grid.count())}             # (the new places themselves, no glide offsets)
+               for i in range(self.grid.count())}             # (the new places themselves)
         t = time.monotonic()
         moved: set = set()
         if appear:
-            old_springs, self.springs, self.slides = self.springs, {}, {}
+            self.slides = {}
             arriving = []
-            pitch = max(1, self.grid.gridSize().height())
-            scroll = self.grid.verticalScrollBar().value()
-            leaving = any(iid not in now for iid in before)
             for iid, p in now.items():
                 old = before.get(iid)
                 if old is None:
                     if before:
                         arriving.append(iid)
-                    continue
-                # (in the grid's own coordinates: a scroll that moves every cover alike is still a glide)
-                if old_scroll is not None and abs((old.y() + old_scroll) - (p.y() + scroll)) > pitch / 2:
+                elif old != p:
                     moved.add(iid)
                     arriving.append(iid)
-                    continue
-                x, y = old.x() - p.x(), old.y() - p.y()
-                if iid in self.appearing and (x or y):
-                    moved.add(iid)                       # still arriving (half there): arrives at its new place
-                    arriving.append(iid)
-                    continue
-                v = list(old_springs.get(iid, [0, 0, 0.0, 0.0, t]))
-                for k, off in ((2, x), (3, y)):          # its speed carries over only towards the new place, and
-                    if v[k] * off > 0:                   # never so fast it would overshoot into a neighbour
-                        v[k] = 0.0
-                    elif abs(v[k]) > SPRING_W * abs(off):
-                        v[k] = -SPRING_W * off
-                if x or y or abs(v[2]) > 1 or abs(v[3]) > 1:
-                    still = abs(v[2]) <= 1 and abs(v[3]) <= 1 and v[4] <= t
-                    # at rest: wait for the leaving covers to get out of the way; moving: keep going
-                    start = t + GLIDE_WAIT if (still and (leaving or moved)) else v[4] if v[4] > t else t
-                    self.springs[iid] = [float(x), float(y), v[2], v[3], start]
-            # still arriving from the last keystroke: carry on; new ones queue up after them, in grid order
+            # still arriving in the same place from an earlier change: carry on; the rest queue up in grid order
             keep = {iid: d - (t - self._appear_t0) for iid, d in self.appearing.items()
                     if iid in now and iid not in moved and t - self._appear_t0 - d < APPEAR_S}
             fresh = [iid for iid in arriving if iid not in keep]
+            leaving = bool(moved) or any(iid not in now for iid in before)
+            base = ARRIVE_WAIT if leaving else 0.0
             step = min(APPEAR_STAGGER, APPEAR_STAGGER_MAX / max(1, len(fresh) - 1))
-            self.appearing = {**keep, **{iid: i * step for i, iid in enumerate(fresh)}}
+            self.appearing = {**keep, **{iid: base + i * step for i, iid in enumerate(fresh)}}
             self._appear_t0 = t
-            self._spring_last = t
         else:
-            self.springs = {}
             self.slides = {}
             for iid, p in now.items():
                 old = before.get(iid)
@@ -6625,16 +6606,18 @@ class MainWindow(TaskOwner, QMainWindow):
     def _hold_blocked_arrivals(self, now: float) -> None:
         """A cover that hasn't started arriving waits while a leaving cover still shows in its place (no
         cross-fade of two pictures in one spot); its turn moves on until the place is clear."""
-        lf = self.leaving_frame()
-        if lf is None or lf[2] < ARRIVE_CLEAR or not self.appearing:
-            return
         ghosts = []
-        for r in lf[1]:
-            g = QRectF(r)
-            c = g.center()
-            g.setSize(g.size() * lf[3])
-            g.moveCenter(c)
-            ghosts.append(g)
+        for _, rects, opacity, scale in self.leaving_frame():
+            if opacity < ARRIVE_CLEAR:
+                continue
+            for r in rects:
+                g = QRectF(r)
+                c = g.center()
+                g.setSize(g.size() * scale)
+                g.moveCenter(c)
+                ghosts.append(g)
+        if not ghosts or not self.appearing:
+            return
         t = now - self._appear_t0
         for i in self.grid.visible_range():
             it = self.grid.item(i)
@@ -6646,34 +6629,7 @@ class MainWindow(TaskOwner, QMainWindow):
             if any(spot.intersects(g) for g in ghosts):
                 self.appearing[iid] = t
 
-    def _step_springs(self, now: float) -> None:
-        """Move every spring-gliding cover on by the time since the last frame (exact, so uneven frames
-        don't change the motion)."""
-        dt = min(0.05, max(0.0, now - self._spring_last))
-        self._spring_last = now
-        if not dt:
-            return
-        w = SPRING_W
-        done = []
-        for iid, s in self.springs.items():              # s = [x, y, vx, vy, start]
-            if now <= s[4]:
-                continue                                 # (waiting for the leaving covers to get out of the way)
-            h = min(dt, now - s[4])
-            e = math.exp(-w * h)
-            for k in (0, 1):                             # critically damped: x(t) = (x0 + (v0 + w x0) t) e^(-w t)
-                x0, v0 = s[k], s[k + 2]
-                c = v0 + w * x0
-                s[k] = (x0 + c * h) * e
-                s[k + 2] = (v0 - w * c * h) * e
-            if abs(s[0]) < 0.4 and abs(s[1]) < 0.4 and abs(s[2]) < 8 and abs(s[3]) < 8:
-                done.append(iid)
-        for iid in done:
-            del self.springs[iid]
-
     def slide_offset(self, iid: str) -> Optional[QPoint]:
-        s = self.springs.get(iid)
-        if s is not None:
-            return QPoint(round(s[0]), round(s[1]))
         d = self.slides.get(iid)
         if d is None:
             return None
@@ -6860,10 +6816,10 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _no_results_target(self) -> float:
         """1 once nothing matches AND the last cover has finished fading out (never both on screen at once)."""
-        return 1.0 if self.showing_no_results() and self._leaving is None else 0.0
+        return 1.0 if self.showing_no_results() and not self._leaving else 0.0
 
     def _search_moving(self) -> bool:
-        return bool(self.springs) or bool(self.appearing) or self._leaving is not None \
+        return bool(self.appearing) or bool(self._leaving) \
             or self.no_results != self._no_results_target()
 
     def _tick(self) -> None:
@@ -6926,7 +6882,6 @@ class MainWindow(TaskOwner, QMainWindow):
             region = QRegion(view)
             changed = True
         if self._search_moving():                         # search / filter: gliding, arriving, leaving
-            self._step_springs(now)
             self._hold_blocked_arrivals(now)
             if self.appearing and now - self._appear_t0 >= max(self.appearing.values()) + APPEAR_S:
                 self.appearing = {}

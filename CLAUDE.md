@@ -418,22 +418,20 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
     First scan 5.3 -> 2.4 s. hold_warm_up(hold, who) = set of holders (egg + "grid": slides/springs/drags).
   * Late frames (>20 ms) per run: ~100 -> ~25 (rest = idle light-pulse paints); on 1 core at 150 %: 149 -> 31.
   * title_sort_key lru_cached (34k calls per run at 220 games). Main anim QTimer now PreciseTimer.
-  * Search glides = critically damped springs (MainWindow.springs [x,y,vx,vy], SPRING_W 11, exact per-frame step
-    _step_springs): a new keystroke keeps each cover's speed (no jolt). Drop slides keep the old tween (SLIDE_S).
-    Arrivals: appearing {id: delay}, APPEAR_S 0.45, ease-out (1-t)^3, grow from 1-APPEAR_GROW 0.14, rise
-    APPEAR_RISE 10 px, staggered APPEAR_STAGGER 35 ms (max 0.2 s), drawn with opacity (no backdrop redraw).
-    Leaving: LEAVE_S 0.26 fade + shrink LEAVE_SHRINK. _settle_grid() on folder open/close.
+  * SEARCH MOTION (owner, final 2026-10-16: "no more sliding"): nothing slides in search. A cover whose place
+    changes fades out there and back in at its new place; covers keeping their place stay still. OUT (LEAVE_S 0.16,
+    shrink 0.12) then IN (ARRIVE_WAIT 0.1 later; APPEAR_S 0.36 fade + grow + rise, stagger 25 ms, max 0.15 s).
+    Grid changes once typing pauses (SEARCH_PAUSE_MS 120, MainWindow._search_pause; status/sort changes at once;
+    tests use search_now()). Leaving pictures = list of groups (MAX_LEAVING_GROUPS 4): a new change never cuts an
+    earlier fade short (was ~27 pops/run); snapshots include arriving covers (bare paint draws them), so a cover
+    taken away mid-arrival fades from how it looked. Arrivals drawn beneath (under_pass), held while a leaving
+    picture still shows in their place (_hold_blocked_arrivals). Rejected on the way: spring glides, row-change
+    swaps + gliding mix ("sliding on some things and not on others is awful"). Drag-and-drop slides unchanged.
+    Checks: overlap.py 0 blended frames, pops.py 0, searchfuzz 0 errors.
   * "No Results Found" / 見つかりませんでした (grid.no_results): drawn faint in LibraryGrid.paintEvent, fades
     (no_results 0..1, NO_RESULTS_S) when searching/filtering and nothing matches. 2.7x the UI font; centred on
     the grid widget's own rect (NOT the viewport: its margins change with the scroll bar / re-centring).
-  * Choreography (no blended overlaps; per-frame overlap checker in scratch overlap.py: 996 -> 7 frames of 2,240):
-    leaving first + quickly (LEAVE_S 0.2, shrink 0.2, each spot drawn once); gliders AT REST wait GLIDE_WAIT 0.1 s
-    when something leaves (spring [x, y, vx, vy, start]); covers changing ROWS (grid coords, scroll-proof) leave +
-    arrive instead of gliding diagonally across others (_slide_from returns them); a half-arrived cover whose spot
-    moves restarts its arrival; carried speed only towards the target and <= SPRING_W*offset (no overshoot);
-    arrivals drawn BENEATH the rest (LibraryGrid.paintEvent under_pass; delegate skips them otherwise) and held
-    (_hold_blocked_arrivals) while a leaving cover is still >= ARRIVE_CLEAR visible in their spot.
-    "No Results Found" only once the last cover has gone (_no_results_target), vanishes in the frame covers return,
+  * "No Results Found" only once the last cover has gone (_no_results_target), vanishes in the frame covers return,
     sits at NO_RESULTS_Y 0.44 (optical centre), rises NO_RESULTS_RISE 8 px as it fades in (0.3 s).
   * Search arrivals never decode covers mid-frame: an arriving tile whose cover isn't in memory
     (MainWindow.cover_ready / CoverCache.ready) stays hidden, its delay sliding on, while want_cover ->

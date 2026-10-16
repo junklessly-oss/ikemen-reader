@@ -54,6 +54,12 @@ def read_all(folder: Path) -> dict:
     return {p.relative_to(folder).as_posix(): p.read_text("utf-8") for p in folder.rglob("*") if p.is_file()}
 
 
+def search_now(w, text: str) -> None:
+    """Type into the library's search box and apply it at once (the grid normally waits for typing to pause)."""
+    w.search.setText(text)
+    w._apply_filter()
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -1749,14 +1755,14 @@ class SortingAndCustomOrder(unittest.TestCase):
                 import app
                 shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
                 f = app.FOLDER_PREFIX + fid
-                w.search.setText("ser")                          # the folder is called "Series"
+                search_now(w, "ser")                          # the folder is called "Series"
                 self.assertEqual(shown(), [f])                   # its games don't match "ser" themselves
-                w.search.setText("saga")
+                search_now(w, "saga")
                 self.assertEqual(sorted(shown()), sorted([ids["Saga One"], ids["Saga Two"]]))
-                w.search.setText("s")                            # both: the folder and its games
+                search_now(w, "s")                            # both: the folder and its games
                 self.assertIn(f, shown())
                 w.settings.status_filter = "finished"            # a status filter: only folders holding one
-                w.search.setText("series")
+                search_now(w, "series")
                 self.assertEqual(shown(), [])
                 lib.update(ids["Saga One"], status="finished")
                 w.refresh()
@@ -1872,7 +1878,7 @@ class SortingAndCustomOrder(unittest.TestCase):
                 spot = w._drop_spot(QPoint(int(c.right() + app.GRID_GAP / 2), int(c.center().y())))
                 self.assertEqual(spot[:2], ("between", 2))                                         # gap: move
                 self.assertIsNone(w._drop_spot(QPoint(int(c.left() - 4), int(c.center().y()))))   # next to itself
-                w.search.setText("A")                                                               # searching:
+                search_now(w, "A")                                                               # searching:
                 w._dragging = ids["A"]
                 self.assertIsNone(w._drop_spot(QPoint(int(rect(0).right() + 10), int(rect(0).center().y()))))
             finally:
@@ -2131,67 +2137,56 @@ class SmoothAnimations(unittest.TestCase):
             app, w, _ = self._window(tmp, n=12)
 
             def settle():
-                end = _t.monotonic() + app.APPEAR_S + app.APPEAR_STAGGER_MAX + 0.5
+                end = _t.monotonic() + app.ARRIVE_WAIT + app.APPEAR_S + app.APPEAR_STAGGER_MAX + 0.5
                 while _t.monotonic() < end:
                     QApplication.processEvents()
                     _t.sleep(0.01)
             try:
-                w.search.setText("alpha")                         # 4 of 12 stay
+                search_now(w, "alpha")                         # 4 of 12 stay
                 self.assertEqual(w.grid.count(), 4)
-                self.assertIsNotNone(w._leaving)                  # the other visible ones fade out
-                self.assertTrue(w._leaving[1])
-                # covers that changed rows fade out and arrive again instead of crossing the others; the rest glide
-                shown = {w.grid.item(i).data(app.GAME_ID_ROLE): w.grid.visualItemRect(w.grid.item(i)) for i in range(4)}
-                self.assertTrue(set(w.appearing) <= set(shown))
-                for k in w.springs:
-                    self.assertEqual(w.springs[k][1], 0.0)        # gliders stay in their row
+                self.assertTrue(w._leaving and w._leaving[-1][1])  # OUT: the others fade out where they were ...
+                # ... and the ones whose place changed come back IN at their new place, after the OUT
+                self.assertTrue(w.appearing)
+                self.assertTrue(all(d >= app.ARRIVE_WAIT - 1e-9 for d in w.appearing.values()))
+                self.assertEqual(w.slides, {})                    # nothing slides
                 self.assertTrue(w.anim.isActive())
-                lf = w.leaving_frame()
-                self.assertTrue(0 < lf[2] <= 1 and app.LEAVE_SHRINK <= 1 - lf[3] + app.LEAVE_SHRINK)
-                w.search.setText("")                              # back: the 8 others arrive, one after another
+                lf = w.leaving_frame()[-1]
+                self.assertTrue(0 < lf[2] <= 1 and 1 - app.LEAVE_SHRINK <= lf[3] <= 1)
+                search_now(w, "alph")                             # a change mid-fade: the first fade carries on
+                self.assertTrue(w._leaving)
+                search_now(w, "")                              # back: IN, the 8 others arrive one after another
                 self.assertEqual(w.grid.count(), 12)
-                self.assertGreaterEqual(len(w.appearing), 8)      # (+ any that change rows on the way back)
+                self.assertGreaterEqual(len(w.appearing), 8)      # (+ the ones whose place changes back)
                 delays = sorted(w.appearing.values())
-                self.assertEqual(delays[0], 0.0)
-                self.assertTrue(0 < delays[-1] <= app.APPEAR_STAGGER_MAX + 1e-9)
+                self.assertTrue(0 <= delays[0] <= app.ARRIVE_WAIT + 1e-9)
+                self.assertTrue(0 < delays[-1] - delays[0] <= app.APPEAR_STAGGER_MAX + 1e-9)
                 first = min(w.appearing, key=w.appearing.get)
                 self.assertGreater(w.appear_fade(first), 0.5)
                 settle()
                 self.assertEqual(w.appear_fade(first), 0.0)       # fully there
-                self.assertEqual((w.slides, w.springs, w.appearing), ({}, {}, {}))
-                self.assertIsNone(w.leaving_frame())
+                self.assertEqual((w.slides, w.appearing), ({}, {}))
+                self.assertEqual(w.leaving_frame(), [])
                 # nothing matches: "No Results Found" fades in, and out again when something does
-                w.search.setText("zzz")
+                search_now(w, "zzz")
                 self.assertTrue(w.showing_no_results())
                 settle()
                 self.assertEqual(w.no_results, 1.0)
-                w.search.setText("alp")
+                search_now(w, "alp")
                 settle()
                 self.assertEqual(w.no_results, 0.0)
             finally:
                 w.close()
                 app.wait_for_tasks(5)
 
-    def test_search_springs_keep_their_speed(self):
-        """A keystroke while covers are still gliding redirects them without a jolt: same place, same speed."""
+    def test_search_never_slides(self):
+        """Search: a cover whose place changes fades out there and back in at its new place; nothing moves."""
         with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
             app, w, _ = self._window(tmp, n=12)
             try:
-                w.search.setText("alpha")
-                self.assertTrue(w.springs)
-                start = max(v[4] for v in w.springs.values())     # (they wait while the others leave)
-                self.assertGreater(start, w._spring_last)
-                w._step_springs(start + 0.05)                     # mid-glide
-                moving = {k: list(v) for k, v in w.springs.items() if abs(v[2]) + abs(v[3]) > 1}
-                self.assertTrue(moving)
-                drawn = {k: w.slide_offset(k) + w.grid.visualItemRect(w.grid.item(i)).topLeft()
-                         for i in range(w.grid.count()) for k in [w.grid.item(i).data(app.GAME_ID_ROLE)] if k in moving}
-                w.search.setText("alph")                          # same results, new keystroke
-                for k, v in moving.items():
-                    i = next(i for i in range(w.grid.count()) if w.grid.item(i).data(app.GAME_ID_ROLE) == k)
-                    now = w.slide_offset(k) + w.grid.visualItemRect(w.grid.item(i)).topLeft()
-                    self.assertLessEqual((now - drawn[k]).manhattanLength(), 2)      # no jump ...
-                    self.assertEqual(w.springs[k][2:4], v[2:4])                       # ... and no stop
+                for q in ("alpha", "alph", "", "beta", "zzz", ""):
+                    search_now(w, q)
+                    for i in range(w.grid.count()):
+                        self.assertIsNone(w.slide_offset(w.grid.item(i).data(app.GAME_ID_ROLE)))
             finally:
                 w.close()
                 app.wait_for_tasks(5)
