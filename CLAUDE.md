@@ -456,7 +456,11 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
-  direction) instead of one flat colour (owner's idea, 2026-10-15).
+  direction) instead of one flat colour (owner's idea, 2026-10-15). Assessed 2026-10-16, skipped for now: 33 roles,
+  86 style-sheet uses (QSS takes qlineargradient: easy), 55 painted uses (gradient per shape), 19 colour-maths spots
+  (lighter / alpha / contrast warning / blended backdrop / logo recolour: no single answer), gradient editor, and
+  Ikemen Sync only accepts #RRGGBB (store gradients in a new field old versions ignore). Recommended scope if
+  revived: SURFACES only (library background, bars, buttons, placeholder covers) = ~1/3 of the work.
 - macOS / Linux support: UI, sync engine, library already portable; games would run through Wine (start/track via
   wine, save paths inside the Wine prefix + translation between devices), Wine registry for registry saves,
   LE/Luna don't apply, startup/.lnk/window titles/playtime need equivalents, build per OS (Mac signing ~$99/yr).
