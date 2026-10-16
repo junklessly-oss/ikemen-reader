@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
-                            QTimer, QUrl, Signal)
+                            QTimer, Signal)
 from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRegion,
                            QRadialGradient)
@@ -1908,40 +1908,6 @@ class CropView(QWidget):
             self.set_zoom(self.zoom * (1.1 if ev.angleDelta().y() > 0 else 1 / 1.1))
 
 
-# =========================================================================== file pickers
-# Every Browse opens where its box points (the nearest folder that exists, when the path doesn't yet), or - with
-# nothing filled in - in This PC, never in whatever folder Windows remembers from the last Browse.
-THIS_PC = "clsid:0AC0837C-BBF8-452A-850D-79D08E667CA7"     # FOLDERID_ComputerFolder (Qt understands clsid: URLs)
-
-
-def browse_start(path: str = "") -> QUrl:
-    p = (path or "").strip().strip('"')
-    if p:
-        q = Path(p)
-        if q.is_absolute():
-            if q.is_file():
-                return QUrl.fromLocalFile(str(q))           # opens its folder with the file selected
-            for d in (q, *q.parents):
-                if d.is_dir():
-                    return QUrl.fromLocalFile(str(d))
-    return QUrl(THIS_PC) if sys.platform == "win32" else QUrl.fromLocalFile(str(Path.home()))
-
-
-def pick_folder(parent, caption: str, path: str = "") -> str:
-    url = QFileDialog.getExistingDirectoryUrl(parent, caption, browse_start(path), supportedSchemes=["file"])
-    return str(Path(url.toLocalFile())) if url.isValid() and url.toLocalFile() else ""
-
-
-def pick_file(parent, caption: str, path: str = "", filter: str = "") -> str:
-    url, _ = QFileDialog.getOpenFileUrl(parent, caption, browse_start(path), filter, supportedSchemes=["file"])
-    return url.toLocalFile() if url.isValid() else ""
-
-
-def pick_files(parent, caption: str, filter: str = "") -> list[str]:
-    urls, _ = QFileDialog.getOpenFileUrls(parent, caption, browse_start(), filter, supportedSchemes=["file"])
-    return [u.toLocalFile() for u in urls if u.isValid() and u.toLocalFile()]
-
-
 # =========================================================================== small widgets
 def browse_row(edit: QLineEdit, on_browse, label: str) -> QHBoxLayout:
     row = QHBoxLayout()
@@ -3179,7 +3145,7 @@ class FontDialog(QDialog):
 
     @guarded
     def _add(self) -> None:
-        path = pick_file(self, tr("font.pick"), "", tr("font.files"))
+        path, _ = QFileDialog.getOpenFileName(self, tr("font.pick"), "", tr("font.files"))
         if not path:
             return
         fam = add_user_font(path)
@@ -3428,7 +3394,7 @@ class BackgroundDialog(QDialog):
         self._changed()
 
     def _choose(self) -> None:
-        f = pick_file(self, tr("bg.choose"), "", tr("file.images"))
+        f, _ = QFileDialog.getOpenFileName(self, tr("bg.choose"), "", tr("file.images"))
         if not f:
             return
         if QImage(f).isNull():
@@ -3879,22 +3845,23 @@ class SettingsDialog(FitsScreen, QDialog):
         return str(keep) if keep else ""
 
     def _pick_cloud(self):
-        d = pick_folder(self, tr("settings.pick_cloud"), self.cloud.text())
+        start = self.cloud.text() or str(Path.home())
+        d = QFileDialog.getExistingDirectory(self, tr("settings.pick_cloud"), start)
         if d:
-            self.cloud.setText(d)
+            self.cloud.setText(str(Path(d)))
 
     def _pick_le(self):
-        f = pick_file(self, tr("settings.pick_le"), self.le.text(), "LEProc.exe (LEProc.exe);;*.exe")
+        f, _ = QFileDialog.getOpenFileName(self, tr("settings.pick_le"), self.le.text(), "LEProc.exe (LEProc.exe);;*.exe")
         if f:
             self.le.setText(str(Path(f)))
 
     def _pick_luna(self):
-        f = pick_file(self, tr("settings.pick_luna"), self.luna.text(), "*.exe")
+        f, _ = QFileDialog.getOpenFileName(self, tr("settings.pick_luna"), self.luna.text(), "*.exe")
         if f:
             self.luna.setText(str(Path(f)))
 
     def _pick_anki(self):
-        f = pick_file(self, tr("settings.pick_anki"), self.anki.text(), "*.exe")
+        f, _ = QFileDialog.getOpenFileName(self, tr("settings.pick_anki"), self.anki.text(), "*.exe")
         if f:
             self.anki.setText(str(Path(f)))
 
@@ -4466,7 +4433,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
         self.zoom.blockSignals(False)
 
     def _pick_art(self):
-        f = pick_file(self, tr("file.pick_cover"), "", tr("file.images"))
+        f, _ = QFileDialog.getOpenFileName(self, tr("file.pick_cover"), "", tr("file.images"))
         if f and QImage(f).isNull():
             message(self, tr("bg.bad_image"))          # damaged, or not really an image
             return
@@ -4524,7 +4491,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
 
     # -- paths
     def _pick_exe(self, edit: QLineEdit):
-        f = pick_file(self, tr("file.pick_exe"), edit.text(), tr("file.programs"))
+        f, _ = QFileDialog.getOpenFileName(self, tr("file.pick_exe"), edit.text(), tr("file.programs"))
         if f:
             exe = lnk.resolve_game_exe(f) or f
             edit.setText(str(Path(exe)))
@@ -4534,9 +4501,11 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
                 self._suggest_save()
 
     def _pick_save(self, edit: QLineEdit):
-        d = pick_folder(self, tr("file.pick_saves"), edit.text())
+        exe = self.fields[self.machine][0].text()
+        start = edit.text() or (str(Path(exe).parent) if exe else os.environ.get("APPDATA", ""))
+        d = QFileDialog.getExistingDirectory(self, tr("file.pick_saves"), start)
         if d:
-            edit.setText(d)
+            edit.setText(str(Path(d)))
 
     def _shared_save_folder(self, save_dir: str) -> Optional[Game]:
         """Another game whose save folder on This Device is the same as, inside, or around this one."""
@@ -4701,11 +4670,10 @@ class DetectDialog(QDialog):
             lay.addSpacing(4)
             lay.addWidget(section(tr("detect.section_saves")))
         self.group = QButtonGroup(self)
-        sure_folders = [c for c in folders if c.sure]
-        for c in folders:
+        for i, c in enumerate(folders):
             rb = QRadioButton(f"{c.path}\n{tr('detect.files', n=c.files)}")
             rb.setProperty("path", c.path)
-            rb.setChecked(len(sure_folders) == 1 and c is sure_folders[0])   # a guess is never ticked for you
+            rb.setChecked(i == 0)
             self.group.addButton(rb)
             lay.addWidget(rb)
         if regs and not folders:
@@ -4746,8 +4714,6 @@ class DetectDialog(QDialog):
             use = QPushButton(tr("detect.use"))
             use.setDefault(True)
             use.clicked.connect(self._use)
-            use.setEnabled(self.group.checkedButton() is not None)     # nothing ticked: pick one first
-            self.group.buttonToggled.connect(lambda *_: use.setEnabled(self.group.checkedButton() is not None))
             row.addWidget(use)
         lay.addSpacing(8)
         lay.addLayout(row)
@@ -4765,7 +4731,7 @@ class DetectDialog(QDialog):
         return True
 
     def _browse(self):
-        d = pick_folder(self, tr("file.pick_saves"))
+        d = QFileDialog.getExistingDirectory(self, tr("file.pick_saves"), os.environ.get("APPDATA", ""))
         if d and self._ok(str(Path(d))):
             self.save_dir = str(Path(d))
             self.registry_key = self._registry_choice()
@@ -4873,7 +4839,6 @@ class MainWindow(TaskOwner, QMainWindow):
         self.checker: Optional[StatusChecker] = None
         self.syncer: Optional[SyncWorker] = None      # Sync Now / Choose Now running
         self._conflicts_snoozed: set = set()  # "both changed" games not to ask about until the other device changes something
-        self._ask_now: set = set()            # settings just saved: a save mismatch goes straight to "which to keep"
         self._recheck = False
         self.playing_id: Optional[str] = None
         self._quiet_polls = 0                # live polls since the last full save check
@@ -5479,21 +5444,13 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _offer_conflicts(self) -> None:
         """Saves changed on both devices can't sync silently: ask once (Choose Now / Later). Later isn't
-        asked again for the same games until the other device changes something new. A game whose settings
-        were just saved here skips that step: straight to "which saves to keep" (even if Later was said before)."""
+        asked again for the same games until the other device changes something new."""
         conflicts = [gid for gid, s in self.sync_states.items() if s == "conflict" and gid in self.games
                      and gid != self.playing_id]
-        self._ask_now &= set(conflicts)             # (the others synced by themselves, or need nothing)
-        new = [gid for gid in conflicts if gid not in self._conflicts_snoozed or gid in self._ask_now]
+        new = [gid for gid in conflicts if gid not in self._conflicts_snoozed]
         if not new or self.worker is not None or self.syncer is not None or self._ghost is not None \
                 or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None:
             return                                  # nothing new, or busy: asked again at the next check
-        if self._ask_now:
-            direct = [self.games[gid] for gid in conflicts if gid in self._ask_now]
-            self._ask_now = set()
-            self._conflicts_snoozed |= {g.game_id for g in direct}
-            self.sync_now(direct)
-            return
         games = [self.games[gid] for gid in conflicts]
         listing = "\n".join("• " + g.title for g in games)
         mixed = "_mixed" if any(self.only_here(g) or self.first_sync(g) for g in games) else ""
@@ -6874,7 +6831,7 @@ class MainWindow(TaskOwner, QMainWindow):
             QTimer.singleShot(0, lambda: self._add_files(paths))   # let the drag finish first
 
     def add_game(self) -> None:
-        files = pick_files(self, tr("file.pick_exe"), tr("file.programs"))
+        files, _ = QFileDialog.getOpenFileNames(self, tr("file.pick_exe"), "", tr("file.programs"))
         if files:
             self._add_files(files)
 
@@ -6905,14 +6862,12 @@ class MainWindow(TaskOwner, QMainWindow):
                     except (OSError, KeyError) as e:
                         report_failure(self, e)
                         continue
-                    if GameDialog(self.library, self.settings, game, parent=self).exec():   # e.g. its save folder
-                        self._ask_now.add(match.game_id)
+                    GameDialog(self.library, self.settings, game, parent=self).exec()   # e.g. its save folder
                     last = match.game_id
                     continue
             d = GameDialog(self.library, self.settings, exe=exe, parent=self)
             if d.exec() and d.saved_id:
                 last = d.saved_id
-                self._ask_now.add(d.saved_id)
         self.refresh()
         if last:
             self._select(last)
@@ -6962,13 +6917,8 @@ class MainWindow(TaskOwner, QMainWindow):
     def edit_game(self, g: Optional[Game]) -> None:
         if g is None:
             return
-        g = self.library.get(g.game_id) or g
-        mine = lambda x: (x.paths_for(self.settings.machine_name).save_dir, x.registry_key) if x else None
-        before = mine(g)
-        d = GameDialog(self.library, self.settings, g, parent=self)
+        d = GameDialog(self.library, self.settings, self.library.get(g.game_id) or g, parent=self)
         if d.exec():
-            if mine(self.library.get(g.game_id)) != before:     # save folder set up / changed here: ask right away
-                self._ask_now.add(g.game_id)
             self.refresh()
 
     @guarded

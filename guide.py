@@ -43,8 +43,8 @@ GUIDE = {
             "- Pressing Read on a game with no save folder does the same check first and asks whether to use what "
             "it found, so the other device's saves come across before the game starts.",
             "- If nothing is found, you can leave the save folder empty. The first time you play, Ikemen Reader "
-            "looks for where the game saves and asks you to confirm it. A folder is only ticked for you when it's "
-            "clearly the game's; otherwise you pick one. Just save at least once during that first session. If the game also keeps data in the registry under its own name, that's included "
+            "looks for where the game saves and asks you to confirm it. Just save at least once during that first "
+            "session. If the game also keeps data in the registry under its own name, that's included "
             "automatically; a registry key that might belong to it is offered separately, unticked.",
             "- If you've already played it on the other device, make sure the save folder is set before you first "
             "read it on this device. Then the other device's saves are put in place before the game starts, and "
@@ -74,8 +74,7 @@ GUIDE = {
             "- If the saves changed on both devices since they last synced (for example, you read on both without "
             "syncing in between), you'll be asked which ones to keep. Ikemen Reader asks as soon as it notices "
             "(choose now, or Later), and again when you press Read; the game starts once you've chosen. "
-            "When you set a game's save folder yourself and its saves differ from the cloud copy, you're asked "
-            "straight away. Whatever gets replaced is backed up first.",
+            "Whatever gets replaced is backed up first.",
             "- This can also happen with a game set up on only one device (for example after moving or restoring its "
             "save files by hand). Then it's this device's saves against the copy it uploaded to the cloud earlier, "
             "and the messages say so.",
@@ -191,7 +190,7 @@ GUIDE = {
             "- 「この端末」には、今使っているパソコンでの .exe とセーブフォルダーを入力します。「もう一方の端末」は灰色で表示され、もう一方のパソコンで入力します。",
             "- セーブフォルダーは、提案として自動で入力されることがあります（もう一方の端末と同じ場所をこのパソコン用に置き換えたもの、またはゲームがすでに作ったセーブフォルダー）。フォルダーは、明らかにそのゲームのもの（ゲーム名そのものの名前で、セーブファイルが入っている）ときだけ提案されます。少しでも確かでない場合は、空欄のままになります。確認してから保存してください。",
             "- セーブフォルダーが未設定のゲームで「読む」を押したときも、先に同じ確認をして、見つかった場所を使うか尋ねます。これで、起動前にもう一方の端末のセーブを取り込めます。",
-            "- 何も見つからない場合は、セーブフォルダーは空欄のままでも大丈夫です。初めてプレイしたときに、セーブの場所を自動で探して確認を求めます。このゲームのものだとはっきり分かるフォルダーだけがあらかじめ選ばれ、それ以外はご自身で選びます。最初のプレイ中に、一度はセーブしてください。"
+            "- 何も見つからない場合は、セーブフォルダーは空欄のままでも大丈夫です。初めてプレイしたときに、セーブの場所を自動で探して確認を求めます。最初のプレイ中に、一度はセーブしてください。"
             "ゲームがレジストリにも自分の名前でデータを保存している場合は、それも自動で含まれます。そのゲームのものかもしれないレジストリキーは、チェックが外れた状態で別に表示されます。",
             "- もう一方の端末ですでにプレイしているゲームは、ここで初めて読む前に、この端末のセーブフォルダーが設定されていることを確認してください。そうすれば、起動前にもう一方の端末のセーブが配置され、続きから遊べます。"
             "空欄のままにすると、セーブをどこに置けばよいか分からないため、最初のプレイは進行状況なしで始まります。そのあと、どちらのセーブを残すか尋ねられたら、"
@@ -209,7 +208,7 @@ GUIDE = {
             "- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
             "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"
             "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。）",
-            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。セーブフォルダーをご自身で設定し、クラウドのセーブと違っていた場合は、その場ですぐに尋ねます。",
+            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。",
             "- 1台の端末でしか設定していないゲームでも起こることがあります（例：セーブファイルを手動で移動・復元したとき）。その場合は、この端末のセーブと、以前この端末からクラウドにアップロードしたコピーとの比較になり、メッセージにもそう表示されます。"
             "置き換えられる方は先にバックアップされます。",
             "- ゲームを右クリックして「今すぐ同期」を選ぶと、すぐに同期できます。",
