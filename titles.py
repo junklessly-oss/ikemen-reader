@@ -18,7 +18,7 @@ _EDITIONS_EN = [
     r"steam edition", r"steam version", r"dl edition", r"download edition", r"download version",
     r"remastered", r"remaster", r"hd remaster", r"hd edition", r"director'?s cut", r"full version",
     r"standard edition", r"limited edition", r"deluxe edition", r"definitive edition",
-    r"english version", r"japanese version", r"jp version", r"en version",
+    r"english version", r"japanese version", r"jp version", r"en version", r"hd", r"ＨＤ",
 ]
 _EDITIONS_JA = [
     r"完全版", r"体験版", r"製品版", r"通常版", r"初回限定版", r"初回版", r"限定版", r"豪華版",
@@ -62,9 +62,11 @@ def clean_title(raw: str) -> str:
             new = _cut(new, m.start())
         else:
             m = _BARE.search(new)
-            # a bare tag must stand apart (space / bracket before it); Japanese tags may be attached
+            # a bare tag must stand apart (space / bracket before it); Japanese tags may be attached, and so may
+            # "HD" right after a Japanese character ("素晴らしき日々HD"; never off the end of a Latin word)
             if m and m.start() > 0 and (new[m.start() - 1].isspace() or new[m.start() - 1] in "】)）]」』"
-                                       or _JA_TAG.fullmatch(new[m.start():])):
+                                       or _JA_TAG.fullmatch(new[m.start():])
+                                       or (new[m.start():].strip().upper() in ("HD", "ＨＤ") and _JA.search(new[m.start() - 1]))):
                 new = _cut(new, m.start())
         if new == t or not new:
             break
@@ -106,17 +108,32 @@ def exe_product_name(exe: str) -> Optional[str]:
 # what game engines write into the .exe instead of the game's name ("AdvGame Module", "codeX RScript",
 # "TVP(KIRIKIRI) Z core / Scripting Platform for Win32", "Stuff スクリプトエンジン", "AVGEngineV2")
 _ENGINE = re.compile(r"engine|エンジン|module|script|platform|\bcore\b|kirikiri|krkr|\btvp|siglus|nscripter|"
+                     r"interpreter|ethornell|buriko|\badvhd\b|\bmalie\b|"    # (BGI: "Ethornell - BURIKO General Interpreter")
                      r"\bbgi\b|ren'?py|tyrano|unity|launcher|runtime|\bplayer\b|^(?:game|application|launcher)$",
                      re.IGNORECASE)
 # folder / .exe names that say nothing about which game it is
 _GENERIC = {"game", "games", "bin", "data", "system", "program", "x64", "x86", "win", "windows", "start",
             "launcher", "launch", "setup", "config", "play", "main", "bgi", "update", "patch", "app",
-            "siglusengine", "nscripter", "kirikiri", "krkr", "tyrano", "renpy", "player", "runtime", "exe"}
-_JA = re.compile(r"[぀-ヿ㐀-鿿ｦ-ﾟ]")
+            "siglusengine", "nscripter", "kirikiri", "krkr", "tyrano", "renpy", "player", "runtime", "exe",
+            "advhd", "malie", "cs2", "siglus", "nekosdk"}
+_JA = re.compile(r"[々〆〇぀-ヿ㐀-鿿ｦ-ﾟ]")              # (々: the kanji repeat mark, as in 素晴らしき日々)
+# download-style folder names start with tags: "[230331] [アトリエかぐや BARE＆BUNNY] Bunny's ママ代行サービス"
+_LEADING_TAGS = re.compile(r"^\s*(?:[\[【〔(（][^\]】〕)）]*[\]】〕)）]\s*)+")
 
 
 def is_engine_name(name: str) -> bool:
     return bool(_ENGINE.search(name or ""))
+
+
+def is_generic_name(name: str) -> bool:
+    """A folder / .exe name shared by many games (Start, BGI, Game, SiglusEngine...): says nothing about which one."""
+    return (name or "").strip().casefold() in _GENERIC
+
+
+def strip_leading_tags(name: str) -> str:
+    """Drop bracketed tags (release date, circle, rating...) from the START of a name, if a title is left after them."""
+    rest = _LEADING_TAGS.sub("", name or "").strip()
+    return rest or (name or "")
 
 
 def _usable(name: str) -> bool:
@@ -141,7 +158,7 @@ def guess_title(exe: str) -> str:
     folder = p.parent
     while folder.name and not _usable(folder.name) and folder.parent != folder:
         folder = folder.parent
-    candidates = [clean_title(n) for n in (folder.name, p.stem) if _usable(n)]
+    candidates = [clean_title(strip_leading_tags(n)) for n in (folder.name, p.stem) if _usable(n)]
     candidates = [c for c in candidates if _usable(c)]
     if not candidates:
         return clean_title(p.stem)

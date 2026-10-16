@@ -1337,6 +1337,44 @@ class AddedGameTitles(unittest.TestCase):
             self.assertTrue(is_engine_name(n), n)
         for n in ["CROSS†CHANNEL", "スロウ・ダメージ 普及版", "Summer Pockets", "Corepunk Stories"]:
             self.assertFalse(is_engine_name(n), n)
+        self.assertTrue(is_engine_name("Ethornell - BURIKO General Interpreter"))     # BGI (1.0.3)
+
+    def test_edition_tags_hd(self):
+        from titles import clean_title, strip_leading_tags
+        self.assertEqual(clean_title("素晴らしき日々HD"), "素晴らしき日々")
+        self.assertEqual(clean_title("Game HD"), "Game")
+        self.assertEqual(clean_title("ShinHD"), "ShinHD")                     # never off the end of a Latin word
+        self.assertEqual(strip_leading_tags("[only tags]"), "[only tags]")   # nothing left after them: kept
+
+    def test_shared_exe_names_are_not_the_same_game(self):
+        """Two different BGI games (both "BGI.exe") were taken for one game added on the other device."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            other = lib.add_game("素晴らしき日々", "Laptop", exe=r"C:\Keromakura\素晴らしき日々HD\BGI.exe")
+            mine = Path(tmp) / "向日葵の教会と長い夏休み"
+            mine.mkdir()
+            (mine / "BGI.exe").write_bytes(b"")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                self.assertIsNone(w._added_on_other_device(str(mine / "BGI.exe")))          # a different game
+                same = Path(tmp) / "素晴らしき日々HD"
+                same.mkdir()
+                (same / "BGI.exe").write_bytes(b"")
+                self.assertEqual(w._added_on_other_device(str(same / "BGI.exe")).game_id, other.game_id)  # by title
+                lib.add_game("Hoshi", "Laptop", exe=r"C:\x\hoshi_main.exe")
+                (Path(tmp) / "y").mkdir()
+                (Path(tmp) / "y" / "hoshi_main.exe").write_bytes(b"")
+                self.assertEqual(w._added_on_other_device(str(Path(tmp) / "y" / "hoshi_main.exe")).title, "Hoshi")
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
 
     def test_folder_or_exe_name(self):
         from titles import guess_title
@@ -1350,6 +1388,11 @@ class AddedGameTitles(unittest.TestCase):
             ("Tsukutori/『つくとり』", "TUKU.EXE"): "つくとり",
             ("Black Sheep Town/BLACK SHEEP TOWN", "Bst.exe"): "BLACK SHEEP TOWN",
             ("11Gatsu/11月のアルカディア", "BGI.exe"): "11月のアルカディア",
+            # 1.0.3: download-style folder names lose their leading [date] [circle] tags; "HD" is an edition tag
+            ("Bunny/[230331] [アトリエかぐや BARE＆BUNNY] Bunny’s ママ代行サービス", "Start.exe"): "Bunny’s ママ代行サービス",
+            ("Relirium/[260529] [Whirlpool] Relirium -レリリウム- 遺跡と出逢いと冒険と 通常版", "Relirium.exe"):
+                "Relirium -レリリウム- 遺跡と出逢いと冒険と",
+            ("Suba/素晴らしき日々HD", "BGI.exe"): "素晴らしき日々",
         }
         with tempfile.TemporaryDirectory() as tmp:
             for (folder, exe), want in cases.items():

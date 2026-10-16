@@ -479,6 +479,13 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   but never synced HERE -> a mismatch means this device already had files (often made by the game on install).
   solo_key() picks "_solo" first, else "_first": conflict.body_first, sync.state/tip.conflict_first ("First Sync:
   Choose Which Saves to Keep"), sync.conflict_unresolved_first, play.not_launched_conflict_first; lists use "_mixed".
+- Added-game titles + "already added on the other device" (1.0.3, owner's report "recognised as another game"):
+  BGI's exe calls itself "Ethornell - BURIKO General Interpreter" - not caught as an engine name, so two different
+  BGI games guessed the SAME title, and both are "BGI.exe" -> _added_on_other_device matched them. Fixed: _ENGINE
+  knows interpreter/ethornell/buriko/advhd/malie; _added_on_other_device ignores generic exe names
+  (titles.is_generic_name: Start/BGI/SiglusEngine/...) and engine-name guesses; guess_title strips leading
+  [date] [circle] tags (strip_leading_tags) and "HD" (stand-alone, or attached right after Japanese); _JA now
+  includes 々〆〇 (素晴らしき日々 ends in 々).
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
 

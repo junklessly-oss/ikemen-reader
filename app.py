@@ -6874,15 +6874,20 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _added_on_other_device(self, exe: str) -> Optional[Game]:
         """A game the other device added that isn't set up here yet and looks like this .exe (same file
-        name there, or the same title)."""
-        name = Path(exe).name.casefold()
-        guess = guess_title(exe).strip().casefold()
+        name there, or the same title). Names shared by many games don't count: Start.exe / BGI.exe /
+        SiglusEngine.exe..., or a guessed title that is really an engine's name (two different BGI games were
+        taken for the same game: both "BGI.exe", both guessed "Ethornell - BURIKO General Interpreter")."""
+        from titles import is_engine_name, is_generic_name
+        stem = Path(exe).stem
+        name = "" if is_generic_name(stem) or is_engine_name(stem) else Path(exe).name.casefold()
+        guess = guess_title(exe).strip()
+        guess = "" if is_engine_name(guess) or is_generic_name(guess) else guess.casefold()
         machine = self.settings.machine_name
         for g in self.library.list_games():
             if g.paths_for(machine).exe:
                 continue
             names = {Path(p.exe.replace("\\", "/")).name.casefold() for p in g.paths.values() if p.exe}
-            if name in names or (guess and guess in (g.title.casefold(), g.auto_title.casefold())):
+            if (name and name in names) or (guess and guess in (g.title.casefold(), g.auto_title.casefold())):
                 return g
         return None
 
