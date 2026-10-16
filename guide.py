@@ -102,7 +102,8 @@ GUIDE = {
             "finds games by their other names on VNDB: the English title, the romaji, nicknames and other aliases.",
             "- Search follows the title as you type it: English or romaji matches the start of any word (\"ind\" finds "
             "Indigo, \"toki\" finds Sakura no Toki; a single letter only finds names that begin with it; a number finds that whole number, so \"1\" finds "
-            "volume 1 but not 11), kana matches "
+            "volume 1 but not 11; several words find names with those words in that order, so \"girls 1\" works), "
+            "kana matches "
             "the start of the title, and kanji match anywhere in it.",
             "- Folders First / Folders Last / Folders Mixed (in the same menu) choose where folders go in Title, Most "
             "Played and Recently Played: grouped at the front or back, or among the games, always in that sort's order. "
@@ -223,7 +224,7 @@ GUIDE = {
         ]),
         ("ライブラリ", [
             "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。検索や絞り込みでは、フォルダーの中にある該当ゲームも表示されます。VNDBからの自動取得がオンなら、英語タイトルやローマ字表記、略称などのVNDBに載っている別名でも検索できます。",
-            "- 検索は入力した文字がタイトルに沿っているものを表示します。英語・ローマ字は単語の先頭（「ind」でIndigo、「toki」でSakura no Toki。1文字だけのときはその文字で始まる名前のみ。数字はその数そのもの：「1」は1巻を探し、11は含みません）、かなはタイトルの先頭、漢字はタイトルのどこにあっても一致します。",
+            "- 検索は入力した文字がタイトルに沿っているものを表示します。英語・ローマ字は単語の先頭（「ind」でIndigo、「toki」でSakura no Toki。1文字だけのときはその文字で始まる名前のみ。数字はその数そのもの：「1」は1巻を探し、11は含みません。複数の単語はその順番で含む名前を探します：「girls 1」など）、かなはタイトルの先頭、漢字はタイトルのどこにあっても一致します。",
             "- 同じメニューの「フォルダーを先頭に」「フォルダーを末尾に」「フォルダーを混ぜる」で、タイトル順・プレイ時間順・最近プレイした順でのフォルダーの位置を選べます（先頭・末尾にまとめる、またはゲームの間に混ぜる。どれもその並び順で並びます）。別のものを選ぶまで保持されます。フォルダーがないときは選べません。",
             "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。ドラッグ中にカバーを上端や下端に近づけるとスクロールします（端に近いほど速くなります）。",
             "- 「自分の並び」のときにフォルダーの配置を選ぶと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先頭に」「末尾に」はまとめて、「混ぜる」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",

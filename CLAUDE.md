@@ -441,7 +441,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
     unreadable ones -> _cover_given_up (drawn the usual way). Cold reveal of 22 covers: 100-120 ms freeze -> none.
   * Matching (owner's rules): kanji in query -> substring anywhere; kana -> title starts with it; Latin/numbers ->
     start of a word (_words: Latin/number runs; one query word may run on across words: "sakuranotoki"; several
-    must align); numbers = that whole number anywhere ("1" = volume 1, not "11月"; in multi-word queries
+    = each starts a later word, in order, gaps allowed: "girls 1", "sakura toki"); numbers = that whole number anywhere ("1" = volume 1, not "11月"; in multi-word queries
     a number word must match exactly); ONE letter = names that begin with it only (owner: "a" found Bunny's via "Rent-a-Mom Agency").
     Over title + VNDB names. Fold: NFKC, casefold, katakana->hiragana, apostrophes dropped.
 - Search by other names: Game.names / names_for (VNDB title, alttitle, every titles[].title/latin, aliases; max 40)

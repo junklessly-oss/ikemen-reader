@@ -667,10 +667,11 @@ def matches_search(game: "Game", query: str) -> bool:
     follow a name, not just contain the letters:
     - with kanji: the name contains it, anywhere ("刻" finds サクラノ刻);
     - kana: the name starts with it ("まま" finds ままごと and ママトモ);
-    - Latin letters / numbers: the start of a word ("ind" finds Indigo, "toki" and "sakura no" find
-      Sakura no Toki, "sakuranotoki" too). A single letter only finds names that START with it: every
-      English title / alias has some word starting with almost any letter ("a" found Bunny's through
-      "Bunny's Rent-a-Mom Agency")."""
+    - Latin letters: the start of a word ("ind" finds Indigo, "toki" finds Sakura no Toki, "sakuranotoki"
+      too); several words each start a word of the name, in that order, gaps allowed ("sakura toki",
+      "girls 1"). A single letter only finds names that START with it: every English title / alias has some
+      word starting with almost any letter ("a" found Bunny's through "Bunny's Rent-a-Mom Agency").
+    - numbers: that whole number ("1" finds volume 1, not 11月)."""
     key = search_key(query)
     if not key:
         return True
@@ -686,16 +687,21 @@ def matches_search(game: "Game", query: str) -> bool:
         return any(key in re.findall(r"\d+", _fold(n)) for n in names)   # "お姫さま 1", not "11月")
     if len(key) == 1:                                   # one letter: names that begin with it, nothing else
         return any(search_key(n).startswith(key) for n in names)
+    def fits(q: str, word: str) -> bool:
+        return word == q if q.isdigit() else word.startswith(q)      # (a number: exactly that one)
+
     for n in names:
         words = _words(n)
-        for i in range(len(words)):
-            if len(qw) == 1:
-                if "".join(words[i:]).startswith(qw[0]):
-                    return True
-            elif words[i:i + len(qw) - 1] == qw[:-1] and i + len(qw) - 1 < len(words) \
-                    and (words[i + len(qw) - 1] == qw[-1] if qw[-1].isdigit()     # (a number: exactly that one)
-                         else words[i + len(qw) - 1].startswith(qw[-1])):
+        if len(qw) == 1:
+            if any("".join(words[i:]).startswith(qw[0]) for i in range(len(words))):
                 return True
+            continue
+        j = 0                                           # each typed word starts a later word of the name
+        for word in words:
+            if fits(qw[j], word):
+                j += 1
+                if j == len(qw):
+                    return True
     return False
 
 

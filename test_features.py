@@ -1384,6 +1384,13 @@ class SearchByOtherNames(unittest.TestCase):
         self.assertTrue(matches_search(Game("a", "11月のアルカディア"), "11"))
         self.assertFalse(matches_search(Game("g", "Girls Book Maker 11"), "maker 1"))
         self.assertTrue(matches_search(Game("g", "Girls Book Maker 1"), "maker 1"))
+        # several words: each starts a later word, in order, gaps allowed
+        st = Game("s", "Sakura no Toki")
+        self.assertTrue(matches_search(st, "sakura toki"))
+        self.assertTrue(matches_search(st, "sak to"))
+        self.assertFalse(matches_search(st, "toki sakura"))
+        self.assertTrue(matches_search(Game("g", "Girls Book Maker ~Grimm to Sannin no Ohime-sama 1~"), "girls 1"))
+        self.assertFalse(matches_search(Game("g", "Girls Book Maker ~Grimm to Sannin no Ohime-sama 1~"), "girls 11"))
         self.assertTrue(matches_search(g, "heart"))
         self.assertTrue(matches_search(g, "皇女"))                           # kanji: anywhere
         self.assertFalse(matches_search(g, "とおうじょ"))                     # kana: only from the start
