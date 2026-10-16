@@ -4605,19 +4605,21 @@ class NameDialog(QDialog):
 
 
 class ConflictDialog(QDialog):
-    def __init__(self, title: str, info: ConflictInfo, parent=None):
+    def __init__(self, title: str, info: ConflictInfo, parent=None, other_set_up: bool = True):
+        """other_set_up: the game is set up on the other device. If it isn't, the cloud copy was uploaded from this
+        device earlier (e.g. after this device's sync record was lost), and the window says so."""
         super().__init__(parent)
         self.setWindowTitle(tr("conflict.title"))
         self.setMinimumWidth(480)
         self.choice: Optional[str] = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
-        body = QLabel(tr("conflict.body", title=html.escape(title)))
+        body = QLabel(tr("conflict.body" if other_set_up else "conflict.body_solo", title=html.escape(title)))
         body.setWordWrap(True)
         lay.addWidget(body)
         newer = "local" if (info.local_mtime or 0) >= (info.cloud_mtime or 0) else "cloud"
         for key, label, t in (("local", tr("conflict.local"), info.local_mtime),
-                              ("cloud", tr("conflict.cloud"), info.cloud_mtime)):
+                              ("cloud", tr("conflict.cloud" if other_set_up else "conflict.cloud_solo"), info.cloud_mtime)):
             when = i18n.datetime_str(t) if t else tr("conflict.none")
             b = QPushButton(f"{label}\n{tr('conflict.last_saved', date=when)}" +
                             (f"   {tr('conflict.newer')}" if key == newer else ""))
@@ -7030,7 +7032,8 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _conflict_choice(self, info: ConflictInfo) -> Optional[str]:
         g = self.games.get(info.game_id)
-        d = ConflictDialog(g.title if g else info.game_id, info, self)
+        other = bool(g and g.paths_for(other_slot(self.settings.machine_name)).exe)
+        d = ConflictDialog(g.title if g else info.game_id, info, self, other_set_up=other)
         d.exec()
         return d.choice
 

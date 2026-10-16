@@ -325,6 +325,13 @@ S: dict[str, tuple[str, str]] = {
     "conflict.title":           ("Which Saves Do You Want to Keep?", "どちらのセーブを残しますか？"),
     "conflict.body":            ('<b>{title}</b> was played on both devices since the last sync, so their saves are different.',
                                  '<b>{title}</b> は前回の同期以降に両方の端末でプレイされたため、セーブが異なります。'),
+    # (the game isn't set up on the other device: the cloud copy can only have been uploaded from this one)
+    "conflict.body_solo":       ("<b>{title}</b>'s saves on This Device are different from the copy in the cloud. It isn't set up "
+                                 "on the other device, so that copy was uploaded from This Device earlier.",
+                                 "<b>{title}</b> のこの端末のセーブが、クラウドにあるコピーと異なります。もう一方の端末では設定"
+                                 "されていないため、このコピーは以前この端末からアップロードされたものです。"),
+    "conflict.cloud_solo":      ("Keep the Saves From the Cloud (Uploaded From This Device Earlier)",
+                                 "クラウドのセーブを残す（以前この端末からアップロードしたもの）"),
     "conflict.local":           ("Keep This Device's Saves", "この端末のセーブを残す"),
     "conflict.cloud":           ("Keep the Saves From the Cloud (Other Device)", "クラウドのセーブを残す（もう一方の端末）"),
     "conflict.last_saved":      ('Last Saved: {date}',

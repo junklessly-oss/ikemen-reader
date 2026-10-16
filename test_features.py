@@ -1365,6 +1365,33 @@ class AddedGameTitles(unittest.TestCase):
         self.assertEqual(clean_title("【A】 x 【B】"), "【A】 x 【B】")
 
 
+class ConflictWording(unittest.TestCase):
+    """The "which saves to keep" window names the cloud copy truthfully."""
+
+    def test_cloud_copy_named_by_where_it_came_from(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QPushButton, QLabel
+        import app
+        import i18n
+        from sync_engine import ConflictInfo
+        QApplication.instance() or QApplication([])
+        info = ConflictInfo("g", 1_700_000_000.0, 1_600_000_000.0)
+        for lang in ("en", "ja"):
+            i18n.set_language(lang)
+            try:
+                both = app.ConflictDialog("Game", info)
+                solo = app.ConflictDialog("Game", info, other_set_up=False)
+                texts = lambda d: " ".join(b.text() for b in d.findChildren(QPushButton)) + \
+                    " ".join(lab.text() for lab in d.findChildren(QLabel))
+                self.assertIn(i18n.tr("conflict.cloud").split("\n")[0], texts(both))
+                self.assertNotIn(i18n.tr("conflict.cloud"), texts(solo))
+                self.assertIn(i18n.tr("conflict.cloud_solo"), texts(solo))
+                self.assertIn(i18n.tr("conflict.body_solo", title="Game"), texts(solo))
+                both.deleteLater(); solo.deleteLater()
+            finally:
+                i18n.set_language("en")
+
+
 class SearchByOtherNames(unittest.TestCase):
     """Search finds a game by its title or any name VNDB knows it by (English title, romaji, aliases)."""
 

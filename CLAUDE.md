@@ -461,6 +461,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   now set up in __init__. Guide's search paragraph rewritten (it had grown into one run-on sentence).
 - Checks: 169 tests; random stress 3,200 actions (0 app errors; the 220-game copy shares save folders between
   duplicates, so its conflict pop-up is expected); overlap 0 blended frames; all-pairs 840 changes clean.
+- ConflictDialog(other_set_up=...): when the game isn't set up on the other device, the cloud copy can only have come
+  from this device (sync record lost / files moved): conflict.body_solo + conflict.cloud_solo ("Uploaded From This
+  Device Earlier") instead of "(Other Device)". The date shown = newest mtime in the cloud copy (copy2 keeps mtimes).
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
 
