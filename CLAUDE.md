@@ -396,6 +396,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Ikemen Sync folders are `<cloud>/device_settings/Device 1|Device 2` (devsync.FOLDER_NAMES; old PC/Laptop folders
   renamed on publish). A computer that switched numbers swaps the two folders (devsync._tidy_folders, by the
   "computer" in each settings.json) so nothing is overwritten.
+- Mixed versions (other device on 1.0.1): saves sync as before (sync_engine unchanged). 1.0.1 still shares into
+  device_settings/PC|Laptop: _tidy_folders keeps whichever copy has the newer shared_at. 1.0.1 drops Game.names /
+  names_for whenever it saves a game (unknown fields); the new version just fetches them again. 1.0.1 can't read
+  the new Device 1/2 folders, so its "Copy Settings From Device N" finds nothing until it's updated.
 - Hover text drawn with Qt.TextDontClip (Hiragino's descenders touch the bottom of the line box: the g of Reading).
 - FitsScreen._top_up: after laying out, grows the window by whatever the scroll bar still has (estimate was 1-16 px
   short: a scroll bar with nothing to scroll). Scrolls only when the screen really is too short.
