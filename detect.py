@@ -53,7 +53,7 @@ class Candidate:
     score: float
     files: int = 0            # changed files (folder) / changed keys (registry)
     reasons: list[str] = field(default_factory=list)
-    sure: bool = False        # registry: the key is plainly this game's (stored without asking)
+    sure: bool = False        # plainly this game's: registry key stored without asking / folder ticked
 
 
 def default_roots(game_dir: str) -> list[Path]:
@@ -121,7 +121,11 @@ def _walk_changed(root: Path, since: float, skip: set[str], limit: int = 400_000
 
 def find_folders(game_dir: str, since: float, names: list[str], skip: Iterable[str] = (),
                  roots: Optional[list[Path]] = None) -> list[Candidate]:
-    tokens = _tokens(*names)
+    """Folders the game wrote to during its session, best first. Outside the game folder a folder only
+    counts as "named after the game" when it carries the WHOLE name (one shared word is not enough:
+    Documents\\Books is not "Girls Book Maker"). sure = plainly this game's saves (a save-named folder in
+    the game folder, or one named after the whole game) - only those are ticked in the confirm window."""
+    whole = _whole_names(names)
     skip_n = {os.path.normcase(os.path.abspath(s)) for s in skip if s}
     game_dir_n = os.path.normcase(os.path.abspath(game_dir))
     roots = roots if roots is not None else default_roots(game_dir)
@@ -146,10 +150,10 @@ def find_folders(game_dir: str, since: float, names: list[str], skip: Iterable[s
             if d == game_dir_n:
                 score -= 2.5             # the game folder itself mostly gets config/log files
         rel_parts = list(parts[-4:])
-        if any(_matches(p, tokens) for p in rel_parts):
+        named = bool(whole) and any(_same_game(p, whole) for p in rel_parts)
+        if named:
             score += 4
             reasons.append("named after the game")
-        named = any(_matches(p, tokens) for p in rel_parts)
         save_like = any(w in folder.name.casefold() for w in _SAVE_WORDS)
         if save_like:
             score += 2
@@ -164,7 +168,8 @@ def find_folders(game_dir: str, since: float, names: list[str], skip: Iterable[s
         if exts <= {".ini", ".cfg", ".txt", ".xml"}:
             score -= 1                   # only settings/text changed
         score += min(len(files), 20) * 0.05
-        cands[d] = Candidate(str(folder), "folder", score, len(files), reasons)
+        sure = (inside_game and save_like) or (named and not exts <= _NOT_SAVES)
+        cands[d] = Candidate(str(folder), "folder", score, len(files), reasons, sure=sure)
 
     # merge sub-folders into a parent that is itself a candidate (e.g. savedata\ and savedata\thumb\);
     # the parent keeps the best score of the group (no bonus per merged folder)
@@ -174,6 +179,7 @@ def find_folders(game_dir: str, since: float, names: list[str], skip: Iterable[s
         if parent is not None and k in cands:
             cands[parent].files += cands[k].files
             cands[parent].score = max(cands[parent].score, cands[k].score)
+            cands[parent].sure = cands[parent].sure or cands[k].sure
             for r in cands[k].reasons:
                 if r not in cands[parent].reasons:
                     cands[parent].reasons.append(r)

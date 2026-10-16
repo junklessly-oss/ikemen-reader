@@ -489,6 +489,32 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
 
+## Fewer guesses (2026-10-16, cloud session from the laptop; owner: "no guesses unless almost entirely certain")
+- Report: Girls Book Maker's save folder became Documents\Books on the laptop, already filled in BEFORE the first read.
+  The before-read suggestion is strict (whole-name rule) and can't match "Books" for that title, so most likely the
+  OTHER device's save folder was Documents\Books (set by the loose after-play detection there) and the laptop got
+  it translated. Not confirmed: ask the owner what Edit shows under Other Device for that game.
+- After-play detection (detect.find_folders) now uses the same whole-name rule (_same_game) as suggestions: one
+  shared word ("Book" in "Books") no longer counts as "named after the game". Candidate.sure for folders = a
+  save-named folder inside the game folder, or one named after the whole game with save-like files. DetectDialog
+  ticks a folder only when exactly one is sure; otherwise nothing is ticked and "Use This" stays greyed until
+  the owner picks. Guide updated (EN + JA).
+- Browse (owner's rule): a filled-in box opens there (a file is preselected; a path that doesn't exist yet opens
+  the nearest existing parent); an empty box opens THIS PC (app.THIS_PC = clsid: URL of FOLDERID_ComputerFolder),
+  never Windows' remembered last folder. All pickers go through app.pick_folder / pick_file / pick_files
+  (browse_start). Save folder Browse with an empty box no longer opens the game folder; Detect's "Somewhere Else"
+  no longer opens AppData. The clsid start is untested on real Windows (Linux session): check it opens This PC.
+- Save folder set by hand (Edit with a changed save folder / registry key, a new game, "Set Up on This Device"):
+  MainWindow._ask_now -> if the next check finds a mismatch, _offer_conflicts skips the Choose Now / Later pop-up
+  and goes straight to "which saves to keep" (sync_now), even if Later was said before. Guide updated.
+- Explained to the owner (no change): first device to set a game up always uploads silently; the second device
+  downloads silently when its save folder is empty, and is asked only when it has files of its own. Owner's idea
+  "fresh game -> keep the launching device's saves without asking" was NOT done: on the second device the cloud
+  holds the first device's real progress, so it could overwrite it. Revisit only with a safe rule.
+- Signing / SmartScreen: owner said ignore for now (options found: Microsoft Store free for individuals since
+  Sept 2025 but MSIX breaks our updater; Azure Artifact Signing is monthly; no one-time option).
+- Tests: 178 (5 new in test_features.FewerGuesses). In this Linux session 7 Windows-path tests fail before and after.
+
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
   direction) instead of one flat colour (owner's idea, 2026-10-15). Assessed 2026-10-16, skipped for now: 33 roles,
