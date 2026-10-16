@@ -402,6 +402,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Menu / drop-down dividers: crisp_line() snaps to screen pixels; right-click menus drawn by the MenuLines app event
   filter (style sheet separator transparent). At 125 % / 150 % scaling the two dividers were 1 vs 2 px.
 - Save-location pop-up: Ask Me Next Time far left, Somewhere Else | Use This Folder right.
+- SmartScreen ("Windows protected your PC") on a fresh download stays: owner won't pay for code signing. Updates
+  via the updater don't trigger it (no Mark of the Web); manual install: zip Properties -> Unblock.
+- Grid evenness checked at 100/125/150/175/200 % scaling (red-cover pixel probe): gaps between covers identical,
+  outer edges +1 screen px (leftover of whole-pixel covers), rows top/between/bottom within 1 screen px. No change.
 
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
