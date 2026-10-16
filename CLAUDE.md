@@ -464,6 +464,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - ConflictDialog(other_set_up=...): when the game isn't set up on the other device, the cloud copy can only have come
   from this device (sync record lost / files moved): conflict.body_solo + conflict.cloud_solo ("Uploaded From This
   Device Earlier") instead of "(Other Device)". The date shown = newest mtime in the cloud copy (copy2 keeps mtimes).
+  Same rule everywhere (owner: "not changing it would just be wrong"): MainWindow.only_here(g) / solo_key(key, g)
+  pick "<key>_solo" wording for the status line + tip, Sync Now's "nothing was changed", Read refused
+  (play.not_launched_conflict_solo); lists of games (Choose Now / Later pop-up, top-bar Error tooltip) use the
+  "_mixed" wording when any game in them is set up only here. Guide: one added point (EN + JA).
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
 

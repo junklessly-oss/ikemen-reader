@@ -5450,7 +5450,8 @@ class MainWindow(TaskOwner, QMainWindow):
             return                                  # nothing new, or busy: asked again at the next check
         games = [self.games[gid] for gid in conflicts]
         listing = "\n".join("• " + g.title for g in games)
-        choice = message(self, tr("conflict.waiting_body", games=listing), tr("conflict.waiting_title"),
+        mixed = "_mixed" if any(self.only_here(g) for g in games) else ""
+        choice = message(self, tr("conflict.waiting_body" + mixed, games=listing), tr("conflict.waiting_title" + mixed),
                          [("now", tr("conflict.choose_now")), ("later", tr("conflict.ask_later"))], dismiss="later")
         self._conflicts_snoozed |= set(conflicts)   # asked: not again (Choose Now's own answers included)
         if choice == "now":
@@ -5471,7 +5472,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.syncer.wait()
         self._conflicts_snoozed |= {g.game_id for g in self.syncer.games}   # closed without choosing: not again
         self.syncer = None
-        self.statusBar().showMessage("  ".join(f"{t}: {tr(k, title=t)}" for t, k in results), 10000)
+        by_title = {g.title: g for g in self.games.values()}
+        self.statusBar().showMessage("  ".join(f"{t}: {tr(self.solo_key(k, by_title.get(t)), title=t)}" for t, k in results), 10000)
         self.refresh()
 
     def folder_name(self, fid: str) -> str:
@@ -6030,6 +6032,7 @@ class MainWindow(TaskOwner, QMainWindow):
         if g.last_played:
             parts.append(tr("bar.last_played", date=i18n.date(g.last_played)))
         colour_key, _, text_key = STATE_LOOK[self.light_state(g.game_id)]
+        text_key = self.solo_key(text_key, g)
         sep = "&nbsp;&nbsp;·&nbsp;&nbsp;"
         quiet = self.quiet(g.game_id)
         extra = "" if (quiet or not self.settings.show_stats) else f'<span style="color:{COLORS["muted"]}">{sep}{sep.join(html.escape(s) for s in parts)}</span>'
@@ -6038,7 +6041,7 @@ class MainWindow(TaskOwner, QMainWindow):
         if extra and self._html_width(main + extra) > self.d_sync.width() > 0:
             extra = ""
         self.d_sync.setText(main + extra)
-        tip = text_key.replace("sync.state.", "sync.tip.")
+        tip = self.solo_key(STATE_LOOK[self.light_state(g.game_id)][2].replace("sync.state.", "sync.tip."), g)
         self.d_sync.setToolTip(tr(tip) if tip in i18n.S else "")
         # leave the drop-down alone while its list is open (a background refresh mustn't redraw or close it)
         if not self.d_status.view().isVisible():
@@ -6083,7 +6086,8 @@ class MainWindow(TaskOwner, QMainWindow):
             label = tr("top.attention_one") if conflicts == 1 else tr("top.attention_many", n=conflicts)
             text = (f'<a href="conflict" style="color:{COLORS["text"]}; text-decoration:none">'
                     f"{label}</a>")
-            tip = tr("top.attention_tip")
+            mixed = any(self.only_here(self.games.get(gid)) for gid, s in self.sync_states.items() if s == "conflict")
+            tip = tr("top.attention_tip_mixed" if mixed else "top.attention_tip")
             self.sync_light.set_state("red", "steady")
         else:
             text = tr("top.synced")
@@ -7030,6 +7034,15 @@ class MainWindow(TaskOwner, QMainWindow):
         self._update_sync_label()
         self._update_details()
 
+    def only_here(self, g: Optional[Game]) -> bool:
+        """Set up on this device but not the other: then a save mismatch can't be "both devices" (the cloud copy
+        was uploaded from this one) and the messages say so."""
+        return g is not None and not g.paths_for(other_slot(self.settings.machine_name)).exe
+
+    def solo_key(self, key: str, g: Optional[Game]) -> str:
+        """The wording for a game set up only on this device, where one exists (see only_here)."""
+        return key + "_solo" if self.only_here(g) and key + "_solo" in i18n.S else key
+
     def _conflict_choice(self, info: ConflictInfo) -> Optional[str]:
         g = self.games.get(info.game_id)
         other = bool(g and g.paths_for(other_slot(self.settings.machine_name)).exe)
@@ -7051,6 +7064,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.stop_pending = False
         self.play_phase = "done"
         game = self.library.get(gid) if gid else None
+        if r.message:
+            r = dataclasses.replace(r, message=self.solo_key(r.message, game))
         if not r.launched:
             self.statusBar().showMessage(tr(r.message))
             self.refresh()

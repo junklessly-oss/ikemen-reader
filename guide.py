@@ -75,6 +75,9 @@ GUIDE = {
             "syncing in between), you'll be asked which ones to keep. Ikemen Reader asks as soon as it notices "
             "(choose now, or Later), and again when you press Read; the game starts once you've chosen. "
             "Whatever gets replaced is backed up first.",
+            "- This can also happen with a game set up on only one device (for example after moving or restoring its "
+            "save files by hand). Then it's this device's saves against the copy it uploaded to the cloud earlier, "
+            "and the messages say so.",
             "- Right-click a game and choose Sync Now to sync it straight away.",
             "- Closing a game only ever uploads. If the other device uploaded newer saves while you were reading, "
             "you're asked which to keep instead of either being overwritten.",
@@ -204,7 +207,8 @@ GUIDE = {
             "- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
             "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"
             "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。）",
-            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。"
+            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。",
+            "- 1台の端末でしか設定していないゲームでも起こることがあります（例：セーブファイルを手動で移動・復元したとき）。その場合は、この端末のセーブと、以前この端末からクラウドにアップロードしたコピーとの比較になり、メッセージにもそう表示されます。"
             "置き換えられる方は先にバックアップされます。",
             "- ゲームを右クリックして「今すぐ同期」を選ぶと、すぐに同期できます。",
             "- ゲームを終了したときは、アップロードだけを行います。読んでいる間にもう一方の端末が新しいセーブをアップロードしていた場合は、どちらかを上書きせずに、どちらを残すか尋ねます。",

@@ -20,6 +20,8 @@ S: dict[str, tuple[str, str]] = {
     "top.syncing":              ("Syncing", "同期中"),
     "top.attention_one":        ("Error", "エラー"),
     "top.attention_many":       ("Error", "エラー"),
+    "top.attention_tip_mixed":  ("Some games' saves don't match the copy in the cloud. Click to go to the game (click again for the next one).",
+                                 "一部のゲームのセーブがクラウドのコピーと一致しません。クリックするとそのゲームに移動します（もう一度クリックすると次のゲームに移動します）。"),
     "top.attention_tip":        ("Saves changed on both devices. Click to go to the game (click again for the next one).", "両方の端末でセーブが変更されています。クリックするとそのゲームに移動します（もう一度クリックすると次のゲームに移動します）。"),
     "top.hide_stats":           ("Hide Statistics", "統計を非表示"),
     "top.show_stats":           ("Show Statistics", "統計を表示"),
@@ -82,6 +84,8 @@ S: dict[str, tuple[str, str]] = {
     "sync.state.push":          ("Newer Saves on This Device", "この端末のセーブの方が新しいです"),
     "sync.state.pull":          ("Newer Saves in the Cloud", "クラウドのセーブの方が新しいです"),
     "sync.state.conflict":      ("Saves Have Changed on Both Devices", "両方の端末でセーブが変更されています"),
+    # (_solo: the game isn't set up on the other device, so the cloud copy was uploaded from this one; see solo_key)
+    "sync.state.conflict_solo": ("This Device's Saves Don't Match the Cloud Copy", "この端末のセーブがクラウドのコピーと一致しません"),
     # full explanations, shown when hovering the status line
     "sync.tip.push":            ("This device has newer saves. They upload automatically.",
                                  "この端末のセーブの方が新しいです。自動でアップロードされます。"),
@@ -89,6 +93,12 @@ S: dict[str, tuple[str, str]] = {
                                  "クラウドに新しいセーブがあります。自動でダウンロードされます（イケメンリーダー以外から開いているゲームは、閉じたあと）。"),
     "sync.tip.conflict":        ("The saves have changed on both devices. Choose which to keep when asked, with right-click Sync Now, or when you press Read.",
                                  "両方の端末でセーブが変更されています。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を押したときに、どちらを残すか選べます。"),
+    "sync.tip.conflict_solo":   ("This device's saves don't match the copy in the cloud, which was uploaded from this device earlier "
+                                 "(the game isn't set up on the other device). Choose which to keep when asked, with right-click "
+                                 "Sync Now, or when you press Read.",
+                                 "この端末のセーブが、クラウドにあるコピー（以前この端末からアップロードしたもの。もう一方の端末では"
+                                 "設定されていません）と一致しません。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を"
+                                 "押したときに、どちらを残すか選べます。"),
     "sync.tip.unset":           ("Click Edit to set This Device's .exe for this game.",
                                  '「編集」から、この端末でのゲームの .exe を設定してください。'),
     "sync.state.empty":         ("No Saves Yet", "セーブはまだありません"),
@@ -112,6 +122,8 @@ S: dict[str, tuple[str, str]] = {
     "sync.nothing_to_upload":   ("No new saves to upload.", "アップロードする新しいセーブはありません。"),
     "sync.conflict_unresolved": ('The saves differ between the two devices, so nothing was changed.',
                                  '両方の端末のセーブが異なるため、何も変更しませんでした。'),
+    "sync.conflict_unresolved_solo": ("This device's saves don't match the copy in the cloud, so nothing was changed.",
+                                 "この端末のセーブがクラウドのコピーと一致しないため、何も変更しませんでした。"),
     "status.checking":          ("Checking saves...", "セーブを確認中…"),
     "status.launching":         ("Starting the game...", "ゲームを起動中…"),
     "status.closed_syncing":    ("Game closed. Syncing saves...", "ゲームを終了しました。セーブを同期中…"),
@@ -147,6 +159,12 @@ S: dict[str, tuple[str, str]] = {
     "sync.skipped_running":     ("The game is open, so its saves weren't changed. Close it, then try again.",
                                  "ゲームが開いているため、セーブは変更しませんでした。ゲームを閉じてから、もう一度お試しください。"),
     "conflict.waiting_title":   ("Saves Changed on Both Devices", "両方の端末でセーブが変更されました"),
+    # (_mixed: at least one of the games isn't set up on the other device - true for every game in the list)
+    "conflict.waiting_title_mixed": ("Saves Don't Match the Cloud Copy", "セーブがクラウドのコピーと一致しません"),
+    "conflict.waiting_body_mixed": ("These games' saves on This Device don't match the copy in the cloud:\n\n{games}\n\n"
+                                 "Choose which saves to keep now? Nothing changes until you choose.",
+                                 "次のゲームは、この端末のセーブがクラウドのコピーと一致しません：\n\n{games}\n\n"
+                                 "今すぐ、どちらのセーブを残すか選びますか？選ぶまで何も変更されません。"),
     "conflict.waiting_body":    ("These games have different saves on each device:\n\n{games}\n\n"
                                  "Choose which saves to keep now? Nothing changes until you choose.",
                                  "次のゲームは、端末ごとにセーブが異なります：\n\n{games}\n\n"
@@ -169,6 +187,10 @@ S: dict[str, tuple[str, str]] = {
                                  'ゲームが起動しませんでした。Lunaにエラーが表示されている場合は、そちらを確認してください。'),
     "play.not_launched_conflict":("The game wasn't started because the saves differ between the two devices. Please choose which ones to keep first.",
                                  '両方の端末のセーブが異なるため、ゲームを起動しませんでした。先にどちらを残すか選んでください。'),
+    "play.not_launched_conflict_solo": ("The game wasn't started because this device's saves don't match the copy in the "
+                                 "cloud. Please choose which ones to keep first.",
+                                 "この端末のセーブがクラウドのコピーと一致しないため、ゲームを起動しませんでした。先にどちらを"
+                                 "残すか選んでください。"),
     "play.detected":            ("Found where the game saves.", "セーブの場所が見つかりました。"),
     "play.detect_none":         ("Couldn't find where the game saves. Did you save at least once?",
                                  "セーブの場所が見つかりませんでした。一度はセーブしましたか？"),

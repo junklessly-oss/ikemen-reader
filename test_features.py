@@ -1392,6 +1392,54 @@ class ConflictWording(unittest.TestCase):
                 i18n.set_language("en")
 
 
+class ConflictWordingInTheWindow(unittest.TestCase):
+    """A game set up only on this device never claims its saves "changed on both devices"."""
+
+    def test_messages_pick_the_true_wording(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            import i18n
+            from launcher import PlayResult
+            QApplication.instance() or QApplication([])
+            i18n.set_language("en")
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            both = lib.add_game("Both", "PC", exe=r"C:\b\b.exe")
+            lib.set_paths(both.game_id, "Laptop", exe=r"C:\b\b.exe")
+            here = lib.add_game("Here", "PC", exe=r"C:\h\h.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.refresh()
+                app.wait_for_tasks(5)
+                w.sync_states = {both.game_id: "conflict", here.game_id: "conflict"}
+                w._check_sync = lambda *a, **k: None
+                self.assertFalse(w.only_here(w.games[both.game_id]))
+                self.assertTrue(w.only_here(w.games[here.game_id]))
+                for gid, key in ((both.game_id, "sync.state.conflict"), (here.game_id, "sync.state.conflict_solo")):
+                    w.grid.setCurrentItem(next(w.grid.item(i) for i in range(w.grid.count())
+                                               if w.grid.item(i).data(app.GAME_ID_ROLE) == gid))
+                    w._update_details()
+                    self.assertIn(__import__("html").escape(i18n.tr(key)), w.d_sync.text())
+                    self.assertEqual(w.d_sync.toolTip(), i18n.tr(key.replace("sync.state.", "sync.tip.")))
+                w._update_sync_label()                          # one of them is set up only here: neutral wording
+                self.assertEqual(w.sync_label.toolTip(), i18n.tr("top.attention_tip_mixed"))
+                with mock.patch.object(app, "message", return_value="later") as asked:
+                    w._offer_conflicts()
+                self.assertEqual(asked.call_args[0][2], i18n.tr("conflict.waiting_title_mixed"))
+                self.assertEqual(w.solo_key("play.not_launched_conflict", w.games[here.game_id]),
+                                 "play.not_launched_conflict_solo")
+                self.assertEqual(w.solo_key("play.not_launched_conflict", w.games[both.game_id]),
+                                 "play.not_launched_conflict")
+                self.assertEqual(w.solo_key("play.cancelled", w.games[here.game_id]), "play.cancelled")
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
 class SearchByOtherNames(unittest.TestCase):
     """Search finds a game by its title or any name VNDB knows it by (English title, romaji, aliases)."""
 
