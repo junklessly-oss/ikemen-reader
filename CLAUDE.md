@@ -361,12 +361,11 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    the highlight (Qt picks the highlighted row on release). Diagnostics: IKEMEN_DEBUG_STALLS=1 writes freezes
    > 0.5 s (all threads' stacks) to %APPDATA%\IkemenReader\stalls.log; diag(text) adds lines there.
 
-- Folder open/close animation (owner's request, 2026-10-15): FolderTransition overlays the library area with two
-  snapshots of the covers alone (LibraryGrid.bare = no backdrop); opening = library fades out fully while a
-  tile-shaped rounded window opens out of the folder tile with the folder view inside growing 0.5 -> 1; closing
-  reverses into the tile. FOLDER_ANIM_MS 280, ease-out 2.2, clock starts on the first frame, frames paced by a
-  0 ms timer (>= 7 ms apart; Windows' 15.6 ms timer steps made 16/31 ms judder), the light pulse's grid updates
-  pause while it runs (they forced out-of-step repaints). Read button: only the bevel scales, the label stays.
+- Folder open/close (2026-10-16, owner chose cohesion over the old zoom): the SAME fade as search. open_folder /
+  close_folder -> _apply_filter(select, after_rebuild): library fades out, then the folder's games fade in (and
+  back); closing brings the folder's own tile in first (selected). FolderTransition / _covers_snapshot / _tile_rect
+  removed. Leaving pictures carry a shift (the "‹ Library" bar moves the grid) so they stay put on screen.
+  Read button: only the bevel scales, the label stays.
 
 - Auto-updater (owner's request, 2026-10-15; updater.py): checks GitHub's latest release on every start (packaged
   program only; IKEMEN_UPDATE_CHECK=1 shows the question from source). Settings "Install Updates Automatically"

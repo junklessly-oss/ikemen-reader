@@ -366,14 +366,14 @@ class LibraryGrid(QListWidget):
             if not self.bare:
                 origin = self.viewport().mapTo(backdrop, QPoint(0, 0)) - backdrop.library_area().topLeft()
                 backdrop.paint_into(p, ev.rect(), origin)
-            for pm, rects, opacity, scale in (self.w.leaving_frame() if not self.bare else []):
+            for pm, rects, opacity, scale, shift in (self.w.leaving_frame() if not self.bare else []):
                 # covers search / filter changes took away, fading out (each change's own picture)
                 dpr = pm.devicePixelRatio()
                 p.setOpacity(opacity)
                 p.setRenderHint(QPainter.SmoothPixmapTransform)
                 for r in rects:
-                    if r.intersects(ev.rect()):
-                        c = QRectF(r).center()
+                    if r.translated(shift).intersects(ev.rect()):
+                        c = QRectF(r.translated(shift)).center()
                         to = QRectF(0, 0, r.width() * scale, r.height() * scale)
                         to.moveCenter(c)
                         p.drawPixmap(to, pm, QRectF(r.x() * dpr, r.y() * dpr, r.width() * dpr, r.height() * dpr))
@@ -651,10 +651,10 @@ APPEAR_STAGGER = 0.025               # ... each one a little after the one befor
 APPEAR_STAGGER_MAX = 0.15            # ... the last at most this much later
 ARRIVE_CLEAR = 0.12                  # (a place is clear once whatever was leaving it is fainter than this)
 MAX_LEAVING_GROUPS = 4               # leaving pictures from earlier changes still finishing
-NO_RESULTS_S = 0.3                   # "No Results Found" fades in (once the last cover has gone) ...
+NO_RESULTS_OUT_S = 0.12             # "No Results Found" fades out quickly when covers come back (they wait) ...
+NO_RESULTS_S = 0.3                   # ... and fades in (once the last cover has gone) ...
 NO_RESULTS_RISE = 8                  # ... rising this many px into place ...
 NO_RESULTS_Y = 0.44                  # ... at this height of the library (the optical centre); it goes at once
-FOLDER_ANIM_MS = 280                 # opening / closing a folder: its games grow out of (or back into) its tile
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 LIGHT_FADE_S = 0.45                  # a light changing colour cross-fades this long
@@ -2122,7 +2122,7 @@ class DragGhost(QWidget):
         self._done: Optional[Callable] = None
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.PreciseTimer)
-        self._timer.setInterval(0)                           # frames paced by time (see FolderTransition)
+        self._timer.setInterval(0)                           # frames paced by time (Windows timers tick in 15.6 ms steps)
         self._timer.timeout.connect(self._step)
         self._place()
         self._timer.start()
@@ -2621,87 +2621,6 @@ class AnkiBox(BoxZone, QPushButton):
         p.setPen(QColor(COLORS["text"]))
         p.setFont(self.box_font)
         p.drawText(self._rect(), Qt.AlignCenter, self.text_)     # (unscaled: the text never moves)
-        p.end()
-
-
-class FolderTransition(QWidget):
-    """Opening a folder: the library fades away while the folder's games grow out of the folder's tile.
-    Closing: the folder's games shrink back into the tile while the library fades in. Drawn over the library
-    area from two snapshots of the covers alone (the background picture stays perfectly still); the real
-    grid is already in place underneath and takes over when it ends. Clicks go straight through."""
-
-    def __init__(self, window: "MainWindow", before: QPixmap, after: QPixmap, tile: QRectF, opening: bool):
-        super().__init__(window.backdrop)
-        self.w, self.before, self.after, self.tile, self.opening = window, before, after, tile, opening
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setGeometry(window.backdrop.library_area())
-        self.setAttribute(Qt.WA_OpaquePaintEvent, True)     # we paint every pixel: nothing underneath is redrawn
-        self._start: Optional[float] = None                 # the clock starts with the first frame on screen
-        # Windows' timers tick in 15.6 ms steps, so a "16 ms" timer gives uneven 16 / 31 ms frames. Instead a
-        # new frame is drawn whenever ~7 ms have passed; Windows shows the newest one at each screen refresh
-        self._timer = QTimer(self)
-        self._timer.setTimerType(Qt.PreciseTimer)
-        self._timer.setInterval(0)
-        self._timer.timeout.connect(self._step)
-        self._last_frame = 0.0
-        self._done = False
-        self.show()
-        self.raise_()
-        self._timer.start()
-
-    def finish(self) -> None:
-        if not self._done:
-            self._done = True
-            self._timer.stop()
-            self.hide()
-            self.deleteLater()
-
-    def _step(self) -> None:
-        now = time.monotonic()
-        if self._start is not None and now - self._start >= FOLDER_ANIM_MS / 1000:
-            self.finish()
-            return
-        if now - self._last_frame >= 0.007:
-            self._last_frame = now
-            self.repaint()                                  # drawn now, not whenever Windows gets round to it
-
-    def _draw_scaled(self, p: QPainter, pm: QPixmap, e: float, opacity: float) -> None:
-        """The folder's view seen through a window that opens out of the tile: at e=0 the window is the tile
-        (its rounded corners too) with the view inside at half size; at e=1 the window is the whole area and
-        the view is full size and in place."""
-        full = QRectF(self.rect())
-        tile = self.tile
-        win = QRectF(tile.x() + (full.x() - tile.x()) * e, tile.y() + (full.y() - tile.y()) * e,
-                     tile.width() + (full.width() - tile.width()) * e, tile.height() + (full.height() - tile.height()) * e)
-        s = 0.5 + 0.5 * e
-        c = win.center()
-        target = QRectF(c.x() - full.width() * s / 2, c.y() - full.height() * s / 2, full.width() * s, full.height() * s)
-        radius = 8 * (1 - e)
-        clip = QPainterPath()
-        clip.addRoundedRect(win, radius, radius)
-        p.save()
-        p.setClipPath(clip)
-        p.setOpacity(max(0.0, min(1.0, opacity)))
-        p.drawPixmap(target, pm, QRectF(pm.rect()))
-        p.restore()
-
-    def paintEvent(self, _ev) -> None:
-        if self._start is None:
-            self._start = time.monotonic()
-        t = min(1.0, (time.monotonic() - self._start) / (FOLDER_ANIM_MS / 1000))
-        e = 1 - (1 - t) ** 2.2                             # ease out: quick start, gentle (not sticky) landing
-        p = QPainter(self)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.w.backdrop.paint_into(p, self.rect(), QPoint(0, 0))
-        full = QRectF(self.rect())
-        if self.opening:
-            p.setOpacity(max(0.0, 1 - t / 0.7))            # the library fades away completely
-            p.drawPixmap(full, self.before, QRectF(self.before.rect()))
-            self._draw_scaled(p, self.after, e, t / 0.45)  # the folder's games grow out of its tile
-        else:
-            p.setOpacity(min(1.0, t / 0.6))                # the library comes back
-            p.drawPixmap(full, self.after, QRectF(self.after.rect()))
-            self._draw_scaled(p, self.before, 1 - e, 1 - t / 0.75)   # the games shrink into the tile
         p.end()
 
 
@@ -5813,74 +5732,18 @@ class MainWindow(TaskOwner, QMainWindow):
                 and self.selected_id() in (None, self.playing_id))
 
     def open_folder(self, fid: str) -> None:
-        tile = self._tile_rect(FOLDER_PREFIX + fid)
-        before = self._covers_snapshot()
-        self._settle_grid()
+        """Into a folder, the same way search changes the grid: the library fades out, then the folder's games
+        fade in one after another (the "‹ Library" bar above them shows where you are)."""
         self.current_folder = fid
         self.search.blockSignals(True)
         self.search.clear()
         self.search.blockSignals(False)
-        self._rebuild()
-        self.grid.scrollToTop()
-        self._animate_folder(before, tile, opening=True)
+        self._apply_filter(after_rebuild=self.grid.scrollToTop)
 
     def _settle_grid(self) -> None:
         """Everything in the grid at its place at once (a folder opens or closes: the other view starts still)."""
         self.slides, self.appearing, self._leaving = {}, {}, []
         self.no_results = 0.0
-
-    def _covers_snapshot(self) -> Optional[QPixmap]:
-        """The library area's covers (and the folder bar) without the background, for FolderTransition."""
-        if not self.isVisible() or not self.grid.isVisible():
-            return None
-        area = self.backdrop.library_area()
-        if area.isEmpty():
-            return None
-        self.backdrop.layout() and self.backdrop.layout().activate()
-        dpr = self.devicePixelRatioF()
-        pm = QPixmap(round(area.width() * dpr), round(area.height() * dpr))
-        pm.setDevicePixelRatio(dpr)
-        pm.fill(Qt.transparent)
-        p = QPainter(pm)
-        self.grid.bare = True
-        try:
-            for w in ((self.folderbar,) if self.folderbar.isVisible() else ()) + (self.grid.viewport(),):
-                offset = w.mapTo(self.backdrop, QPoint(0, 0)) - area.topLeft()
-                w.render(p, offset, QRegion(), QWidget.DrawChildren)
-        finally:
-            self.grid.bare = False
-            p.end()
-        return pm
-
-    def _tile_rect(self, iid: str) -> Optional[QRectF]:
-        """Where an item's cover is, in the library area's coordinates (None when it's off screen)."""
-        for i in range(self.grid.count()):
-            it = self.grid.item(i)
-            if it.data(GAME_ID_ROLE) == iid:
-                r = self.grid.visualItemRect(it)
-                if not r.intersects(self.grid.viewport().rect()):
-                    return None
-                cover = CardDelegate.cover_rect(r, 0)
-                off = self.grid.viewport().mapTo(self.backdrop, QPoint(0, 0)) - self.backdrop.library_area().topLeft()
-                return cover.translated(off.x(), off.y())
-        return None
-
-    def _animate_folder(self, before: Optional[QPixmap], tile: Optional[QRectF], opening: bool) -> None:
-        if before is None:
-            return
-        for old in self.backdrop.findChildren(FolderTransition):
-            old.finish()
-        self.backdrop.layout() and self.backdrop.layout().activate()
-        QApplication.sendPostedEvents(self.grid, QEvent.LayoutRequest)
-        self.grid.doItemsLayout()
-        after = self._covers_snapshot()
-        if after is None:
-            return
-        if tile is None:                                   # the tile is off screen: grow from / shrink to the middle
-            area = QRectF(QPointF(0, 0), QSizeF(self.backdrop.library_area().size()))
-            w, h = GRID["cover_w"], GRID["cover_h"]
-            tile = QRectF(area.center().x() - w / 2, area.center().y() - h / 2, w, h)
-        FolderTransition(self, before, after, tile, opening)
 
     def close_folder(self) -> None:
         egg = self.findChild(EasterEgg)
@@ -5891,14 +5754,18 @@ class MainWindow(TaskOwner, QMainWindow):
             self._end_game_drag(QCursor.pos(), drop=False)
             return
         if self.current_folder:
-            before = self._covers_snapshot()
-            self._settle_grid()
+            # back out: the folder's games fade out, then the library fades in - the folder you came from first
+            # (and selected), so your eye lands where you left off
             fid, self.current_folder = self.current_folder, None
-            self._rebuild(select=FOLDER_PREFIX + fid)
-            self.backdrop.layout() and self.backdrop.layout().activate()
-            self.grid.doItemsLayout()
-            self.grid.scrollToItem(self.grid.currentItem()) if self.grid.currentItem() else None
-            self._animate_folder(before, self._tile_rect(FOLDER_PREFIX + fid), opening=False)
+            tile = FOLDER_PREFIX + fid
+
+            def find_tile():
+                self.grid.doItemsLayout()
+                self.grid.scrollToItem(self.grid.currentItem()) if self.grid.currentItem() else None
+            self._apply_filter(select=tile, after_rebuild=find_tile)
+            if tile in self.appearing and len(self.appearing) > 1:
+                first = min(d for k, d in self.appearing.items() if k != tile)
+                self.appearing[tile] = max(0.0, first - 2 * APPEAR_STAGGER)
         else:
             self.clear_selection()
 
@@ -5965,11 +5832,13 @@ class MainWindow(TaskOwner, QMainWindow):
         return self.sync_states.get(gid, "checking")
 
     # ------------------------------------------------------------------ sort / filter
-    def _apply_filter(self) -> None:
-        """Search / filter: covers taken away (or whose place changes) fade out where they were (drawn from a
-        picture of the grid taken just before), then the ones let in fade in; nothing slides."""
+    def _apply_filter(self, select: Optional[str] = None, after_rebuild: Optional[Callable] = None) -> None:
+        """Search / filter / sort / opening or closing a folder: covers taken away (or whose place changes) fade
+        out where they were (drawn from a picture of the grid taken just before), then the ones let in fade in;
+        nothing slides. after_rebuild: run once the new grid is in place (e.g. scroll), before the fade starts."""
         animate = self.isVisible()
         before = self._positions() if animate else {}
+        vp_before = self.grid.viewport().mapTo(self, QPoint(0, 0))
         snap = self._grid_snapshot() if before else None
         rects = {}
         if snap is not None:
@@ -5979,9 +5848,15 @@ class MainWindow(TaskOwner, QMainWindow):
                 iid = it.data(GAME_ID_ROLE)
                 rects[iid] = QRect(before[iid], self.grid.visualItemRect(it).size()).adjusted(-2, -2, 2, 2) & view
         self._search_pause.stop()                        # (called directly: no second run when the pause ends)
-        self._rebuild()
-        if not self.showing_no_results():
-            self.no_results = 0.0                        # covers coming back: the text goes in that same frame
+        self._rebuild(select)
+        if after_rebuild is not None or select is not None:
+            self.backdrop.layout() and self.backdrop.layout().activate()   # (the folder bar shows / hides)
+        if after_rebuild is not None:
+            after_rebuild()
+        # the grid may have moved on screen (the folder bar above it): the leaving pictures stay where they were
+        shift = vp_before - self.grid.viewport().mapTo(self, QPoint(0, 0))
+        if not animate and not self.showing_no_results():
+            self.no_results = 0.0                        # (not on screen: nothing to fade)
         if animate:                                      # (also from an empty grid: "No Results Found" -> results)
             moved = self._slide_from(before, appear=True)
             kept = {self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
@@ -5991,7 +5866,7 @@ class MainWindow(TaskOwner, QMainWindow):
                     if not any((r & g).width() * (r & g).height() > 0.3 * r.width() * r.height() for g in gone):
                         gone.append(r)                   # (two covers caught on top of each other: one picture)
             if gone:
-                self._leaving = (self._leaving + [(snap, gone, time.monotonic())])[-MAX_LEAVING_GROUPS:]
+                self._leaving = (self._leaving + [(snap, gone, time.monotonic(), shift)])[-MAX_LEAVING_GROUPS:]
         self._update_anim()                              # (also fades "No Results Found" in)
 
     def _grid_snapshot(self) -> Optional[QPixmap]:
@@ -6013,13 +5888,14 @@ class MainWindow(TaskOwner, QMainWindow):
         return pm
 
     def leaving_frame(self) -> list:
-        """[(snapshot, rects, opacity, scale)] for covers fading out after search / filter changes (oldest first)."""
+        """[(snapshot, rects, opacity, scale, shift)] for covers fading out after changes (oldest first); rects are
+        where they were in the snapshot, shift = how far to move them so they stay put on screen."""
         now = time.monotonic()
         self._leaving = [g for g in self._leaving if now - g[2] < LEAVE_S]
         out = []
-        for pm, rects, t0 in self._leaving:
+        for pm, rects, t0, shift in self._leaving:
             k = 1 - (1 - (now - t0) / LEAVE_S) ** 3      # ease out
-            out.append((pm, rects, 1 - k, 1 - LEAVE_SHRINK * k))
+            out.append((pm, rects, 1 - k, 1 - LEAVE_SHRINK * k, shift))
         return out
 
     def showing_no_results(self) -> bool:
@@ -6592,6 +6468,8 @@ class MainWindow(TaskOwner, QMainWindow):
             fresh = [iid for iid in arriving if iid not in keep]
             leaving = bool(moved) or any(iid not in now for iid in before)
             base = ARRIVE_WAIT if leaving else 0.0
+            if self.no_results > 0:                      # "No Results Found" fades out first
+                base = max(base, self.no_results * NO_RESULTS_OUT_S + 0.02)
             step = min(APPEAR_STAGGER, APPEAR_STAGGER_MAX / max(1, len(fresh) - 1))
             self.appearing = {**keep, **{iid: base + i * step for i, iid in enumerate(fresh)}}
             self._appear_t0 = t
@@ -6619,13 +6497,20 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _hold_blocked_arrivals(self, now: float) -> None:
         """A cover that hasn't started arriving waits while a leaving cover still shows in its place (no
-        cross-fade of two pictures in one spot); its turn moves on until the place is clear."""
+        cross-fade of two pictures in one spot), and all of them wait while "No Results Found" fades out;
+        their turn moves on until the way is clear."""
+        if self.no_results > 0 and self.appearing:
+            t = now - self._appear_t0
+            for iid, d in self.appearing.items():
+                if t - 0.005 <= d < t + 0.02:            # (not started yet; ones already showing carry on)
+                    self.appearing[iid] = t + 0.02       # (a little ahead: not even a frame of it shows)
+            return
         ghosts = []
-        for _, rects, opacity, scale in self.leaving_frame():
+        for _, rects, opacity, scale, shift in self.leaving_frame():
             if opacity < ARRIVE_CLEAR:
                 continue
             for r in rects:
-                g = QRectF(r)
+                g = QRectF(r.translated(shift))
                 c = g.center()
                 g.setSize(g.size() * scale)
                 g.moveCenter(c)
@@ -6901,7 +6786,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 self.appearing = {}
             target = self._no_results_target()
             if self.no_results != target:
-                d = (step * HOVER_MS) / (NO_RESULTS_S * 1000)
+                d = (step * HOVER_MS) / ((NO_RESULTS_S if target > self.no_results else NO_RESULTS_OUT_S) * 1000)
                 self.no_results = min(target, self.no_results + d) if target > self.no_results \
                     else max(target, self.no_results - d)
             region = QRegion(view)
@@ -6909,7 +6794,7 @@ class MainWindow(TaskOwner, QMainWindow):
         # the check of all running programs (launcher.warm_up) waits while covers move: it keeps Python busy
         launcher.hold_warm_up(bool(self.slides) or self._search_moving() or self._ghost is not None
                               or self._landing is not None, "grid")
-        if not region.isEmpty() and not self.backdrop.findChildren(FolderTransition):
+        if not region.isEmpty():
             # (not while a folder opens / closes: the animation covers the grid, and each of these little
             # updates would make it redraw out of step)
             self.grid.viewport().update(region)
