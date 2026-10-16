@@ -1342,6 +1342,42 @@ class AddedGameTitles(unittest.TestCase):
         self.assertEqual(clean_title("【A】 x 【B】"), "【A】 x 【B】")
 
 
+class SearchByOtherNames(unittest.TestCase):
+    """Search finds a game by its title or any name VNDB knows it by (English title, romaji, aliases)."""
+
+    def test_matching(self):
+        from library import Game, matches_search
+        g = Game("nora", "ノラと皇女と野良猫ハート", names=["Nora to Oujo to Noraneko Heart", "Noratoto",
+                 "The Princess, the Stray Cat, and Matters of the Heart"])
+        for q in ("ノラと", "noratoto", "nora to oujo", "NORATOTO", "ｎｏｒａｔｏｔｏ", "stray cat", "のら", "  "):
+            self.assertTrue(matches_search(g, q), q)
+        for q in ("sakura", "サクラ", "xyz"):
+            self.assertFalse(matches_search(g, q), q)
+        self.assertTrue(matches_search(Game("s", "サクラノ刻"), "さくらの"))      # katakana = hiragana
+        self.assertTrue(matches_search(Game("s", "Sakura no Toki"), "sakuranotoki"))
+
+    def test_names_survive_damaged_files_and_round_trip(self):
+        from library import Game
+        g = Game.from_json(json.dumps({"game_id": "a", "title": "A", "names": ["B", 3, "", None, "C"], "names_for": "v1"}))
+        self.assertEqual((g.names, g.names_for), (["B", "C"], "v1"))
+        self.assertEqual(Game.from_json(json.dumps({"game_id": "a", "title": "A", "names": "oops"})).names, [])
+        self.assertEqual(Game.from_json(g.to_json()).names, ["B", "C"])
+
+    def test_vndb_names_answer(self):
+        from unittest import mock
+        import vndb
+        answer = {"results": [{"id": "v18148", "title": "Nora to Oujo to Noraneko Heart", "alttitle": "ノラと皇女と野良猫ハート",
+                               "aliases": ["Noratoto", "noratoto", 5],
+                               "titles": [{"lang": "en", "title": "The Princess, the Stray Cat, and Matters of the Heart", "latin": None},
+                                          {"lang": "ja", "title": "ノラと皇女と野良猫ハート", "latin": "Nora to Oujo to Noraneko Heart"}]},
+                              "junk"]}
+        with mock.patch.object(vndb, "_post", return_value=answer) as post:
+            got = vndb.names(["v18148", "v637", "../x"])
+        self.assertEqual(got, {"v18148": ["Nora to Oujo to Noraneko Heart", "ノラと皇女と野良猫ハート",
+                                          "The Princess, the Stray Cat, and Matters of the Heart", "Noratoto"]})
+        self.assertEqual(post.call_args[0][1]["filters"], ["or", ["id", "=", "v18148"], ["id", "=", "v637"]])
+
+
 class HoverTitles(unittest.TestCase):
     """1.0.1: English breaks between words (or after † ・ etc.), Japanese follows its line-break rules and
     shrinks one size when the last line would hold only one or two characters."""

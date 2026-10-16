@@ -98,7 +98,8 @@ GUIDE = {
         ]),
         ("Your Library", [
             "- Search by title, sort by Title, Most Played, Recently Played or My Arrangement, and filter by reading "
-            "status. Searching and filtering also show the matching games inside folders.",
+            "status. Searching and filtering also show the matching games inside folders. With VNDB on, search also "
+            "finds games by their other names on VNDB: the English title, the romaji, nicknames and other aliases.",
             "- Folders First / Folders Last / Folders Mixed (in the same menu) choose where folders go in Title, Most "
             "Played and Recently Played: grouped at the front or back, or among the games, always in that sort's order. "
             "Your choice stays until you pick another one. With no folders, they're greyed out.",
@@ -217,7 +218,7 @@ GUIDE = {
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
         ("ライブラリ", [
-            "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。検索や絞り込みでは、フォルダーの中にある該当ゲームも表示されます。",
+            "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。検索や絞り込みでは、フォルダーの中にある該当ゲームも表示されます。VNDBがオンなら、英語タイトルやローマ字表記、略称などのVNDBに載っている別名でも検索できます。",
             "- 同じメニューの「フォルダーを先頭に」「フォルダーを末尾に」「フォルダーを混ぜる」で、タイトル順・プレイ時間順・最近プレイした順でのフォルダーの位置を選べます（先頭・末尾にまとめる、またはゲームの間に混ぜる。どれもその並び順で並びます）。別のものを選ぶまで保持されます。フォルダーがないときは選べません。",
             "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。ドラッグ中にカバーを上端や下端に近づけるとスクロールします（端に近いほど速くなります）。",
             "- 「自分の並び」のときにフォルダーの配置を選ぶと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先頭に」「末尾に」はまとめて、「混ぜる」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",

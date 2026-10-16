@@ -406,6 +406,12 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   via the updater don't trigger it (no Mark of the Web); manual install: zip Properties -> Unblock.
 - Grid evenness checked at 100/125/150/175/200 % scaling (red-cover pixel probe): gaps between covers identical,
   outer edges +1 screen px (leftover of whole-pixel covers), rows top/between/bottom within 1 screen px. No change.
+- Search reveal: covers let back in (backspacing) fade + grow in over APPEAR_S 0.36 s (smoothstep, from
+  1 - APPEAR_GROW 0.1); it was SLIDE_S 0.22 with (1-t)^2 = half done in 60 ms, looked like no animation.
+- Search by other names: Game.names / names_for (VNDB title, alttitle, every titles[].title/latin, aliases; max 40)
+  fetched by MainWindow._fetch_names after refresh (only with Settings VNDB on; one batched vndb.names() request;
+  written into the cloud game file so both devices have them; failures retried next start). library.matches_search
+  + search_key (NFKC, casefold, katakana -> hiragana, no spaces/punctuation). In the guide.
 
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,

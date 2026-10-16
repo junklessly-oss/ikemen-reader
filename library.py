@@ -18,7 +18,10 @@ used, so existing data needs no conversion). The UI never shows these names; it 
 """
 from __future__ import annotations
 
+import functools
 import json
+import re
+import unicodedata
 import os
 import shutil
 import socket
@@ -206,6 +209,8 @@ class Game:
     crop_x: float = 0.5                                 # centre of the visible part, 0..1 of the image
     crop_y: float = 0.5
     folder: str = ""                                    # id of the folder it's in ("" = main grid)
+    names: list[str] = field(default_factory=list)      # other names from VNDB (English title, aliases...): search
+    names_for: str = ""                                 # the vndb_id those names belong to
 
     @property
     def total_playtime(self) -> float:
@@ -235,6 +240,8 @@ class Game:
                     rest["playtime"][m] = max(0.0, round(v, 3))
             except (TypeError, ValueError):
                 pass
+        names = rest.get("names")
+        rest["names"] = [n for n in names if isinstance(n, str) and n][:40] if isinstance(names, list) else []
         if rest.get("status") not in STATUSES:
             rest["status"] = ""
         art = rest.get("artwork", "")
@@ -622,6 +629,24 @@ def sort_games(games: list[Game], how: str) -> list[Game]:
     if how == "title":
         return sorted(games, key=lambda g: title_sort_key(g.title))
     return sorted(games, key=lambda g: (-g.last_played, title_sort_key(g.title)))
+
+
+@functools.lru_cache(maxsize=16384)
+def search_key(text: str) -> str:
+    """For searching: width, case, katakana/hiragana, spaces and punctuation don't matter
+    ("sakura no toki" finds "Sakura no Toki", "さくら" finds "サクラ")."""
+    s = unicodedata.normalize("NFKC", text).casefold()
+    s = "".join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in s)
+    return re.sub(r"[\s\-‐―–—~・:!?'\"「」『』【】()\[\].,、。☆★♪†×]", "", s)
+
+
+def matches_search(game: "Game", query: str) -> bool:
+    """Does the search box's text find this game: its title, or any name VNDB knows it by?"""
+    q = query.strip().casefold()
+    if not q or q in game.title.casefold():
+        return True
+    k = search_key(q)
+    return bool(k) and any(k in search_key(n) for n in (game.title, *game.names))
 
 
 def title_sort_key(title: str) -> tuple:

@@ -51,7 +51,7 @@ import launcher
 from launcher import PlayResult, finish_first_play, play, warm_up
 from library import (FOLDER_PLACES, SLOT_NUMBER, SLOTS, SORTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
                      default_app_dir, load_local_settings, other_slot, save_local_settings,
-                     sort_games, this_computer)
+                     matches_search, sort_games, this_computer)
 from sync_engine import Action, ConflictInfo, SyncEngine, save_folder_problem
 from titles import guess_title
 
@@ -597,6 +597,8 @@ HOVER_LIFT = 6                       # px the cover rises on hover
 HOVER_GROW = 0.03                    # 3% bigger on hover
 HOVER_MS = 150                       # ease in/out time
 SLIDE_S = 0.22                       # covers sliding aside into their new places after a drop
+APPEAR_S = 0.36                      # covers let back in by a search / filter fade + grow into place this long
+APPEAR_GROW = 0.1                    # ... starting this much smaller
 FOLDER_ANIM_MS = 280                 # opening / closing a folder: its games grow out of (or back into) its tile
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
@@ -1452,10 +1454,20 @@ class CardDelegate(QStyledItemDelegate):
         if not amp:
             if self._tiles:
                 self._tiles.clear()
-            self._paint_item(p, option, index)
             fade = self.w.appear_fade(index.data(GAME_ID_ROLE))
-            if fade > 0:                                 # just came into view (search / filter): fading in
-                self._fade_into_background(p, option.rect.adjusted(-2, -2, 2, 2), fade)
+            if fade <= 0:
+                self._paint_item(p, option, index)
+                return
+            # just came into view (search / filter): grows into place while fading in
+            c = QRectF(option.rect).center()
+            k = 1 - APPEAR_GROW * fade
+            p.save()
+            p.translate(c)
+            p.scale(k, k)
+            p.translate(-c)
+            self._paint_item(p, option, index)
+            p.restore()
+            self._fade_into_background(p, option.rect.adjusted(-2, -2, 2, 2), fade)
             return
         # the easter egg's rocking box is hovered: every tile rocks around its own centre, each in its own
         # rhythm (a phase and a slightly different speed of its own, from its id)
@@ -5229,6 +5241,45 @@ class MainWindow(TaskOwner, QMainWindow):
             self._live_sig = self.library.change_signature()
         except OSError:
             self._live_sig = None
+        self._fetch_names()
+
+    def _fetch_names(self) -> None:
+        """Search also finds games by the other names VNDB knows them by (English title, romaji, aliases).
+        Fetched once per game in the background and kept in its file in the cloud folder, so both devices have
+        them and searching never waits for the internet. Only with VNDB switched on in Settings."""
+        if not self.settings.vndb or getattr(self, "_names_busy", False):
+            return
+        tried = self.__dict__.setdefault("_names_tried", set())    # (failed this session: try again next start)
+        todo = {g.game_id: g.vndb_id for g in self.games.values()
+                if g.vndb_id and g.names_for != g.vndb_id and g.vndb_id not in tried}
+        if not todo:
+            return
+        self._names_busy = True
+        tried |= set(todo.values())
+
+        def done(found: dict) -> None:
+            self._names_busy = False
+            changed = False
+            for gid, vid in todo.items():
+                g = self.library.get(gid)
+                if g is None or g.vndb_id != vid:
+                    continue                             # changed meanwhile
+                try:
+                    g = self.library.update(gid, names=found.get(vid, []), names_for=vid)
+                except (OSError, KeyError, ValueError):
+                    continue                             # a bonus: tried again next start
+                if gid in self.games:
+                    self.games[gid].names, self.games[gid].names_for = g.names, g.names_for
+                changed = True
+            if changed:
+                self._own_change()
+                if self.search.text().strip():
+                    self._apply_filter()
+
+        def failed(_e) -> None:
+            self._names_busy = False
+
+        self._run(lambda: vndb.names(list(set(todo.values()))), done, failed)
 
     def _live_poll(self) -> None:
         if self._live_checking:
@@ -5340,7 +5391,7 @@ class MainWindow(TaskOwner, QMainWindow):
         searching or filtering, games inside folders are shown directly so nothing is hidden."""
         current = select or self.selected_id()
         games = list(self.games.values())
-        q = self.search.text().strip().lower()
+        q = self.search.text().strip()
         status = self.settings.status_filter
         sort = self.settings.sort
 
@@ -5357,7 +5408,7 @@ class MainWindow(TaskOwner, QMainWindow):
         flat = bool(q) or status != "all"
 
         def keep(g: Game) -> bool:
-            return (not q or q in g.title.lower()) and (status == "all" or g.status == status)
+            return matches_search(g, q) and (status == "all" or g.status == status)
 
         top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
         top += [("folder", fid) for fid in self.folder_games]
@@ -6334,8 +6385,8 @@ class MainWindow(TaskOwner, QMainWindow):
         """How much of the background still covers a cover that's fading in (1 = hidden, 0 = fully there)."""
         if iid not in self.appearing:
             return 0.0
-        t = (time.monotonic() - self._slide_t0) / SLIDE_S
-        return 0.0 if t >= 1 else (1 - t) ** 2
+        t = (time.monotonic() - self._slide_t0) / APPEAR_S
+        return 0.0 if t >= 1 else 1 - t * t * (3 - 2 * t)  # (smooth start and end: it was over before you saw it)
 
     def slide_offset(self, iid: str) -> Optional[QPoint]:
         d = self.slides.get(iid)
@@ -6577,7 +6628,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 rad = int(LIGHT_R * 2.9) + 2
                 region += QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
         if self.slides:                                   # covers sliding: the whole grid moves
-            if time.monotonic() - self._slide_t0 >= SLIDE_S:
+            if time.monotonic() - self._slide_t0 >= (APPEAR_S if self.appearing else SLIDE_S):
                 self.slides, self.appearing = {}, set()
             region = QRegion(view)
             changed = True

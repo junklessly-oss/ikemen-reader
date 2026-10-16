@@ -175,6 +175,33 @@ def search(query: str, limit: int = 6, timeout: float = 10.0, safe_only: bool = 
     return list(_remembered(("search", query.strip().casefold(), limit, safe_only), ask))
 
 
+def names(vndb_ids: list[str], timeout: float = 15.0) -> dict[str, list[str]]:
+    """Every name VNDB knows each VN by: main title, original title, each language's title and its
+    romanisation, and aliases (for searching the library by its English title, a nickname, ...).
+    {vndb id: names}; a VN VNDB doesn't know (any more) is missing from the answer."""
+    out: dict[str, list[str]] = {}
+    ids = list(dict.fromkeys(i for i in vndb_ids if isinstance(i, str) and re.fullmatch(r"v\d+", i)))
+    for start in range(0, len(ids), 100):                  # (VNDB answers at most 100 at a time)
+        chunk = ids[start:start + 100]
+        data = _post("vn", {"filters": ["or"] + [["id", "=", i] for i in chunk] if len(chunk) > 1 else ["id", "=", chunk[0]],
+                            "fields": "title, alttitle, aliases, titles.title, titles.latin", "results": 100}, timeout)
+        for vn in data.get("results", []):
+            if not isinstance(vn, dict) or not isinstance(vn.get("id"), str):
+                continue
+            found = [vn.get("title"), vn.get("alttitle")]
+            for t in vn.get("titles") or []:
+                if isinstance(t, dict):
+                    found += [t.get("title"), t.get("latin")]
+            found += vn.get("aliases") or []
+            seen, keep = set(), []
+            for n in found:
+                if isinstance(n, str) and n.strip() and n.strip().casefold() not in seen:
+                    seen.add(n.strip().casefold())
+                    keep.append(n.strip())
+            out[vn["id"]] = keep[:40]
+    return out
+
+
 @dataclass
 class Cover:
     url: str
