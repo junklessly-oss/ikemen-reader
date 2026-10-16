@@ -85,6 +85,15 @@ S: dict[str, tuple[str, str]] = {
     "sync.state.pull":          ("Newer Saves in the Cloud", "クラウドのセーブの方が新しいです"),
     "sync.state.conflict":      ("Saves Have Changed on Both Devices", "両方の端末でセーブが変更されています"),
     # (_solo: the game isn't set up on the other device, so the cloud copy was uploaded from this one; see solo_key)
+    # (_first: this device has never synced the game, but already has files of its own - often made by the game
+    #  itself when installed or first opened; the cloud has the other device's saves. See MainWindow.variant_key)
+    "sync.state.conflict_first": ("First Sync: Choose Which Saves to Keep", "初回同期：どちらのセーブを残すか選んでください"),
+    "sync.tip.conflict_first":  ("This device hasn't synced this game before, but it already has save files of its own (some games "
+                                 "create them when installed or first opened). Choose which to keep when asked, with right-click "
+                                 "Sync Now, or when you press Read.",
+                                 "この端末ではまだこのゲームを同期したことがありませんが、すでにセーブファイルがあります（インストール時や"
+                                 "初回起動時にファイルを作るゲームもあります）。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を"
+                                 "押したときに、どちらを残すか選べます。"),
     "sync.state.conflict_solo": ("This Device's Saves Don't Match the Cloud Copy", "この端末のセーブがクラウドのコピーと一致しません"),
     # full explanations, shown when hovering the status line
     "sync.tip.push":            ("This device has newer saves. They upload automatically.",
@@ -122,6 +131,8 @@ S: dict[str, tuple[str, str]] = {
     "sync.nothing_to_upload":   ("No new saves to upload.", "アップロードする新しいセーブはありません。"),
     "sync.conflict_unresolved": ('The saves differ between the two devices, so nothing was changed.',
                                  '両方の端末のセーブが異なるため、何も変更しませんでした。'),
+    "sync.conflict_unresolved_first": ("This device's files don't match the saves in the cloud, so nothing was changed.",
+                                 "この端末のファイルがクラウドのセーブと一致しないため、何も変更しませんでした。"),
     "sync.conflict_unresolved_solo": ("This device's saves don't match the copy in the cloud, so nothing was changed.",
                                  "この端末のセーブがクラウドのコピーと一致しないため、何も変更しませんでした。"),
     "status.checking":          ("Checking saves...", "セーブを確認中…"),
@@ -187,6 +198,10 @@ S: dict[str, tuple[str, str]] = {
                                  'ゲームが起動しませんでした。Lunaにエラーが表示されている場合は、そちらを確認してください。'),
     "play.not_launched_conflict":("The game wasn't started because the saves differ between the two devices. Please choose which ones to keep first.",
                                  '両方の端末のセーブが異なるため、ゲームを起動しませんでした。先にどちらを残すか選んでください。'),
+    "play.not_launched_conflict_first": ("The game wasn't started because this device already has save files that don't "
+                                 "match the saves in the cloud. Please choose which ones to keep first.",
+                                 "この端末にはすでにクラウドのセーブと一致しないセーブファイルがあるため、ゲームを起動しませんでした。"
+                                 "先にどちらを残すか選んでください。"),
     "play.not_launched_conflict_solo": ("The game wasn't started because this device's saves don't match the copy in the "
                                  "cloud. Please choose which ones to keep first.",
                                  "この端末のセーブがクラウドのコピーと一致しないため、ゲームを起動しませんでした。先にどちらを"
@@ -348,6 +363,10 @@ S: dict[str, tuple[str, str]] = {
     "conflict.body":            ('<b>{title}</b> was played on both devices since the last sync, so their saves are different.',
                                  '<b>{title}</b> は前回の同期以降に両方の端末でプレイされたため、セーブが異なります。'),
     # (the game isn't set up on the other device: the cloud copy can only have been uploaded from this one)
+    "conflict.body_first":      ("This device hasn't synced <b>{title}</b> before, but it already has save files of its own (some "
+                                 "games create them when installed or first opened). The cloud has the saves from the other device.",
+                                 "この端末では <b>{title}</b> をまだ同期したことがありませんが、すでにセーブファイルがあります（インストール"
+                                 "時や初回起動時にファイルを作るゲームもあります）。クラウドには、もう一方の端末のセーブがあります。"),
     "conflict.body_solo":       ("<b>{title}</b>'s saves on This Device are different from the copy in the cloud. The game isn't "
                                  "set up on the other device, so that copy was uploaded from This Device earlier.",
                                  "この端末にある <b>{title}</b> のセーブが、クラウドにあるコピーと異なります。もう一方の端末では"
@@ -548,7 +567,8 @@ S: dict[str, tuple[str, str]] = {
     "theme.c_light_blue":       ("Syncing / Newer in the Cloud", "同期中／クラウドの方が新しい"),
     "theme.c_light_amber":      ("Newer on This Device", "この端末の方が新しい"),
     "theme.c_light_red":        ("Needs Attention", "確認が必要"),
-    "theme.c_light_grey":       ("Not Set Up / No Saves", "未設定／セーブなし"),
+    "theme.c_light_grey":       ("No Saves Yet / Checking", "セーブなし／確認中"),
+    "theme.c_light_yellow":     ("Not Set Up on This Device", "この端末で未設定"),
     "theme.c_light_lavender":   ("In Sync, Set Up on This Device Only", "同期済み（この端末のみ設定済み）"),
     "theme.c_mark_finished":    ("Finished", "読了"),
     "theme.c_mark_reading":     ("Reading", "プレイ中"),

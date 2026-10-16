@@ -1387,6 +1387,10 @@ class ConflictWording(unittest.TestCase):
                 self.assertNotIn(i18n.tr("conflict.cloud"), texts(solo))
                 self.assertIn(i18n.tr("conflict.cloud_solo"), texts(solo))
                 self.assertIn(i18n.tr("conflict.body_solo", title="Game"), texts(solo))
+                first = app.ConflictDialog("Game", info, first_sync=True)
+                self.assertIn(i18n.tr("conflict.body_first", title="Game"), texts(first))
+                self.assertIn(i18n.tr("conflict.cloud"), texts(first))     # (the cloud = the other device)
+                first.deleteLater()
                 both.deleteLater(); solo.deleteLater()
             finally:
                 i18n.set_language("en")
@@ -1411,15 +1415,21 @@ class ConflictWordingInTheWindow(unittest.TestCase):
             both = lib.add_game("Both", "PC", exe=r"C:\b\b.exe")
             lib.set_paths(both.game_id, "Laptop", exe=r"C:\b\b.exe")
             here = lib.add_game("Here", "PC", exe=r"C:\h\h.exe")
+            first = lib.add_game("First", "Laptop", exe=r"C:\f\f.exe")     # added there, just set up here
+            lib.set_paths(first.game_id, "PC", exe=r"C:\f\f.exe")
             w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            w.engine._save_base(both.game_id, "synced before")            # (this device has synced "Both")
             try:
                 w.refresh()
                 app.wait_for_tasks(5)
-                w.sync_states = {both.game_id: "conflict", here.game_id: "conflict"}
+                w.sync_states = {both.game_id: "conflict", here.game_id: "conflict", first.game_id: "conflict"}
                 w._check_sync = lambda *a, **k: None
                 self.assertFalse(w.only_here(w.games[both.game_id]))
                 self.assertTrue(w.only_here(w.games[here.game_id]))
-                for gid, key in ((both.game_id, "sync.state.conflict"), (here.game_id, "sync.state.conflict_solo")):
+                self.assertTrue(w.first_sync(w.games[first.game_id]))
+                self.assertFalse(w.first_sync(w.games[both.game_id]) or w.first_sync(w.games[here.game_id]))
+                for gid, key in ((both.game_id, "sync.state.conflict"), (here.game_id, "sync.state.conflict_solo"),
+                                 (first.game_id, "sync.state.conflict_first")):
                     w.grid.setCurrentItem(next(w.grid.item(i) for i in range(w.grid.count())
                                                if w.grid.item(i).data(app.GAME_ID_ROLE) == gid))
                     w._update_details()
@@ -1435,6 +1445,8 @@ class ConflictWordingInTheWindow(unittest.TestCase):
                 self.assertEqual(w.solo_key("play.not_launched_conflict", w.games[both.game_id]),
                                  "play.not_launched_conflict")
                 self.assertEqual(w.solo_key("play.cancelled", w.games[here.game_id]), "play.cancelled")
+                self.assertEqual(w.solo_key("play.not_launched_conflict", w.games[first.game_id]),
+                                 "play.not_launched_conflict_first")
             finally:
                 w.close()
                 app.wait_for_tasks(5)

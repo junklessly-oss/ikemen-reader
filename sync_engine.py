@@ -497,6 +497,11 @@ class SyncEngine:
         return SyncResult(Action.CONFLICT, "sync.conflict_unresolved")
 
     # -- public API used by the launcher / UI
+    def has_synced(self, game_id: str) -> bool:
+        """Has this device synced this game before? (No: its saves and the cloud's can't have "both changed" -
+        a mismatch on the first sync means this device already had files of its own.)"""
+        return self._load_base(game_id) is not None
+
     def status(self, game_id: str, local_dir: str | Path, registry_key: str = "") -> Action:
         """What before_launch WOULD do right now. Changes nothing (used for the UI's status lights)."""
         return self.decide(_fingerprint_map(self._local_files(game_id, _check_local_dir(local_dir, self.cloud_root), registry_key)),

@@ -88,9 +88,9 @@ LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
 APP_VERSION = "1.0.2"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
-               "lavender": "#A98BD9"}
+               "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
-LIGHT_ORDER = ["red", "amber", "blue", "lavender", "green", "grey"]
+LIGHT_ORDER = ["red", "yellow", "amber", "blue", "lavender", "green", "grey"]   # (yellow: needs you, like red)
 # bookmark ribbons on the covers, one colour per reading status (muted gold / silver / bronze / rose)
 BASE_MARKS = {"finished": "#C9AB5A", "reading": "#B2B7BE", "plan": "#B5885E", "dropped": "#C48D96",
               "border": "#1C1C1C"}        # (and the thin border round every bookmark)
@@ -691,7 +691,7 @@ STATE_LOOK = {
     "pull":     ("blue", "calm", "sync.state.pull"),
     "conflict": ("red", "steady", "sync.state.conflict"),
     "empty":    ("grey", "calm", "sync.state.empty"),
-    "unset":    ("grey", "steady", "sync.state.unset"),
+    "unset":    ("yellow", "steady", "sync.state.unset"),    # the only one of these that needs you to do something
     "detect":   ("grey", "calm", "sync.state.detect"),
     "checking": ("grey", "busy", "sync.state.checking"),
     "playing":  ("blue", "calm", "sync.state.playing"),
@@ -4605,16 +4605,19 @@ class NameDialog(QDialog):
 
 
 class ConflictDialog(QDialog):
-    def __init__(self, title: str, info: ConflictInfo, parent=None, other_set_up: bool = True):
+    def __init__(self, title: str, info: ConflictInfo, parent=None, other_set_up: bool = True, first_sync: bool = False):
         """other_set_up: the game is set up on the other device. If it isn't, the cloud copy was uploaded from this
-        device earlier (e.g. after this device's sync record was lost), and the window says so."""
+        device earlier (e.g. after this device's sync record was lost), and the window says so.
+        first_sync: this device has never synced the game: it already had files of its own (the game may have made
+        them when installed or first opened); the cloud has the other device's saves."""
         super().__init__(parent)
         self.setWindowTitle(tr("conflict.title"))
         self.setMinimumWidth(480)
         self.choice: Optional[str] = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
-        body = QLabel(tr("conflict.body" if other_set_up else "conflict.body_solo", title=html.escape(title)))
+        body = QLabel(tr("conflict.body_solo" if not other_set_up else "conflict.body_first" if first_sync
+                         else "conflict.body", title=html.escape(title)))
         body.setWordWrap(True)
         lay.addWidget(body)
         newer = "local" if (info.local_mtime or 0) >= (info.cloud_mtime or 0) else "cloud"
@@ -5450,7 +5453,7 @@ class MainWindow(TaskOwner, QMainWindow):
             return                                  # nothing new, or busy: asked again at the next check
         games = [self.games[gid] for gid in conflicts]
         listing = "\n".join("• " + g.title for g in games)
-        mixed = "_mixed" if any(self.only_here(g) for g in games) else ""
+        mixed = "_mixed" if any(self.only_here(g) or self.first_sync(g) for g in games) else ""
         choice = message(self, tr("conflict.waiting_body" + mixed, games=listing), tr("conflict.waiting_title" + mixed),
                          [("now", tr("conflict.choose_now")), ("later", tr("conflict.ask_later"))], dismiss="later")
         self._conflicts_snoozed |= set(conflicts)   # asked: not again (Choose Now's own answers included)
@@ -6086,7 +6089,8 @@ class MainWindow(TaskOwner, QMainWindow):
             label = tr("top.attention_one") if conflicts == 1 else tr("top.attention_many", n=conflicts)
             text = (f'<a href="conflict" style="color:{COLORS["text"]}; text-decoration:none">'
                     f"{label}</a>")
-            mixed = any(self.only_here(self.games.get(gid)) for gid, s in self.sync_states.items() if s == "conflict")
+            mixed = any(self.only_here(self.games.get(gid)) or self.first_sync(self.games.get(gid))
+                        for gid, s in self.sync_states.items() if s == "conflict")
             tip = tr("top.attention_tip_mixed" if mixed else "top.attention_tip")
             self.sync_light.set_state("red", "steady")
         else:
@@ -7039,14 +7043,25 @@ class MainWindow(TaskOwner, QMainWindow):
         was uploaded from this one) and the messages say so."""
         return g is not None and not g.paths_for(other_slot(self.settings.machine_name)).exe
 
+    def first_sync(self, g: Optional[Game]) -> bool:
+        """This device has never synced the game (but the other device has it): a mismatch then isn't "both changed",
+        this device already had files of its own (often made by the game when installed or first opened)."""
+        return g is not None and not self.only_here(g) and not self.engine.has_synced(g.game_id)
+
     def solo_key(self, key: str, g: Optional[Game]) -> str:
-        """The wording for a game set up only on this device, where one exists (see only_here)."""
-        return key + "_solo" if self.only_here(g) and key + "_solo" in i18n.S else key
+        """The true wording for a save mismatch: "<key>_solo" for a game set up only on this device (the cloud copy
+        came from here), "<key>_first" for this device's first sync of it; else the usual "both devices" one."""
+        if self.only_here(g) and key + "_solo" in i18n.S:
+            return key + "_solo"
+        if key + "_first" in i18n.S and self.first_sync(g):
+            return key + "_first"
+        return key
 
     def _conflict_choice(self, info: ConflictInfo) -> Optional[str]:
         g = self.games.get(info.game_id)
         other = bool(g and g.paths_for(other_slot(self.settings.machine_name)).exe)
-        d = ConflictDialog(g.title if g else info.game_id, info, self, other_set_up=other)
+        d = ConflictDialog(g.title if g else info.game_id, info, self, other_set_up=other,
+                           first_sync=other and not self.engine.has_synced(info.game_id))
         d.exec()
         return d.choice
 

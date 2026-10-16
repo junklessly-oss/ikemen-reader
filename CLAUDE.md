@@ -471,6 +471,14 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Pop-up text pass (2026-10-16, EN + JA, every dialog / message box): natural overall; fixed conflict.body_solo
   ("It" -> "The game"; JA double の, この->その), sync.tip.conflict_solo (split the bracketed aside), update.ready JA
   (〜するか、〜されます mismatch -> two sentences). Owner-chosen wording untouched.
+- Lights (owner, 2026-10-16): "Not Set Up on This Device Yet" got its own YELLOW (#E6D95A pale lemon, kept clear of
+  the golden amber; preview checked at real size), steady, second in LIGHT_ORDER (after red: it needs you). Grey now
+  = no saves yet / save at least once / checking. Theme role light_yellow; guide updated (EN + JA). Folder slices:
+  colours are pixel-identical in a split light (owner's "purple looks different" = simultaneous contrast, no change).
+- First sync on a device (the mirror of _solo): SyncEngine.has_synced(gid); MainWindow.first_sync(g) = set up on both
+  but never synced HERE -> a mismatch means this device already had files (often made by the game on install).
+  solo_key() picks "_solo" first, else "_first": conflict.body_first, sync.state/tip.conflict_first ("First Sync:
+  Choose Which Saves to Keep"), sync.conflict_unresolved_first, play.not_launched_conflict_first; lists use "_mixed".
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
 

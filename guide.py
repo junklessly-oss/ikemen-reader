@@ -2,7 +2,7 @@
 guide.py - the "Help and Guidance" text (Settings > About), in English and Japanese.
 
 Plain sections of (heading, paragraphs). A paragraph starting with "- " is a list item;
-{green} {amber} {blue} {red} {grey} {lavender} become sync-light dots in the theme's colours.
+{green} {amber} {blue} {red} {grey} {lavender} {yellow} become sync-light dots in the theme's colours.
 """
 from __future__ import annotations
 
@@ -92,7 +92,8 @@ GUIDE = {
             "- {blue} Newer saves are in the cloud. They download automatically (for a game that's open outside "
             "Ikemen Reader, once you close it).",
             "- {red} Saves changed on both devices. You'll be asked which to keep.",
-            "- {grey} Not set up on this device yet, no saves yet, or still being checked.",
+            "- {yellow} Not set up on this device yet: set its .exe in Edit.",
+            "- {grey} No saves yet, or still being checked.",
             "- {lavender} Saves are in sync, but the game isn't set up on the other device yet.",
             "A folder's light is split into equal slices, one for each colour among its games, with the most "
             "important first (starting at the top and going clockwise).",
@@ -221,7 +222,8 @@ GUIDE = {
             "- {amber} この端末のセーブの方が新しいです。自動でアップロードされます。",
             "- {blue} クラウドのセーブの方が新しいです。自動でダウンロードされます（イケメンリーダー以外から開いているゲームは、閉じたあと）。",
             "- {red} 両方の端末でセーブが変更されています。どちらを残すか尋ねます。",
-            "- {grey} この端末ではまだ設定されていない、セーブがまだない、または確認中です。",
+            "- {yellow} この端末ではまだ設定されていません。「編集」で .exe を設定してください。",
+            "- {grey} セーブがまだない、または確認中です。",
             "- {lavender} セーブは同期済みですが、もう一方の端末ではまだこのゲームが設定されていません。",
             "フォルダーのランプは、中のゲームのランプの色ごとに等分され、重要なものから順に（上から時計回りに）並びます。",
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
@@ -277,7 +279,7 @@ UL = '<ul style="margin-left:-14px; margin-top:2px">'
 
 def guide_html(lang: str, colors: dict, lights: dict) -> str:
     """The whole guide as simple HTML, coloured for the current theme."""
-    dots = {k: f'<span style="color:{lights[k]}">●</span>' for k in ("green", "amber", "blue", "red", "grey", "lavender")}
+    dots = {k: f'<span style="color:{lights[k]}">●</span>' for k in ("green", "amber", "blue", "red", "grey", "lavender", "yellow")}
     out = [f'<div style="color:{colors["text"]}">']
     for heading, paras in GUIDE.get(lang, GUIDE["en"]):
         out.append(f'<h3 style="margin-top:18px; margin-bottom:6px">{html.escape(heading)}</h3>')
