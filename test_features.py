@@ -1378,7 +1378,12 @@ class SearchByOtherNames(unittest.TestCase):
         self.assertTrue(matches_search(g, "st"))                             # two: any word (Stray)
         self.assertFalse(matches_search(Game("b", "Bunny's ママ代行サービス", names=["Bunny's Rent-a-Mom Agency"]), "a"))
         self.assertTrue(matches_search(Game("b", "Bunny's ママ代行サービス", names=["Bunny's Rent-a-Mom Agency"]), "ag"))
-        self.assertFalse(matches_search(Game("g", "ガールズ・ブック・メイカー 1"), "1"))
+        # numbers: that whole number, anywhere ("1" is volume 1, not 11)
+        self.assertTrue(matches_search(Game("g", "ガールズ・ブック・メイカー 1"), "1"))
+        self.assertFalse(matches_search(Game("a", "11月のアルカディア"), "1"))
+        self.assertTrue(matches_search(Game("a", "11月のアルカディア"), "11"))
+        self.assertFalse(matches_search(Game("g", "Girls Book Maker 11"), "maker 1"))
+        self.assertTrue(matches_search(Game("g", "Girls Book Maker 1"), "maker 1"))
         self.assertTrue(matches_search(g, "heart"))
         self.assertTrue(matches_search(g, "皇女"))                           # kanji: anywhere
         self.assertFalse(matches_search(g, "とおうじょ"))                     # kana: only from the start

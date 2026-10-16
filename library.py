@@ -682,6 +682,8 @@ def matches_search(game: "Game", query: str) -> bool:
     qw = _words(query)
     if not qw:
         return False
+    if key.isdigit():                                   # a number: that whole number, anywhere ("1" finds
+        return any(key in re.findall(r"\d+", _fold(n)) for n in names)   # "お姫さま 1", not "11月")
     if len(key) == 1:                                   # one letter: names that begin with it, nothing else
         return any(search_key(n).startswith(key) for n in names)
     for n in names:
@@ -691,7 +693,8 @@ def matches_search(game: "Game", query: str) -> bool:
                 if "".join(words[i:]).startswith(qw[0]):
                     return True
             elif words[i:i + len(qw) - 1] == qw[:-1] and i + len(qw) - 1 < len(words) \
-                    and words[i + len(qw) - 1].startswith(qw[-1]):
+                    and (words[i + len(qw) - 1] == qw[-1] if qw[-1].isdigit()     # (a number: exactly that one)
+                         else words[i + len(qw) - 1].startswith(qw[-1])):
                 return True
     return False
 
