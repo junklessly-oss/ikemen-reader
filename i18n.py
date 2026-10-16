@@ -556,7 +556,7 @@ S: dict[str, tuple[str, str]] = {
     "update.done":              ("Updated to Ikemen Reader {version}.", "イケメンリーダー {version} にアップデートしました。"),
     "update.not_packaged":      ("Updates install themselves only in the packaged program (Ikemen Reader.exe).",
                                  "アップデートの自動インストールは、パッケージ版（Ikemen Reader.exe）でのみ行えます。"),
-    "settings.vndb":            ("Automatically Fetch Covers From VNDB", "VNDBからカバー画像を自動取得"),
+    "settings.vndb":            ("Automatically Fetch Covers and Titles From VNDB", "VNDBからカバー画像とタイトルを自動取得"),
     "settings.vndb_safe":       ("Safe Covers Only (Hide Covers VNDB Marks as Explicit)",
                                  "安全なカバーのみ（VNDBで成人向けとされるカバーを除外）"),
     "settings.save":            ("Save", "保存"),

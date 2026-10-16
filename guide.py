@@ -31,7 +31,7 @@ GUIDE = {
             "- The title is filled in from the game's folder or file name (engine names like KIRIKIRI are skipped). "
             "In the game's settings, you can change it (Automatic uses the title of the game's own window), choose "
             "a cover (Choose Cover or Find on VNDB), and crop it by dragging and scrolling.",
-            "- With automatic covers from VNDB turned on in Settings, a matching VNDB entry is suggested as you add "
+            "- With automatic covers and titles from VNDB turned on in Settings, a matching VNDB entry is suggested as you add "
             "a game (Use This takes its cover). A game still without a cover after its first session gets one by "
             "itself when VNDB has an exact title match.",
             "- This Device holds the .exe and save folder for the computer you're using. Other Device is greyed "
@@ -98,7 +98,7 @@ GUIDE = {
         ]),
         ("Your Library", [
             "- Search by title, sort by Title, Most Played, Recently Played or My Arrangement, and filter by reading "
-            "status. Searching and filtering also show the matching games inside folders. With VNDB on, search also "
+            "status. Searching and filtering also show the matching games inside folders. With automatic covers and titles from VNDB on, search also "
             "finds games by their other names on VNDB: the English title, the romaji, nicknames and other aliases.",
             "- Folders First / Folders Last / Folders Mixed (in the same menu) choose where folders go in Title, Most "
             "Played and Recently Played: grouped at the front or back, or among the games, always in that sort's order. "
@@ -138,8 +138,8 @@ GUIDE = {
             "In Settings:",
             "- Language switches the whole program at once.",
             "- Font: pick a separate font for English and for Japanese, or add your own with Add Font.",
-            "- Accessibility: pulsing sync lights, launching on startup, automatic updates, automatic covers from "
-            "VNDB, and safe covers only.",
+            "- Accessibility: pulsing sync lights, launching on startup, automatic updates, automatic covers and "
+            "titles from VNDB, and safe covers only.",
             "- Custom Library Background: choose a picture, set its opacity and zoom, and drag it into place.",
             "- Theme: Dark, Light, or Custom, where you choose every colour yourself.",
             "- Updates: when a new version of Ikemen Reader is out, you're asked whether to update when Ikemen "
@@ -176,7 +176,7 @@ GUIDE = {
             "- タイトルは、ゲームのフォルダー名やファイル名から自動で入力されます（KIRIKIRIなどのエンジン名は使われません）。"
             "ゲームの設定画面では、タイトルの変更（「自動」にするとゲーム画面のタイトルを使います）やカバー画像の設定（「カバー画像を選択」または「VNDBで探す」）ができます。"
             "カバーはドラッグとスクロールで切り抜けます。",
-            "- 設定でVNDBからのカバー画像の自動取得をオンにしていると、ゲームの追加時にVNDBで見つかった候補が表示されます（「これを使う」でそのカバーを使います）。"
+            "- 設定でVNDBからのカバー画像とタイトルの自動取得をオンにしていると、ゲームの追加時にVNDBで見つかった候補が表示されます（「これを使う」でそのカバーを使います）。"
             "初回プレイのあともカバーがないゲームは、VNDBにタイトルが完全に一致する作品があれば、自動でカバーが設定されます。",
             "- 「この端末」には、今使っているパソコンでの .exe とセーブフォルダーを入力します。「もう一方の端末」は灰色で表示され、もう一方のパソコンで入力します。",
             "- セーブフォルダーは、提案として自動で入力されることがあります（もう一方の端末と同じ場所をこのパソコン用に置き換えたもの、またはゲームがすでに作ったセーブフォルダー）。フォルダーは、明らかにそのゲームのもの（ゲーム名そのものの名前で、セーブファイルが入っている）ときだけ提案されます。少しでも確かでない場合は、空欄のままになります。確認してから保存してください。",
@@ -218,7 +218,7 @@ GUIDE = {
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
         ]),
         ("ライブラリ", [
-            "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。検索や絞り込みでは、フォルダーの中にある該当ゲームも表示されます。VNDBがオンなら、英語タイトルやローマ字表記、略称などのVNDBに載っている別名でも検索できます。",
+            "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。検索や絞り込みでは、フォルダーの中にある該当ゲームも表示されます。VNDBからの自動取得がオンなら、英語タイトルやローマ字表記、略称などのVNDBに載っている別名でも検索できます。",
             "- 同じメニューの「フォルダーを先頭に」「フォルダーを末尾に」「フォルダーを混ぜる」で、タイトル順・プレイ時間順・最近プレイした順でのフォルダーの位置を選べます（先頭・末尾にまとめる、またはゲームの間に混ぜる。どれもその並び順で並びます）。別のものを選ぶまで保持されます。フォルダーがないときは選べません。",
             "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。ドラッグ中にカバーを上端や下端に近づけるとスクロールします（端に近いほど速くなります）。",
             "- 「自分の並び」のときにフォルダーの配置を選ぶと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先頭に」「末尾に」はまとめて、「混ぜる」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",
@@ -241,7 +241,7 @@ GUIDE = {
             "設定画面で：",
             "- 言語：プログラム全体がすぐに切り替わります。",
             "- フォント：英語と日本語で別々のフォントを選べます。「フォントを追加」で自分のフォントも使えます。",
-            "- アクセシビリティ：同期ランプの点滅、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像の自動取得、安全なカバーのみの表示を設定できます。",
+            "- アクセシビリティ：同期ランプの点滅、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像とタイトルの自動取得、安全なカバーのみの表示を設定できます。",
             "- ライブラリの背景をカスタマイズ：画像を選び、不透明度とズームを調整して、ドラッグで位置を合わせます。",
             "- テーマ：ダーク、ライト、またはすべての色を自分で選べるカスタムから選べます。",
             "- アップデート：イケメンリーダーの新しいバージョンが出ると、起動時にアップデートするか尋ねます。「アップデートを自動でインストール」をオンにすると、"
