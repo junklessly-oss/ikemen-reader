@@ -93,12 +93,12 @@ S: dict[str, tuple[str, str]] = {
                                  "クラウドに新しいセーブがあります。自動でダウンロードされます（イケメンリーダー以外から開いているゲームは、閉じたあと）。"),
     "sync.tip.conflict":        ("The saves have changed on both devices. Choose which to keep when asked, with right-click Sync Now, or when you press Read.",
                                  "両方の端末でセーブが変更されています。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を押したときに、どちらを残すか選べます。"),
-    "sync.tip.conflict_solo":   ("This device's saves don't match the copy in the cloud, which was uploaded from this device earlier "
-                                 "(the game isn't set up on the other device). Choose which to keep when asked, with right-click "
-                                 "Sync Now, or when you press Read.",
-                                 "この端末のセーブが、クラウドにあるコピー（以前この端末からアップロードしたもの。もう一方の端末では"
-                                 "設定されていません）と一致しません。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を"
-                                 "押したときに、どちらを残すか選べます。"),
+    "sync.tip.conflict_solo":   ("This device's saves don't match the copy in the cloud. The game isn't set up on the other device, "
+                                 "so that copy was uploaded from this device earlier. Choose which to keep when asked, with "
+                                 "right-click Sync Now, or when you press Read.",
+                                 "この端末のセーブが、クラウドにあるコピーと一致しません。もう一方の端末では設定されていないため、"
+                                 "そのコピーは以前この端末からアップロードされたものです。尋ねられたとき、右クリックの「今すぐ同期」、"
+                                 "または「読む」を押したときに、どちらを残すか選べます。"),
     "sync.tip.unset":           ("Click Edit to set This Device's .exe for this game.",
                                  '「編集」から、この端末でのゲームの .exe を設定してください。'),
     "sync.state.empty":         ("No Saves Yet", "セーブはまだありません"),
@@ -348,10 +348,10 @@ S: dict[str, tuple[str, str]] = {
     "conflict.body":            ('<b>{title}</b> was played on both devices since the last sync, so their saves are different.',
                                  '<b>{title}</b> は前回の同期以降に両方の端末でプレイされたため、セーブが異なります。'),
     # (the game isn't set up on the other device: the cloud copy can only have been uploaded from this one)
-    "conflict.body_solo":       ("<b>{title}</b>'s saves on This Device are different from the copy in the cloud. It isn't set up "
-                                 "on the other device, so that copy was uploaded from This Device earlier.",
-                                 "<b>{title}</b> のこの端末のセーブが、クラウドにあるコピーと異なります。もう一方の端末では設定"
-                                 "されていないため、このコピーは以前この端末からアップロードされたものです。"),
+    "conflict.body_solo":       ("<b>{title}</b>'s saves on This Device are different from the copy in the cloud. The game isn't "
+                                 "set up on the other device, so that copy was uploaded from This Device earlier.",
+                                 "この端末にある <b>{title}</b> のセーブが、クラウドにあるコピーと異なります。もう一方の端末では"
+                                 "設定されていないため、そのコピーは以前この端末からアップロードされたものです。"),
     "conflict.cloud_solo":      ("Keep the Saves From the Cloud (Uploaded From This Device Earlier)",
                                  "クラウドのセーブを残す（以前この端末からアップロードしたもの）"),
     "conflict.local":           ("Keep This Device's Saves", "この端末のセーブを残す"),
@@ -571,8 +571,8 @@ S: dict[str, tuple[str, str]] = {
     "update.ready_title":       ("Update Ready", "アップデートの準備ができました"),
     "update.ready":             ("Ikemen Reader {version} has been downloaded. Restart now to start using it, "
                                  "or it will be installed the next time you close Ikemen Reader.",
-                                 "イケメンリーダー {version} をダウンロードしました。今すぐ再起動して使い始めるか、"
-                                 "次にイケメンリーダーを閉じたときにインストールされます。"),
+                                 "イケメンリーダー {version} をダウンロードしました。今すぐ再起動すると使い始められます。"
+                                 "再起動しない場合は、次にイケメンリーダーを閉じたときにインストールされます。"),
     "update.restart":           ("Restart Now", "今すぐ再起動"),
     "update.failed":            ("The update couldn't be downloaded right now. Ikemen Reader will try again next time.",
                                  "アップデートをダウンロードできませんでした。次回もう一度試します。"),

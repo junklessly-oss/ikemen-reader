@@ -468,6 +468,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   pick "<key>_solo" wording for the status line + tip, Sync Now's "nothing was changed", Read refused
   (play.not_launched_conflict_solo); lists of games (Choose Now / Later pop-up, top-bar Error tooltip) use the
   "_mixed" wording when any game in them is set up only here. Guide: one added point (EN + JA).
+- Pop-up text pass (2026-10-16, EN + JA, every dialog / message box): natural overall; fixed conflict.body_solo
+  ("It" -> "The game"; JA double の, この->その), sync.tip.conflict_solo (split the bracketed aside), update.ready JA
+  (〜するか、〜されます mismatch -> two sentences). Owner-chosen wording untouched.
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
 
