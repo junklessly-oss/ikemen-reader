@@ -2084,13 +2084,17 @@ class SmoothAnimations(unittest.TestCase):
                 self.assertEqual(w.grid.count(), 4)
                 self.assertIsNotNone(w._leaving)                  # the other visible ones fade out
                 self.assertTrue(w._leaving[1])
-                self.assertEqual(w.appearing, {})
+                # covers that changed rows fade out and arrive again instead of crossing the others; the rest glide
+                shown = {w.grid.item(i).data(app.GAME_ID_ROLE): w.grid.visualItemRect(w.grid.item(i)) for i in range(4)}
+                self.assertTrue(set(w.appearing) <= set(shown))
+                for k in w.springs:
+                    self.assertEqual(w.springs[k][1], 0.0)        # gliders stay in their row
                 self.assertTrue(w.anim.isActive())
                 lf = w.leaving_frame()
                 self.assertTrue(0 < lf[2] <= 1 and app.LEAVE_SHRINK <= 1 - lf[3] + app.LEAVE_SHRINK)
                 w.search.setText("")                              # back: the 8 others arrive, one after another
                 self.assertEqual(w.grid.count(), 12)
-                self.assertEqual(len(w.appearing), 8)
+                self.assertGreaterEqual(len(w.appearing), 8)      # (+ any that change rows on the way back)
                 delays = sorted(w.appearing.values())
                 self.assertEqual(delays[0], 0.0)
                 self.assertTrue(0 < delays[-1] <= app.APPEAR_STAGGER_MAX + 1e-9)
@@ -2118,7 +2122,10 @@ class SmoothAnimations(unittest.TestCase):
             app, w, _ = self._window(tmp, n=12)
             try:
                 w.search.setText("alpha")
-                w._step_springs(w._spring_last + 0.05)             # mid-glide
+                self.assertTrue(w.springs)
+                start = max(v[4] for v in w.springs.values())     # (they wait while the others leave)
+                self.assertGreater(start, w._spring_last)
+                w._step_springs(start + 0.05)                     # mid-glide
                 moving = {k: list(v) for k, v in w.springs.items() if abs(v[2]) + abs(v[3]) > 1}
                 self.assertTrue(moving)
                 drawn = {k: w.slide_offset(k) + w.grid.visualItemRect(w.grid.item(i)).topLeft()
@@ -2128,7 +2135,7 @@ class SmoothAnimations(unittest.TestCase):
                     i = next(i for i in range(w.grid.count()) if w.grid.item(i).data(app.GAME_ID_ROLE) == k)
                     now = w.slide_offset(k) + w.grid.visualItemRect(w.grid.item(i)).topLeft()
                     self.assertLessEqual((now - drawn[k]).manhattanLength(), 2)      # no jump ...
-                    self.assertEqual(w.springs[k][2:], v[2:])                         # ... and no stop
+                    self.assertEqual(w.springs[k][2:4], v[2:4])                       # ... and no stop
             finally:
                 w.close()
                 app.wait_for_tasks(5)

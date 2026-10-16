@@ -422,6 +422,15 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   * "No Results Found" / 見つかりませんでした (grid.no_results): drawn faint in LibraryGrid.paintEvent, fades
     (no_results 0..1, NO_RESULTS_S) when searching/filtering and nothing matches. 2.7x the UI font; centred on
     the grid widget's own rect (NOT the viewport: its margins change with the scroll bar / re-centring).
+  * Choreography (no blended overlaps; per-frame overlap checker in scratch overlap.py: 996 -> 7 frames of 2,240):
+    leaving first + quickly (LEAVE_S 0.2, shrink 0.2, each spot drawn once); gliders AT REST wait GLIDE_WAIT 0.1 s
+    when something leaves (spring [x, y, vx, vy, start]); covers changing ROWS (grid coords, scroll-proof) leave +
+    arrive instead of gliding diagonally across others (_slide_from returns them); a half-arrived cover whose spot
+    moves restarts its arrival; carried speed only towards the target and <= SPRING_W*offset (no overshoot);
+    arrivals drawn BENEATH the rest (LibraryGrid.paintEvent under_pass; delegate skips them otherwise) and held
+    (_hold_blocked_arrivals) while a leaving cover is still >= ARRIVE_CLEAR visible in their spot.
+    "No Results Found" only once the last cover has gone (_no_results_target), vanishes in the frame covers return,
+    sits at NO_RESULTS_Y 0.44 (optical centre), rises NO_RESULTS_RISE 8 px as it fades in (0.3 s).
   * Search arrivals never decode covers mid-frame: an arriving tile whose cover isn't in memory
     (MainWindow.cover_ready / CoverCache.ready) stays hidden, its delay sliding on, while want_cover ->
     _load_wanted_covers decodes it in the background (accept(urgent=True): kept past the budget until drawn);

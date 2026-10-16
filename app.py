@@ -378,18 +378,37 @@ class LibraryGrid(QListWidget):
                         to.moveCenter(c)
                         p.drawPixmap(to, pm, QRectF(r.x() * dpr, r.y() * dpr, r.width() * dpr, r.height() * dpr))
                 p.setOpacity(1.0)
+            if self.w.appearing:                        # arriving covers, beneath the ones gliding past them
+                delegate = self.itemDelegate()
+                delegate.under_pass = True
+                try:
+                    for i in self.visible_range():
+                        index = self.model().index(i, 0)
+                        if index.data(GAME_ID_ROLE) in self.w.appearing:
+                            opt = QStyleOptionViewItem()
+                            opt.rect = self.visualRect(index)
+                            opt.font = self.font()
+                            opt.state = QStyle.State_Enabled | (QStyle.State_Selected if self.selectionModel()
+                                                                and self.selectionModel().isSelected(index) else QStyle.State_None)
+                            if opt.rect.intersects(ev.rect().adjusted(-40, -40, 40, 40)):
+                                delegate.paint(p, opt, index)
+                finally:
+                    delegate.under_pass = False
             if self.w.no_results > 0:                   # searching / filtering found nothing
                 f = QFont(self.font())
                 f.setPointSizeF(f.pointSizeF() * 2.7)
                 p.setFont(f)
                 c = QColor(COLORS["muted"])
-                c.setAlphaF(0.7 * ease(self.w.no_results))
+                k = ease(self.w.no_results)
+                c.setAlphaF(0.7 * k)
                 p.setPen(c)
-                # centred on the grid itself, not its viewport: the viewport's margins change while results come
-                # and go (scroll bar shown / hidden, covers re-centred) and the text moved with them
-                centre = self.viewport().mapFrom(self, self.rect().center())
+                # placed on the grid itself, not its viewport: the viewport's margins change while results come
+                # and go (scroll bar shown / hidden, covers re-centred) and the text moved with them. A little
+                # above the middle (the optical centre: the true centre looks low), rising into place as it fades in
+                r = self.rect()
+                centre = self.viewport().mapFrom(self, QPoint(r.center().x(), r.top() + round(r.height() * NO_RESULTS_Y)))
                 box = QRect(0, 0, 4000, 400)
-                box.moveCenter(centre)
+                box.moveCenter(centre + QPoint(0, round(NO_RESULTS_RISE * (1 - k))))
                 p.drawText(box, Qt.AlignCenter, tr("grid.no_results"))
             p.end()
         super().paintEvent(ev)
@@ -623,9 +642,13 @@ APPEAR_GROW = 0.14                   # ... starting this much smaller
 APPEAR_RISE = 10                     # ... and this many px lower
 APPEAR_STAGGER = 0.035               # each one a little after the one before it (in grid order) ...
 APPEAR_STAGGER_MAX = 0.2             # ... the last at most this much later
-LEAVE_S = 0.26                       # a cover taken away fades and shrinks this long
-LEAVE_SHRINK = 0.1
-NO_RESULTS_S = 0.25                  # "No Results Found" fades in / out
+LEAVE_S = 0.2                        # a cover taken away fades and shrinks this long (first, and quickly) ...
+LEAVE_SHRINK = 0.2
+GLIDE_WAIT = 0.1                     # ... the covers that stay start gliding this much later (only if some leave)
+ARRIVE_CLEAR = 0.12                  # a cover arrives once whatever was leaving its place is fainter than this
+NO_RESULTS_S = 0.3                   # "No Results Found" fades in (once the last cover has gone) ...
+NO_RESULTS_RISE = 8                  # ... rising this many px into place ...
+NO_RESULTS_Y = 0.44                  # ... at this height of the library (the optical centre); it goes at once
 FOLDER_ANIM_MS = 280                 # opening / closing a folder: its games grow out of (or back into) its tile
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
@@ -1491,6 +1514,8 @@ class CardDelegate(QStyledItemDelegate):
             paint_light(p, self.light_center(cover), self.w.folder_colours(fid), "calm", self.w.settings.pulse)
         p.restore()
 
+    under_pass = False                     # True while LibraryGrid draws the arriving covers beneath the rest
+
     RUMBLE_MARGIN = 32                     # room round a tile's cell for its shadow, outline and bookmark
 
     def paint(self, p: QPainter, option: QStyleOptionViewItem, index) -> None:
@@ -1499,6 +1524,8 @@ class CardDelegate(QStyledItemDelegate):
             if self._tiles:
                 self._tiles.clear()
             iid = index.data(GAME_ID_ROLE)
+            if iid in self.w.appearing and not self.under_pass:
+                return                                   # (drawn beneath the others first: LibraryGrid.paintEvent)
             if iid in self.w.appearing and not self.w.cover_ready(iid):
                 # arriving, but its cover would have to be read and decoded right now (a frame-long freeze):
                 # it loads in the background meanwhile and starts arriving once it's ready
@@ -5926,6 +5953,7 @@ class MainWindow(TaskOwner, QMainWindow):
         """Search / filter: the covers that stay glide to their new places, the ones let in fade in and the
         ones taken away fade out where they were (drawn from a picture of the grid taken just before)."""
         before = self._positions() if self.isVisible() else {}
+        old_scroll = self.grid.verticalScrollBar().value()
         snap = self._grid_snapshot() if before else None
         rects = {}
         if snap is not None:
@@ -5935,12 +5963,18 @@ class MainWindow(TaskOwner, QMainWindow):
                 iid = it.data(GAME_ID_ROLE)
                 rects[iid] = QRect(before[iid], self.grid.visualItemRect(it).size()).adjusted(-2, -2, 2, 2) & view
         self._rebuild()
+        if not self.showing_no_results():
+            self.no_results = 0.0                        # covers coming back: the text goes in that same frame
         if before:
-            self._slide_from(before, appear=True)
+            moved = self._slide_from(before, appear=True, old_scroll=old_scroll)
             kept = {self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
-            gone = [r for iid, r in rects.items() if iid not in kept and not r.isEmpty()]
+            gone = []
+            for iid, r in rects.items():
+                if (iid not in kept or iid in moved) and not r.isEmpty():
+                    if not any((r & g).width() * (r & g).height() > 0.3 * r.width() * r.height() for g in gone):
+                        gone.append(r)                   # (two covers caught on top of each other: one picture)
             self._leaving = (snap, gone, time.monotonic()) if gone else None
-        self._update_anim()                              # (also fades "No Results Found" in / out)
+        self._update_anim()                              # (also fades "No Results Found" in)
 
     def _grid_snapshot(self) -> Optional[QPixmap]:
         """The grid's covers as they are on screen now, without the background."""
@@ -6503,30 +6537,54 @@ class MainWindow(TaskOwner, QMainWindow):
             out[iid] = pos + off if off is not None else pos
         return out
 
-    def _slide_from(self, before: dict, skip: Optional[str] = None, appear: bool = False) -> None:
+    def _slide_from(self, before: dict, skip: Optional[str] = None, appear: bool = False,
+                    old_scroll: Optional[int] = None) -> set:
         """After the grid changed: every cover that moved slides from where it was to its new place.
-        appear (search / filter): covers glide on springs that keep their speed from the last keystroke, and
-        covers that weren't there before arrive one after another."""
+        appear (search / filter): covers that stay in their row glide on springs that keep their speed from the
+        last keystroke (they keep their order, so they never pass over each other); covers that change rows
+        would cross the others diagonally, so they fade out where they were and arrive at their new place, like
+        the covers a search lets in, one after another. Returns the ones that changed rows."""
         self.grid.doItemsLayout()
         now = {self.grid.item(i).data(GAME_ID_ROLE): self.grid.visualItemRect(self.grid.item(i)).topLeft()
                for i in range(self.grid.count())}             # (the new places themselves, no glide offsets)
         t = time.monotonic()
+        moved: set = set()
         if appear:
             old_springs, self.springs, self.slides = self.springs, {}, {}
             arriving = []
+            pitch = max(1, self.grid.gridSize().height())
+            scroll = self.grid.verticalScrollBar().value()
+            leaving = any(iid not in now for iid in before)
             for iid, p in now.items():
                 old = before.get(iid)
                 if old is None:
                     if before:
                         arriving.append(iid)
                     continue
-                v = old_springs.get(iid, [0, 0, 0.0, 0.0])
+                # (in the grid's own coordinates: a scroll that moves every cover alike is still a glide)
+                if old_scroll is not None and abs((old.y() + old_scroll) - (p.y() + scroll)) > pitch / 2:
+                    moved.add(iid)
+                    arriving.append(iid)
+                    continue
                 x, y = old.x() - p.x(), old.y() - p.y()
+                if iid in self.appearing and (x or y):
+                    moved.add(iid)                       # still arriving (half there): arrives at its new place
+                    arriving.append(iid)
+                    continue
+                v = list(old_springs.get(iid, [0, 0, 0.0, 0.0, t]))
+                for k, off in ((2, x), (3, y)):          # its speed carries over only towards the new place, and
+                    if v[k] * off > 0:                   # never so fast it would overshoot into a neighbour
+                        v[k] = 0.0
+                    elif abs(v[k]) > SPRING_W * abs(off):
+                        v[k] = -SPRING_W * off
                 if x or y or abs(v[2]) > 1 or abs(v[3]) > 1:
-                    self.springs[iid] = [float(x), float(y), v[2], v[3]]
+                    still = abs(v[2]) <= 1 and abs(v[3]) <= 1 and v[4] <= t
+                    # at rest: wait for the leaving covers to get out of the way; moving: keep going
+                    start = t + GLIDE_WAIT if (still and (leaving or moved)) else v[4] if v[4] > t else t
+                    self.springs[iid] = [float(x), float(y), v[2], v[3], start]
             # still arriving from the last keystroke: carry on; new ones queue up after them, in grid order
             keep = {iid: d - (t - self._appear_t0) for iid, d in self.appearing.items()
-                    if iid in now and t - self._appear_t0 - d < APPEAR_S}
+                    if iid in now and iid not in moved and t - self._appear_t0 - d < APPEAR_S}
             fresh = [iid for iid in arriving if iid not in keep]
             step = min(APPEAR_STAGGER, APPEAR_STAGGER_MAX / max(1, len(fresh) - 1))
             self.appearing = {**keep, **{iid: i * step for i, iid in enumerate(fresh)}}
@@ -6543,6 +6601,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 self._slide_t0 = t
         self.grid.viewport().update()
         self._update_anim()
+        return moved
 
     def appear_fade(self, iid: str) -> float:
         """How much of the background still covers a cover that's arriving (1 = hidden, 0 = fully there)."""
@@ -6554,6 +6613,30 @@ class MainWindow(TaskOwner, QMainWindow):
             return 1.0
         return 0.0 if t >= 1 else (1 - t) ** 3          # ease out: there at once, settling gently
 
+    def _hold_blocked_arrivals(self, now: float) -> None:
+        """A cover that hasn't started arriving waits while a leaving cover still shows in its place (no
+        cross-fade of two pictures in one spot); its turn moves on until the place is clear."""
+        lf = self.leaving_frame()
+        if lf is None or lf[2] < ARRIVE_CLEAR or not self.appearing:
+            return
+        ghosts = []
+        for r in lf[1]:
+            g = QRectF(r)
+            c = g.center()
+            g.setSize(g.size() * lf[3])
+            g.moveCenter(c)
+            ghosts.append(g)
+        t = now - self._appear_t0
+        for i in self.grid.visible_range():
+            it = self.grid.item(i)
+            iid = it.data(GAME_ID_ROLE)
+            d = self.appearing.get(iid)
+            if d is None or t - d > 0.02:
+                continue                                 # (not arriving, or already showing)
+            spot = CardDelegate.cover_rect(self.grid.visualItemRect(it), 0.0)
+            if any(spot.intersects(g) for g in ghosts):
+                self.appearing[iid] = t
+
     def _step_springs(self, now: float) -> None:
         """Move every spring-gliding cover on by the time since the last frame (exact, so uneven frames
         don't change the motion)."""
@@ -6562,14 +6645,17 @@ class MainWindow(TaskOwner, QMainWindow):
         if not dt:
             return
         w = SPRING_W
-        e = math.exp(-w * dt)
         done = []
-        for iid, s in self.springs.items():
+        for iid, s in self.springs.items():              # s = [x, y, vx, vy, start]
+            if now <= s[4]:
+                continue                                 # (waiting for the leaving covers to get out of the way)
+            h = min(dt, now - s[4])
+            e = math.exp(-w * h)
             for k in (0, 1):                             # critically damped: x(t) = (x0 + (v0 + w x0) t) e^(-w t)
                 x0, v0 = s[k], s[k + 2]
                 c = v0 + w * x0
-                s[k] = (x0 + c * dt) * e
-                s[k + 2] = (v0 - w * c * dt) * e
+                s[k] = (x0 + c * h) * e
+                s[k + 2] = (v0 - w * c * h) * e
             if abs(s[0]) < 0.4 and abs(s[1]) < 0.4 and abs(s[2]) < 8 and abs(s[3]) < 8:
                 done.append(iid)
         for iid in done:
@@ -6763,9 +6849,13 @@ class MainWindow(TaskOwner, QMainWindow):
             self.anim.stop()
             self.grid.viewport().update()
 
+    def _no_results_target(self) -> float:
+        """1 once nothing matches AND the last cover has finished fading out (never both on screen at once)."""
+        return 1.0 if self.showing_no_results() and self._leaving is None else 0.0
+
     def _search_moving(self) -> bool:
         return bool(self.springs) or bool(self.appearing) or self._leaving is not None \
-            or self.no_results != (1.0 if self.showing_no_results() else 0.0)
+            or self.no_results != self._no_results_target()
 
     def _tick(self) -> None:
         now = time.monotonic()
@@ -6828,9 +6918,10 @@ class MainWindow(TaskOwner, QMainWindow):
             changed = True
         if self._search_moving():                         # search / filter: gliding, arriving, leaving
             self._step_springs(now)
+            self._hold_blocked_arrivals(now)
             if self.appearing and now - self._appear_t0 >= max(self.appearing.values()) + APPEAR_S:
                 self.appearing = {}
-            target = 1.0 if self.showing_no_results() else 0.0
+            target = self._no_results_target()
             if self.no_results != target:
                 d = (step * HOVER_MS) / (NO_RESULTS_S * 1000)
                 self.no_results = min(target, self.no_results + d) if target > self.no_results \
