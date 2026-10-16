@@ -763,6 +763,21 @@ class IkemenSync(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in d.iterdir() if p.is_file()), ["settings.json"])
             self.assertEqual(list((d / "fonts").iterdir()), [])
 
+    def test_folders_named_after_device_numbers_and_swap(self):
+        import devsync
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "device_settings"
+            (base / "PC").mkdir(parents=True)                                     # left by an older version
+            (base / "PC" / "settings.json").write_text('{"computer": "DESKTOP"}', "utf-8")
+            devsync.publish(LocalSettings("Laptop", tmp, theme="light"), "LAPTOP", {})
+            devsync.publish(LocalSettings("PC", tmp, theme="dark"), "DESKTOP", {})
+            self.assertEqual(sorted(p.name for p in base.iterdir()), ["Device 1", "Device 2"])
+            # the PC becomes Device 2 (and the laptop Device 1): the folders swap, nothing is lost
+            devsync.publish(LocalSettings("Laptop", tmp, theme="dark"), "DESKTOP", {})
+            self.assertEqual(devsync.read(tmp, "Laptop")["computer"], "DESKTOP")
+            self.assertEqual(devsync.read(tmp, "PC"), dict(devsync.read(tmp, "PC"), computer="LAPTOP", theme="light"))
+            self.assertEqual(sorted(p.name for p in base.iterdir()), ["Device 1", "Device 2"])
+
     def test_damaged_or_missing(self):
         import devsync
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,7 +2,7 @@
 devsync.py - "Ikemen Sync": copy the look and preferences from the other device.
 
 Each device shares its personal settings (theme, fonts, background, language, ...) into
-<cloud>/device_settings/<slot>/ whenever Ikemen Reader opens or its settings are saved.
+<cloud>/device_settings/Device 1|Device 2/ whenever Ikemen Reader opens or its settings are saved.
 "Device Settings Sync" then reads the other device's copy. Things that only make sense on one computer
 (which device it is, the cloud folder, Locale Emulator / Luna locations, startup) are never shared.
 """
@@ -23,8 +23,57 @@ SHARED = ("language", "font_en", "font_ja", "pulse", "vndb", "vndb_safe_only", "
           "show_bookmarks", "folder_place", "last_sort")
 
 
+FOLDER_NAMES = {"PC": "Device 1", "Laptop": "Device 2"}     # internal slot -> folder name in the cloud
+
+
 def device_dir(cloud_root: str, slot: str) -> Path:
-    return Path(cloud_root) / FOLDER / slot
+    return Path(cloud_root) / FOLDER / FOLDER_NAMES.get(slot, slot)
+
+
+def _owner(d: Path) -> Optional[str]:
+    """The computer that shared the settings in this folder, if any."""
+    try:
+        data = json.loads((d / "settings.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    c = data.get("computer") if isinstance(data, dict) else None
+    return c if isinstance(c, str) and c else None
+
+
+def _tidy_folders(cloud_root: str, slot: str, computer: str) -> None:
+    """Keep the folder names in step with the device numbers:
+    - folders from older versions ("PC" / "Laptop") become "Device 1" / "Device 2";
+    - when this computer switched numbers, its old folder and the other one swap names, so each device's
+      settings sit under the number it now uses (nothing is overwritten)."""
+    base = Path(cloud_root) / FOLDER
+    for old, new in FOLDER_NAMES.items():
+        o, n = base / old, base / new
+        if o.is_dir():
+            try:
+                if not n.exists():
+                    o.rename(n)
+                else:                                   # already moved by the other device: the old one is stale
+                    shutil.rmtree(o)
+            except OSError:
+                pass
+    mine = device_dir(cloud_root, slot)
+    if _owner(mine) in (None, computer):
+        return
+    for other in FOLDER_NAMES.values():
+        o = base / other
+        if o != mine and _owner(o) == computer:          # our settings are under the number we used before
+            tmp = base / f"swap-{threading.get_ident()}.tmp"
+            try:
+                mine.rename(tmp)
+                o.rename(mine)
+                tmp.rename(o)
+            except OSError:
+                if tmp.exists() and not mine.exists():
+                    try:
+                        tmp.rename(mine)
+                    except OSError:
+                        pass
+            return
 
 
 def _same_file(a: Path, b: Path) -> bool:
@@ -53,6 +102,7 @@ def publish(settings: LocalSettings, computer: str, font_files: dict[str, str]) 
 
 
 def _publish(settings: LocalSettings, computer: str, font_files: dict[str, str]) -> None:
+    _tidy_folders(settings.cloud_root, settings.machine_name, computer)
     d = device_dir(settings.cloud_root, settings.machine_name)
     d.mkdir(parents=True, exist_ok=True)
     data = {k: getattr(settings, k) for k in SHARED}

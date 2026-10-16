@@ -604,6 +604,7 @@ LIGHT_FADE_S = 0.45                  # a light changing colour cross-fades this 
 PREFETCH_QUIET_MS = 500              # covers are prepared in the background once nothing has changed this long
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
 RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
+MENU_LINE_INSET = 8                  # right-click menu dividers stop this far from the menu's sides (MenuLines)
 BUTTON_GAP = 8                       # between the buttons at the bottom of every window
 STOP_PATIENCE_MS = 6000             # Stop: how long a game gets to close before "force it?"
 SCROLLBAR_LINGER_S = 0.6             # stays visible this long after scrolling / leaving the edge
@@ -733,7 +734,7 @@ QMenu {{ background: {c['input']}; border: 1px solid {c['border']}; border-radiu
 QMenu::item {{ padding: 6px 20px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {c['button_hover']}; }}
 QMenu::item:disabled {{ color: {c['other_text']}; }}
-QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
+QMenu::separator {{ height: 1px; background: transparent; margin: 4px 0px; }}
 QStatusBar {{ background: {c['band']}; color: {c['muted']}; }}
 QStatusBar::item {{ border: none; }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
@@ -1315,7 +1316,7 @@ class CardDelegate(QStyledItemDelegate):
             p.setPen(QColor(DARK["muted"]))
             p.setFont(f)
             p.drawText(QRectF(cover.x() + 12, y - fm_small.height(), text_w, fm_small.height()),
-                       Qt.AlignLeft | Qt.AlignVCenter, line)
+                       Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, line)   # (descenders: the g of Reading)
         else:
             y += fm_small.height() + 4          # title sits at the bottom on its own
         if title:
@@ -1328,7 +1329,7 @@ class CardDelegate(QStyledItemDelegate):
             top = y - fm_small.height() - 4 - fm.height() * len(lines)
             for i, l in enumerate(lines):
                 p.drawText(QRectF(cover.x() + 12, top + i * fm.height(), text_w, fm.height()),
-                           Qt.AlignLeft | Qt.AlignVCenter, l)
+                           Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, l)
         p.setOpacity(1.0)
 
     def _ring(self, p: QPainter, cover: QRectF) -> None:
@@ -1865,6 +1866,47 @@ class StarButton(QPushButton):
         p.end()
 
 
+def crisp_line(p: QPainter, x: float, width: float, y: float, colour: QColor) -> None:
+    """A divider line one pixel thick, centred on y, lined up with the screen's own pixels. With Windows
+    scaling at 125 % / 150 % a plain 1 px line falls between screen pixels, and two dividers in the same menu
+    came out one and two pixels thick."""
+    dev = p.device()
+    dpr = dev.devicePixelRatioF() if dev is not None else 1.0
+    t = p.transform()                                   # (lined up on the screen, not in the painter's units)
+    thick = max(1, round(dpr))
+    top = round((y + t.dy()) * dpr - thick / 2) / dpr - t.dy()
+    left = round((x + t.dx()) * dpr) / dpr - t.dx()
+    right = round((x + width + t.dx()) * dpr) / dpr - t.dx()
+    p.save()
+    p.setRenderHint(QPainter.Antialiasing, False)
+    p.fillRect(QRectF(left, top, right - left, thick / dpr), colour)
+    p.restore()
+
+
+class MenuLines(QObject):
+    """Right-click menus draw their own divider lines (crisp_line), so they're all equally thick at any
+    Windows scaling; the style sheet's separator only keeps the space (transparent)."""
+
+    def eventFilter(self, obj, ev) -> bool:
+        if ev.type() == QEvent.Paint and isinstance(obj, QMenu):
+            QMenu.paintEvent(obj, ev)                   # the menu as usual ...
+            seps = [a for a in obj.actions() if a.isSeparator() and a.isVisible()]
+            if seps:
+                p = QPainter(obj)                       # ... then its dividers on top
+                for a in seps:
+                    r = obj.actionGeometry(a)
+                    crisp_line(p, r.left() + MENU_LINE_INSET, r.width() - 2 * MENU_LINE_INSET,
+                               r.top() + r.height() / 2, QColor(COLORS["border"]))
+                p.end()
+            return True
+        return False
+
+
+def install_menu_lines(app: QApplication) -> None:
+    app._menu_lines = MenuLines(app)
+    app.installEventFilter(app._menu_lines)
+
+
 class _SeparatorDelegate(QStyledItemDelegate):
     """Draws a drop-down's dividers as a thin line (Qt draws them with a style our style sheet doesn't support,
     so they came out invisible); every other item is drawn by Qt's own delegate, unchanged."""
@@ -1886,7 +1928,7 @@ class _SeparatorDelegate(QStyledItemDelegate):
         line.setAlphaF(0.45)
         p.save()
         p.fillRect(r, QColor(COLORS["input"]))
-        p.fillRect(QRect(r.left(), r.center().y(), r.width(), 1), line)       # edge to edge
+        crisp_line(p, r.left(), r.width(), r.top() + r.height() / 2, line)    # edge to edge
         p.restore()
 
     def sizeHint(self, option, index) -> QSize:
@@ -3381,14 +3423,32 @@ class FitsScreen:
         buttons = self.layout().itemAt(1).sizeHint().height()
         room = self._screen_room(self)
         frame = self.frameGeometry().height() - self.geometry().height() if self.isVisible() else 32
-        h = min(content + buttons, room.height() - max(frame, 32) - 8)
+        self._most = room.height() - max(frame, 32) - 8
+        self._set_fit_height(width, min(content + buttons, self._most))
+        # the estimate above can be a few pixels short (wrapped hints): then a scroll bar with nothing to
+        # scroll appeared. Once laid out, grow by whatever is left over, as far as the screen allows.
+        self._top_ups = 3
+        QTimer.singleShot(0, self._top_up)
+
+    def _set_fit_height(self, width: int, h: int) -> None:
         self.setMinimumHeight(min(320, h))
         self.resize(width, h)
         if self.isVisible():                    # keep the whole window on the screen
+            room = self._screen_room(self)
+            frame = max(self.frameGeometry().height() - self.geometry().height(), 32)
             top = self.frameGeometry().top()
-            bottom = top + h + max(frame, 32)
-            if bottom > room.bottom() or top < room.top():
-                self.move(self.x(), max(room.top(), room.bottom() - h - max(frame, 32)))
+            if top + h + frame > room.bottom() or top < room.top():
+                self.move(self.x(), max(room.top(), room.bottom() - h - frame))
+
+    def _top_up(self) -> None:
+        scroll = self.findChild(QScrollArea)
+        if scroll is None or not self.isVisible() or self._top_ups <= 0:
+            return
+        self._top_ups -= 1
+        extra = scroll.verticalScrollBar().maximum()
+        if extra > 0 and self.height() < self._most:
+            self._set_fit_height(self.width(), min(self.height() + extra, self._most))
+            QTimer.singleShot(0, self._top_up)
 
     def showEvent(self, ev) -> None:
         super().showEvent(ev)
@@ -4620,14 +4680,15 @@ class DetectDialog(QDialog):
             if not self._sure_key and len(maybe) > 1:       # one key per game: ticking one unticks the others
                 for b in self.reg_boxes:
                     b.toggled.connect(lambda on, me=b: on and [o.setChecked(False) for o in self.reg_boxes if o is not me])
-        row = QHBoxLayout()
-        other = QPushButton(tr("detect.browse"))
-        other.clicked.connect(self._browse)
-        row.addWidget(other)
-        row.addStretch()
+        row = QHBoxLayout()                                 # "cancel" far left, the actions on the right
+        row.setSpacing(BUTTON_GAP)
         later = QPushButton(tr("detect.later"))
         later.clicked.connect(self.reject)
         row.addWidget(later)
+        row.addStretch()
+        other = QPushButton(tr("detect.browse"))
+        other.clicked.connect(self._browse)
+        row.addWidget(other)
         if candidates:
             use = QPushButton(tr("detect.use"))
             use.setDefault(True)
@@ -7195,6 +7256,7 @@ def main() -> None:
     if hand_over_to_running_copy():
         return                                  # already open: that window comes to the front instead
     install_error_net()
+    install_menu_lines(app)
     _install_stall_log()
     load_fonts()
     startup.refresh()          # if it starts with Windows, keep that entry pointing at this copy

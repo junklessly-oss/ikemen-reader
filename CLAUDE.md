@@ -390,7 +390,18 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   (BUTTON_GAP = 8 on every button row, pop-ups were 16, others 6-11); status drop-down shows No Status with
   nothing selected. Random UI stress (21 action kinds incl. drags, other-device changes, language/theme switches,
   300 games + background, no delays): ~13,000 actions, 0 errors. Packaged 1.0.1 built and run; the real updater
-  swap rehearsed on the 134 MB build (updated, previous kept, extra files kept, restarted). Tests: 161.
+  swap rehearsed on the 134 MB build (updated, previous kept, extra files kept, restarted). Tests: 161 (162 after the tweaks).
+
+## Tweaks after 1.0.1 (2026-10-15)
+- Ikemen Sync folders are `<cloud>/device_settings/Device 1|Device 2` (devsync.FOLDER_NAMES; old PC/Laptop folders
+  renamed on publish). A computer that switched numbers swaps the two folders (devsync._tidy_folders, by the
+  "computer" in each settings.json) so nothing is overwritten.
+- Hover text drawn with Qt.TextDontClip (Hiragino's descenders touch the bottom of the line box: the g of Reading).
+- FitsScreen._top_up: after laying out, grows the window by whatever the scroll bar still has (estimate was 1-16 px
+  short: a scroll bar with nothing to scroll). Scrolls only when the screen really is too short.
+- Menu / drop-down dividers: crisp_line() snaps to screen pixels; right-click menus drawn by the MenuLines app event
+  filter (style sheet separator transparent). At 125 % / 150 % scaling the two dividers were 1 vs 2 px.
+- Save-location pop-up: Ask Me Next Time far left, Somewhere Else | Use This Folder right.
 
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
