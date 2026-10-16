@@ -413,6 +413,11 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   written into the cloud game file so both devices have them; failures retried next start). library.matches_search
   + search_key (NFKC, casefold, katakana -> hiragana, no spaces/punctuation). In the guide.
 
+- Folder light checked: one equal slice per COLOUR present (99 lavender + 1 green = halves, verified). A "2/3 lavender"
+  sighting was blue (playing/pull) + lavender + green: blue #6FA8DC and lavender #A98BD9 look alike at dot size.
+  Owner REJECTED (2026-10-15) a redesign preview: shadow instead of the ring, slice gaps, lavender #BE7FD8,
+  borderless slimmer bookmarks, slide/swell animations. Keep lights + bookmarks as they are; don't re-propose.
+
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
   direction) instead of one flat colour (owner's idea, 2026-10-15).
