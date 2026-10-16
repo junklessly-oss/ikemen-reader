@@ -2172,6 +2172,8 @@ class SmoothAnimations(unittest.TestCase):
                 settle()
                 self.assertEqual(w.no_results, 1.0)
                 search_now(w, "alp")
+                self.assertEqual(len(w.appearing), 4)             # from the empty screen: they fade in too
+                self.assertGreater(w.appear_fade(next(iter(w.appearing))), 0.5)
                 settle()
                 self.assertEqual(w.no_results, 0.0)
             finally:

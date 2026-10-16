@@ -5965,9 +5965,10 @@ class MainWindow(TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ sort / filter
     def _apply_filter(self) -> None:
-        """Search / filter: the covers that stay glide to their new places, the ones let in fade in and the
-        ones taken away fade out where they were (drawn from a picture of the grid taken just before)."""
-        before = self._positions() if self.isVisible() else {}
+        """Search / filter: covers taken away (or whose place changes) fade out where they were (drawn from a
+        picture of the grid taken just before), then the ones let in fade in; nothing slides."""
+        animate = self.isVisible()
+        before = self._positions() if animate else {}
         snap = self._grid_snapshot() if before else None
         rects = {}
         if snap is not None:
@@ -5980,7 +5981,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self._rebuild()
         if not self.showing_no_results():
             self.no_results = 0.0                        # covers coming back: the text goes in that same frame
-        if before:
+        if animate:                                      # (also from an empty grid: "No Results Found" -> results)
             moved = self._slide_from(before, appear=True)
             kept = {self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
             gone = []
@@ -6567,8 +6568,7 @@ class MainWindow(TaskOwner, QMainWindow):
             for iid, p in now.items():
                 old = before.get(iid)
                 if old is None:
-                    if before:
-                        arriving.append(iid)
+                    arriving.append(iid)
                 elif old != p:
                     moved.add(iid)
                     arriving.append(iid)
