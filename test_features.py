@@ -1742,6 +1742,29 @@ class SortingAndCustomOrder(unittest.TestCase):
             qa.processEvents()
         return w, lib, ids, fid
 
+    def test_search_finds_folders_by_name(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            w, lib, ids, fid = self._window(tmp, ["Alpha", "Beta"], ["Saga One", "Saga Two"])
+            try:
+                import app
+                shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+                f = app.FOLDER_PREFIX + fid
+                w.search.setText("ser")                          # the folder is called "Series"
+                self.assertEqual(shown(), [f])                   # its games don't match "ser" themselves
+                w.search.setText("saga")
+                self.assertEqual(sorted(shown()), sorted([ids["Saga One"], ids["Saga Two"]]))
+                w.search.setText("s")                            # both: the folder and its games
+                self.assertIn(f, shown())
+                w.settings.status_filter = "finished"            # a status filter: only folders holding one
+                w.search.setText("series")
+                self.assertEqual(shown(), [])
+                lib.update(ids["Saga One"], status="finished")
+                w.refresh()
+                self.assertEqual(shown(), [f])
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
     def test_folder_places_and_custom(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # (a settings share may still be writing)
             w, lib, ids, fid = self._window(tmp, ["A", "B", "C"], ["F1", "F2"])

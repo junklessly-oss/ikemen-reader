@@ -51,7 +51,7 @@ import launcher
 from launcher import PlayResult, finish_first_play, play, warm_up
 from library import (FOLDER_PLACES, SLOT_NUMBER, SLOTS, SORTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
                      default_app_dir, load_local_settings, other_slot, save_local_settings,
-                     matches_search, sort_games, this_computer)
+                     matches_names, matches_search, sort_games, this_computer)
 from sync_engine import Action, ConflictInfo, SyncEngine, save_folder_problem
 from titles import guess_title
 
@@ -5569,6 +5569,9 @@ class MainWindow(TaskOwner, QMainWindow):
         def keep(g: Game) -> bool:
             return matches_search(g, q) and (status == "all" or g.status == status)
 
+        def keep_folder(fid: str) -> bool:              # searching: a folder whose name matches shows as itself
+            return bool(q) and matches_names((self.folder_name(fid),), q) and                 (status == "all" or any(g.status == status for g in self.folder_games[fid]))
+
         top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
         top += [("folder", fid) for fid in self.folder_games]
         if sort == "custom":                             # My Arrangement: exactly your order
@@ -5581,12 +5584,18 @@ class MainWindow(TaskOwner, QMainWindow):
             entries = [("game", g) for g in self.folder_games[self.current_folder] if keep(g)]
         elif flat:
             if sort == "custom":                         # the library's order, each folder's games in its place
-                expanded = []
+                entries = []
                 for kind, obj in top:
-                    expanded += [g for g in self.folder_games[obj]] if kind == "folder" else [obj]
-                entries = [("game", g) for g in expanded if keep(g)]
+                    if kind == "folder":
+                        entries += [("folder", obj)] if keep_folder(obj) else []
+                        entries += [("game", g) for g in self.folder_games[obj] if keep(g)]
+                    elif keep(obj):
+                        entries.append(("game", obj))
             else:
                 entries = [("game", g) for g in sort_games(games, sort) if keep(g)]
+                folders = [("folder", fid) for fid in self.folder_games if keep_folder(fid)]
+                if folders:                              # placed like on the main page (first / last / mixed)
+                    entries = self._auto_order(entries + folders, sort, self.settings.folder_place)
         else:
             entries = top
 

@@ -663,7 +663,12 @@ def _words(text: str) -> tuple[str, ...]:
 
 
 def matches_search(game: "Game", query: str) -> bool:
-    """Does the search box's text find this game (its title, or any name VNDB knows it by)? Typing has to
+    """Does the search box's text find this game (its title, or any name VNDB knows it by)? See matches_names."""
+    return matches_names((game.title, *game.names), query)
+
+
+def matches_names(names: tuple, query: str) -> bool:
+    """Does the search box's text find one of these names (a game's titles, a folder's name)? Typing has to
     follow a name, not just contain the letters:
     - with kanji: the name contains it, anywhere ("刻" finds サクラノ刻);
     - kana: the name starts with it ("まま" finds ままごと and ママトモ);
@@ -675,7 +680,6 @@ def matches_search(game: "Game", query: str) -> bool:
     key = search_key(query)
     if not key:
         return True
-    names = (game.title, *game.names)
     if any(_is_kanji(c) for c in key):
         return any(key in search_key(n) for n in names)
     if any(_is_kana(c) for c in key):

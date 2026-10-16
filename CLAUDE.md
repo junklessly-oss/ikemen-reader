@@ -443,7 +443,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
     start of a word (_words: Latin/number runs; one query word may run on across words: "sakuranotoki"; several
     = each starts a later word, in order, gaps allowed: "girls 1", "sakura toki"); numbers = that whole number anywhere ("1" = volume 1, not "11月"; in multi-word queries
     a number word must match exactly); ONE letter = names that begin with it only (owner: "a" found Bunny's via "Rent-a-Mom Agency").
-    Over title + VNDB names. Fold: NFKC, casefold, katakana->hiragana, apostrophes dropped.
+    Over title + VNDB names (library.matches_names; folders too: a folder whose name matches shows as its tile
+    in search results, placed by folder_place / its My Arrangement spot; with a status filter only if it holds one). Fold: NFKC, casefold, katakana->hiragana, apostrophes dropped.
 - Search by other names: Game.names / names_for (VNDB title, alttitle, every titles[].title/latin, aliases; max 40)
   fetched by MainWindow._fetch_names after refresh (only with Settings VNDB on; one batched vndb.names() request;
   written into the cloud game file so both devices have them; failures retried next start). library.matches_search
