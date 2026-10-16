@@ -489,6 +489,41 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
 
+## PLAN - Fewer guesses (agreed 2026-10-16 in a cloud session on the laptop; NOT built on the PC yet)
+Owner: "no guesses unless almost entirely certain"; wants syncing as frictionless as possible. Build + test these
+on the PC (the cloud session can't run the real app / Windows tests). Owner tests each.
+1. Girls Book Maker report: its save folder became Documents\Books on the laptop, already filled in BEFORE the
+   first read. The before-read suggestion (detect.suggest_save_folder, whole-name rule) can't match "Books" for
+   that title, so most likely the OTHER device's save folder was Documents\Books (set by the loose after-play
+   detection there) and the laptop got it translated. First ask the owner what Edit shows under Other Device.
+2. After-play detection (detect.find_folders) still uses the LOOSE word match (_tokens/_matches: "book" in
+   "Books" = "named after the game"). Plan: use the whole-name rule there too (_whole_names + _same_game on the
+   last few path parts). Mark Candidate.sure for folders = a save-named folder inside the game folder, or one
+   named after the whole game with save-like files (not only .log/.ini/... = _NOT_SAVES). DetectDialog: tick a
+   folder only when exactly one is sure; otherwise nothing ticked and "Use This" greyed until the owner picks
+   (enable on QButtonGroup.buttonToggled). Update the guide (EN + JA) detection paragraph.
+3. Browse buttons (owner's rule): a box with a path opens there (a file preselected; a path that doesn't exist yet
+   -> nearest existing parent); an EMPTY box opens THIS PC (owner's choice), never Windows' remembered last folder.
+   Today: exe Browse / + Add game / cover / font / background with nothing filled in pass "" -> Windows opens the
+   last folder used (the owner's complaint); save Browse empty -> the game's folder; Detect "Somewhere Else" ->
+   AppData. Idea: one helper used by every picker, QFileDialog.getExistingDirectoryUrl / getOpenFileUrl(s) with
+   QUrl("clsid:0AC0837C-BBF8-452A-850D-79D08E667CA7") (FOLDERID_ComputerFolder) for This PC - check on Windows
+   that Qt's native dialog really opens This PC with it.
+4. Save folder set by hand: when Edit changes this device's save folder / registry key (or a game is added /
+   "Set Up on This Device") and the next check finds a mismatch, skip the Choose Now / Later pop-up and open
+   "which saves to keep" at once (MainWindow.sync_now), even if Later was said before (_conflicts_snoozed).
+   Today it already asks without a launch, but via that extra pop-up, and stays quiet if snoozed. Guide: add a
+   sentence (EN + JA) to the "saves changed on both devices" point.
+5. Explained to the owner (no change planned): the first device to set a game up uploads silently; the second
+   downloads silently when its save folder is empty and is asked only when it has files of its own (often made by
+   the game on install). Owner's idea "fresh game -> keep the launching device's saves without asking" NOT
+   planned: on the second device the cloud holds the first device's real progress and could be overwritten.
+   Revisit only with a rule that is certain.
+6. Signing / SmartScreen: owner said ignore for now (found: Microsoft Store free for individuals since Sept 2025
+   but MSIX's locked install folder breaks our updater; Azure Artifact Signing is monthly; no one-time option).
+Note: the cloud session first built 2-4 as code (commit 2023288 on branch claude/eloquent-hamilton-pnfbmk, tests
+in test_features.FewerGuesses); the owner then asked for plan only. Use that commit as a reference if useful.
+
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
   direction) instead of one flat colour (owner's idea, 2026-10-15). Assessed 2026-10-16, skipped for now: 33 roles,
