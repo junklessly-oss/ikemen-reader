@@ -454,6 +454,16 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   Owner REJECTED (2026-10-15) a redesign preview: shadow instead of the ring, slice gaps, lavender #BE7FD8,
   borderless slimmer bookmarks, slide/swell animations. Keep lights + bookmarks as they are; don't re-propose.
 
+## Sweep after the search / fade work (2026-10-16)
+- Fixed: i18n key "conflict.later" was defined twice (the Choose Now / Later pop-up showed "Decide Later (Don't
+  Change Anything)"): the pop-up now uses "conflict.ask_later". Unused imports removed (pyflakes clean on the
+  touched modules), dead _settle_grid removed, lazily-created MainWindow state (_names_busy/_names_tried/_view_save)
+  now set up in __init__. Guide's search paragraph rewritten (it had grown into one run-on sentence).
+- Checks: 169 tests; random stress 3,200 actions (0 app errors; the 220-game copy shares save folders between
+  duplicates, so its conflict pop-up is expected); overlap 0 blended frames; all-pairs 840 changes clean.
+- Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
+  into the temp copy, but keep it that way (never point a test at G:).
+
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
   direction) instead of one flat colour (owner's idea, 2026-10-15). Assessed 2026-10-16, skipped for now: 33 roles,

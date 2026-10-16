@@ -152,7 +152,7 @@ S: dict[str, tuple[str, str]] = {
                                  "次のゲームは、端末ごとにセーブが異なります：\n\n{games}\n\n"
                                  "今すぐ、どちらのセーブを残すか選びますか？選ぶまで何も変更されません。"),
     "conflict.choose_now":      ("Choose Now", "今すぐ選ぶ"),
-    "conflict.later":           ("Later", "後で"),
+    "conflict.ask_later":       ("Later", "後で"),
     "menu.sync_now":            ("Sync Now", "今すぐ同期"),
     "play.suggest_title":       ("Save Folder", "セーブフォルダー"),
     "play.suggest_body":        ("{title} has no save folder on This Device yet. It probably saves here:\n\n{path}\n\n{why}\n\n"

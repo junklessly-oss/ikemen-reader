@@ -23,15 +23,15 @@ import zlib
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import (QSizeF, QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
+from PySide6.QtCore import (QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
                             QTimer, Signal)
-from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QDrag, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
+from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRegion,
                            QRadialGradient)
 from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-                               QMessageBox, QProgressBar, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
+                               QProgressBar, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
                                QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QVBoxLayout,
                                QWidget)
 
@@ -49,7 +49,7 @@ from i18n import tr
 import detect
 import launcher
 from launcher import PlayResult, finish_first_play, play, warm_up
-from library import (FOLDER_PLACES, SLOT_NUMBER, SLOTS, SORTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
+from library import (SLOT_NUMBER, SLOTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
                      default_app_dir, load_local_settings, other_slot, save_local_settings,
                      matches_names, matches_search, sort_games, this_computer)
 from sync_engine import Action, ConflictInfo, SyncEngine, save_folder_problem
@@ -4857,6 +4857,10 @@ class MainWindow(TaskOwner, QMainWindow):
         self._cover_wanted: set = set()               # tiles waiting for their covers to load (search arrivals)
         self._cover_loading = False
         self._cover_given_up: set = set()
+        self._names_busy = False                      # fetching other names from VNDB (see _fetch_names)
+        self._names_tried: set = set()                # vndb ids that failed this session (tried again next start)
+        self._view_save = QTimer(self, singleShot=True, interval=VIEW_SAVE_DELAY_MS)   # see _save_view_choice
+        self._view_save.timeout.connect(self._save_view_choice_now)
         self.no_results = 0.0                         # "No Results Found" shown 0..1 (it fades)
         self.bookmark_alpha = 1.0 if settings.show_bookmarks else 0.0   # bookmarks shown 0..1 (they fade)
         self._leaving: list = []                       # [(snapshot, rects, start)]: covers fading out (each change
@@ -5332,9 +5336,9 @@ class MainWindow(TaskOwner, QMainWindow):
         """Search also finds games by the other names VNDB knows them by (English title, romaji, aliases).
         Fetched once per game in the background and kept in its file in the cloud folder, so both devices have
         them and searching never waits for the internet. Only with VNDB switched on in Settings."""
-        if not self.settings.vndb or getattr(self, "_names_busy", False):
+        if not self.settings.vndb or self._names_busy:
             return
-        tried = self.__dict__.setdefault("_names_tried", set())    # (failed this session: try again next start)
+        tried = self._names_tried
         todo = {g.game_id: g.vndb_id for g in self.games.values()
                 if g.vndb_id and g.names_for != g.vndb_id and g.vndb_id not in tried}
         if not todo:
@@ -5445,7 +5449,7 @@ class MainWindow(TaskOwner, QMainWindow):
         games = [self.games[gid] for gid in conflicts]
         listing = "\n".join("• " + g.title for g in games)
         choice = message(self, tr("conflict.waiting_body", games=listing), tr("conflict.waiting_title"),
-                         [("now", tr("conflict.choose_now")), ("later", tr("conflict.later"))], dismiss="later")
+                         [("now", tr("conflict.choose_now")), ("later", tr("conflict.ask_later"))], dismiss="later")
         self._conflicts_snoozed |= set(conflicts)   # asked: not again (Choose Now's own answers included)
         if choice == "now":
             self.sync_now(games)
@@ -5740,11 +5744,6 @@ class MainWindow(TaskOwner, QMainWindow):
         self.search.blockSignals(False)
         self._apply_filter(after_rebuild=self.grid.scrollToTop)
 
-    def _settle_grid(self) -> None:
-        """Everything in the grid at its place at once (a folder opens or closes: the other view starts still)."""
-        self.slides, self.appearing, self._leaving = {}, {}, []
-        self.no_results = 0.0
-
     def close_folder(self) -> None:
         egg = self.findChild(EasterEgg)
         if egg is not None:                         # Esc on the logo's dark screen: back to the library
@@ -5923,13 +5922,10 @@ class MainWindow(TaskOwner, QMainWindow):
         """Remember a view choice (sort, filter, statistics, bookmarks...) and share it for Ikemen Sync - once
         things have settled: writing the files right away competed with the fade it starts (late frames), and
         quick changes in a row are saved once. Closing saves at once (_flush_view_choice)."""
-        if not hasattr(self, "_view_save"):
-            self._view_save = QTimer(self, singleShot=True, interval=VIEW_SAVE_DELAY_MS)
-            self._view_save.timeout.connect(self._save_view_choice_now)
         self._view_save.start()
 
     def _flush_view_choice(self) -> None:
-        if hasattr(self, "_view_save") and self._view_save.isActive():
+        if self._view_save.isActive():
             self._view_save.stop()
             self._save_view_choice_now()
 

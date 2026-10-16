@@ -23,7 +23,6 @@ import shutil
 import ssl
 import subprocess
 import sys
-import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
