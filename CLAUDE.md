@@ -521,6 +521,18 @@ on the PC (the cloud session can't run the real app / Windows tests). Owner test
    Revisit only with a rule that is certain.
 6. Signing / SmartScreen: owner said ignore for now (found: Microsoft Store free for individuals since Sept 2025
    but MSIX's locked install folder breaks our updater; Azure Artifact Signing is monthly; no one-time option).
+7. Fill the other device's save folder by itself (owner, 2026-10-16). Today: Device 1's save folder is stored in the
+   shared game file; Device 2 only fills ITS box when Edit opens or Read is pressed with it empty (suggest_save /
+   _offer_save_folder: translation via detect.from_other_device), and keeps it only after Save / Use This Folder.
+   Plan: when _live_poll / refresh sees the other device set or change a game's save folder and this device's is
+   EMPTY (never overwrite one already set), work out this device's folder in the background and STORE it
+   (library.set_paths) only when the translation is certain: (a) inside the other device's game folder -> same place
+   inside this device's game folder (this device must have the exe set up); (b) under C:\Users\<other>\ -> this
+   profile, AND the folder exists here with save-like files (detect._looks_like_saves). Anything else (same path
+   copied, D:\..., folder missing) stays a suggestion as today. Then the usual check runs: empty here -> silent
+   download; files here -> straight to "which saves to keep" (item 4). Status line note when it fills one in
+   (new i18n key, EN + JA); guide sentence (EN + JA). Tests: certain cases filled, uncertain left empty, a set
+   folder never replaced.
 Note: the cloud session first built 2-4 as code (commit 2023288 on branch claude/eloquent-hamilton-pnfbmk, tests
 in test_features.FewerGuesses); the owner then asked for plan only. Use that commit as a reference if useful.
 
