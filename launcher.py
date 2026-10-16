@@ -48,6 +48,31 @@ def _inside(path: str, folder: Path) -> bool:
     return n == f or n.startswith(f + os.sep)
 
 
+def _parents() -> Optional[dict[int, int]]:
+    """pid -> parent pid for every running program, in ONE call (~10 ms). Asking psutil for each process's
+    parent separately rebuilds that same table every time: ~10 ms per process, 3+ s for a first look at
+    ~300 programs, all of it keeping Python busy (the library's animations stuttered meanwhile)."""
+    try:
+        from psutil import _pswindows
+        table = _pswindows.cext.ppid_map()
+        return table if isinstance(table, dict) else None
+    except Exception:  # noqa: BLE001 - not Windows, or psutil changed: ask per process instead
+        return None
+
+
+def _scan() -> list[dict]:
+    """pid, ppid, exe and create_time of every running program."""
+    parents = _parents()
+    if parents is None:
+        return [p.info for p in psutil.process_iter(["pid", "ppid", "exe", "create_time"])]
+    out = []
+    for p in psutil.process_iter(["pid", "exe", "create_time"]):
+        info = p.info
+        info["ppid"] = parents.get(info.get("pid"))
+        out.append(info)
+    return out
+
+
 def _related_processes(root: Optional[psutil.Process], game_dir: Path,
                        family: Optional[dict[int, float]] = None, since: float = 0.0) -> dict[int, bool]:
     """pid -> "runs from the game folder", for the root process and everything it started (followed
@@ -64,9 +89,7 @@ def _related_processes(root: Optional[psutil.Process], game_dir: Path,
                 family.setdefault(root.pid, root.create_time())
         except psutil.Error:
             pass
-    procs = []
-    for p in psutil.process_iter(["pid", "ppid", "exe", "create_time"]):
-        procs.append(p.info)
+    procs = _scan()
     # children of family members started after the launch (start time guards against reused pids)
     changed = True
     while changed:
@@ -89,18 +112,21 @@ def _related_processes(root: Optional[psutil.Process], game_dir: Path,
 
 _warm_go = threading.Event()
 _warm_go.set()
+_warm_holds: set = set()
 
 
-def hold_warm_up(hold: bool) -> None:
+def hold_warm_up(hold: bool, who: str = "egg") -> None:
     """Pause warm_up (True) while something must animate perfectly smoothly, then let it go on (False).
-    Each of its steps keeps Python busy for up to ~10 ms, which shows as stutter in a full-window animation."""
-    _warm_go.clear() if hold else _warm_go.set()
+    Each of its steps keeps Python busy for a few ms, which shows as stutter in a full-window animation.
+    who: several things may hold it at once (the easter egg, the library's covers); it goes on once none do."""
+    _warm_holds.add(who) if hold else _warm_holds.discard(who)
+    _warm_go.clear() if _warm_holds else _warm_go.set()
 
 
 def warm_up() -> None:
     """The first look at every running program's details takes a few seconds on Windows (psutil
     caches them afterwards). Done in the background when the window opens, so Play reacts at once."""
-    for _ in psutil.process_iter(["pid", "ppid", "exe", "create_time"]):
+    for _ in psutil.process_iter(["exe", "create_time"]):     # (parents: one quick table when needed, _parents)
         time.sleep(0.01)      # a short pause per program, so the window's animations keep running smoothly
         _warm_go.wait(10)     # (held: waits, but never forever)
 

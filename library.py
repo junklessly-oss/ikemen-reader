@@ -631,24 +631,67 @@ def sort_games(games: list[Game], how: str) -> list[Game]:
     return sorted(games, key=lambda g: (-g.last_played, title_sort_key(g.title)))
 
 
+_PUNCT = re.compile(r"[\s\-‐―–—~・:!?\"「」『』【】()\[\].,、。☆★♪†×/&+]")
+
+
+def _fold(text: str) -> str:
+    """Width, case and katakana/hiragana don't matter; apostrophes vanish (Bunny's = bunnys)."""
+    s = unicodedata.normalize("NFKC", text).casefold().replace("'", "").replace("’", "")
+    return "".join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in s)
+
+
+def _is_kanji(c: str) -> bool:
+    o = ord(c)
+    return 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF or c == "々"
+
+
+def _is_kana(c: str) -> bool:
+    return 0x3040 <= ord(c) <= 0x30FF
+
+
 @functools.lru_cache(maxsize=16384)
 def search_key(text: str) -> str:
-    """For searching: width, case, katakana/hiragana, spaces and punctuation don't matter
-    ("sakura no toki" finds "Sakura no Toki", "さくら" finds "サクラ")."""
-    s = unicodedata.normalize("NFKC", text).casefold()
-    s = "".join(chr(ord(c) - 0x60) if 0x30A1 <= ord(c) <= 0x30F6 else c for c in s)
-    return re.sub(r"[\s\-‐―–—~・:!?'\"「」『』【】()\[\].,、。☆★♪†×]", "", s)
+    """Folded, without spaces or punctuation ("サクラノ詩 -櫻の森の上を舞う-" -> "さくらの詩櫻の森の上を舞う")."""
+    return _PUNCT.sub("", _fold(text))
+
+
+@functools.lru_cache(maxsize=16384)
+def _words(text: str) -> tuple[str, ...]:
+    """The Latin / number words of a name, in order ("Sakura no Toki" -> sakura, no, toki;
+    "11月のアルカディア" -> 11). Japanese characters only separate them."""
+    return tuple(re.findall(r"[0-9a-zÀ-ɏ]+", _fold(text)))      # (Latin letters incl. accented)
 
 
 def matches_search(game: "Game", query: str) -> bool:
-    """Does the search box's text find this game: its title, or any name VNDB knows it by?"""
-    q = query.strip().casefold()
-    if not q or q in game.title.casefold():
+    """Does the search box's text find this game (its title, or any name VNDB knows it by)? Typing has to
+    follow a name, not just contain the letters:
+    - with kanji: the name contains it, anywhere ("刻" finds サクラノ刻);
+    - kana: the name starts with it ("まま" finds ままごと and ママトモ);
+    - Latin letters / numbers: the start of a word ("ind" finds Indigo, "toki" and "sakura no" find
+      Sakura no Toki, "sakuranotoki" too); a single letter finds only words that start with it."""
+    key = search_key(query)
+    if not key:
         return True
-    k = search_key(q)
-    return bool(k) and any(k in search_key(n) for n in (game.title, *game.names))
+    names = (game.title, *game.names)
+    if any(_is_kanji(c) for c in key):
+        return any(key in search_key(n) for n in names)
+    if any(_is_kana(c) for c in key):
+        return any(search_key(n).startswith(key) for n in names)
+    qw = _words(query)
+    if not qw:
+        return False
+    for n in names:
+        words = _words(n)
+        for i in range(len(words)):
+            if len(qw) == 1:
+                if "".join(words[i:]).startswith(qw[0]):
+                    return True
+            elif words[i:i + len(qw) - 1] == qw[:-1] and i + len(qw) - 1 < len(words)                     and words[i + len(qw) - 1].startswith(qw[-1]):
+                return True
+    return False
 
 
+@functools.lru_cache(maxsize=16384)       # (asked for every game on every keystroke in the search box)
 def title_sort_key(title: str) -> tuple:
     """Japanese-aware ordering: Latin titles first (A-Z), then kana in あいうえお order (katakana
     sorted together with hiragana), then kanji. Not a full reading-based sort (kanji readings

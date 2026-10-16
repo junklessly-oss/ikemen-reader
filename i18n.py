@@ -45,6 +45,7 @@ S: dict[str, tuple[str, str]] = {
     "status.dropped":           ("Dropped", "中断"),
 
     # ------------------------------------------------------------------ grid / bottom bar
+    "grid.no_results":          ("No Results Found", "見つかりませんでした"),
     "grid.empty":               ("No games yet. Drag a game's .exe here, or click \"Add Game\".",
                                  "ゲームがまだありません。ゲームの .exe をここにドラッグするか、「ゲームを追加」をクリックしてください。"),
     "grid.no_cloud":            ("The cloud folder can't be found:\n{path}\n\nIs your cloud service's app running? "

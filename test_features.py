@@ -1353,6 +1353,20 @@ class SearchByOtherNames(unittest.TestCase):
             self.assertTrue(matches_search(g, q), q)
         for q in ("sakura", "サクラ", "xyz"):
             self.assertFalse(matches_search(g, q), q)
+        # typing has to follow a name: word starts (Latin), the start (kana), anywhere (kanji)
+        self.assertFalse(matches_search(g, "oratoto"))                       # not a word start
+        self.assertFalse(matches_search(g, "q"))                             # no word starts with q
+        self.assertTrue(matches_search(g, "t"))                              # The / to
+        self.assertTrue(matches_search(g, "s"))                              # Stray
+        self.assertTrue(matches_search(g, "heart"))
+        self.assertTrue(matches_search(g, "皇女"))                           # kanji: anywhere
+        self.assertFalse(matches_search(g, "とおうじょ"))                     # kana: only from the start
+        bunny = Game("b", "Bunny's ママ代行サービス")
+        self.assertFalse(matches_search(bunny, "まま"))
+        self.assertTrue(matches_search(bunny, "bunnys"))
+        self.assertTrue(matches_search(bunny, "bunny's まま"))
+        self.assertTrue(matches_search(Game("k", "霞外籠逗留記"), "記"))
+        self.assertTrue(matches_search(Game("a", "11月のアルカディア"), "11"))
         self.assertTrue(matches_search(Game("s", "サクラノ刻"), "さくらの"))      # katakana = hiragana
         self.assertTrue(matches_search(Game("s", "Sakura no Toki"), "sakuranotoki"))
 
@@ -2059,27 +2073,62 @@ class SmoothAnimations(unittest.TestCase):
         from PySide6.QtWidgets import QApplication
         with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
             app, w, _ = self._window(tmp, n=12)
+
+            def settle():
+                end = _t.monotonic() + app.APPEAR_S + app.APPEAR_STAGGER_MAX + 0.5
+                while _t.monotonic() < end:
+                    QApplication.processEvents()
+                    _t.sleep(0.01)
             try:
                 w.search.setText("alpha")                         # 4 of 12 stay
                 self.assertEqual(w.grid.count(), 4)
                 self.assertIsNotNone(w._leaving)                  # the other visible ones fade out
                 self.assertTrue(w._leaving[1])
-                self.assertEqual(w.appearing, set())
+                self.assertEqual(w.appearing, {})
                 self.assertTrue(w.anim.isActive())
                 lf = w.leaving_frame()
-                self.assertTrue(0 < lf[2] <= 1)
-                w.search.setText("")                              # back: the 8 others fade in
+                self.assertTrue(0 < lf[2] <= 1 and app.LEAVE_SHRINK <= 1 - lf[3] + app.LEAVE_SHRINK)
+                w.search.setText("")                              # back: the 8 others arrive, one after another
                 self.assertEqual(w.grid.count(), 12)
                 self.assertEqual(len(w.appearing), 8)
-                some = next(iter(w.appearing))
-                self.assertGreater(w.appear_fade(some), 0.5)
-                end = _t.monotonic() + app.SLIDE_S + 0.3
-                while _t.monotonic() < end:
-                    QApplication.processEvents()
-                    _t.sleep(0.01)
-                self.assertEqual(w.appear_fade(some), 0.0)        # fully there
-                self.assertEqual(w.slides, {})
+                delays = sorted(w.appearing.values())
+                self.assertEqual(delays[0], 0.0)
+                self.assertTrue(0 < delays[-1] <= app.APPEAR_STAGGER_MAX + 1e-9)
+                first = min(w.appearing, key=w.appearing.get)
+                self.assertGreater(w.appear_fade(first), 0.5)
+                settle()
+                self.assertEqual(w.appear_fade(first), 0.0)       # fully there
+                self.assertEqual((w.slides, w.springs, w.appearing), ({}, {}, {}))
                 self.assertIsNone(w.leaving_frame())
+                # nothing matches: "No Results Found" fades in, and out again when something does
+                w.search.setText("zzz")
+                self.assertTrue(w.showing_no_results())
+                settle()
+                self.assertEqual(w.no_results, 1.0)
+                w.search.setText("alp")
+                settle()
+                self.assertEqual(w.no_results, 0.0)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_search_springs_keep_their_speed(self):
+        """A keystroke while covers are still gliding redirects them without a jolt: same place, same speed."""
+        with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w, _ = self._window(tmp, n=12)
+            try:
+                w.search.setText("alpha")
+                w._step_springs(w._spring_last + 0.05)             # mid-glide
+                moving = {k: list(v) for k, v in w.springs.items() if abs(v[2]) + abs(v[3]) > 1}
+                self.assertTrue(moving)
+                drawn = {k: w.slide_offset(k) + w.grid.visualItemRect(w.grid.item(i)).topLeft()
+                         for i in range(w.grid.count()) for k in [w.grid.item(i).data(app.GAME_ID_ROLE)] if k in moving}
+                w.search.setText("alph")                          # same results, new keystroke
+                for k, v in moving.items():
+                    i = next(i for i in range(w.grid.count()) if w.grid.item(i).data(app.GAME_ID_ROLE) == k)
+                    now = w.slide_offset(k) + w.grid.visualItemRect(w.grid.item(i)).topLeft()
+                    self.assertLessEqual((now - drawn[k]).manhattanLength(), 2)      # no jump ...
+                    self.assertEqual(w.springs[k][2:], v[2:])                         # ... and no stop
             finally:
                 w.close()
                 app.wait_for_tasks(5)

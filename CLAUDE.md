@@ -406,8 +406,24 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   via the updater don't trigger it (no Mark of the Web); manual install: zip Properties -> Unblock.
 - Grid evenness checked at 100/125/150/175/200 % scaling (red-cover pixel probe): gaps between covers identical,
   outer edges +1 screen px (leftover of whole-pixel covers), rows top/between/bottom within 1 screen px. No change.
-- Search reveal: covers let back in (backspacing) fade + grow in over APPEAR_S 0.36 s (smoothstep, from
-  1 - APPEAR_GROW 0.1); it was SLIDE_S 0.22 with (1-t)^2 = half done in 60 ms, looked like no animation.
+- Search pass 2 (2026-10-15, owner: "abuse the search"): bench = scratch searchbench.py (owner's library copy +
+  look, keystrokes from a precise timer, every grid paint timed), filmstrips, random fuzz (3,900 actions, 0 errors).
+  * Main cause of search stutter: launcher.warm_up / _related_processes asked psutil for each process's ppid =
+    psutil rebuilds the whole ppid table per process (~10 ms GIL each, 3.5 s for ~340 programs). Now _parents() =
+    ONE psutil._pswindows.cext.ppid_map() call (fallback: per process) via _scan(); warm_up no longer asks ppid.
+    First scan 5.3 -> 2.4 s. hold_warm_up(hold, who) = set of holders (egg + "grid": slides/springs/drags).
+  * Late frames (>20 ms) per run: ~100 -> ~25 (rest = idle light-pulse paints); on 1 core at 150 %: 149 -> 31.
+  * title_sort_key lru_cached (34k calls per run at 220 games). Main anim QTimer now PreciseTimer.
+  * Search glides = critically damped springs (MainWindow.springs [x,y,vx,vy], SPRING_W 11, exact per-frame step
+    _step_springs): a new keystroke keeps each cover's speed (no jolt). Drop slides keep the old tween (SLIDE_S).
+    Arrivals: appearing {id: delay}, APPEAR_S 0.45, ease-out (1-t)^3, grow from 1-APPEAR_GROW 0.14, rise
+    APPEAR_RISE 10 px, staggered APPEAR_STAGGER 35 ms (max 0.2 s), drawn with opacity (no backdrop redraw).
+    Leaving: LEAVE_S 0.26 fade + shrink LEAVE_SHRINK. _settle_grid() on folder open/close.
+  * "No Results Found" / 見つかりませんでした (grid.no_results): drawn faint in LibraryGrid.paintEvent, fades
+    (no_results 0..1, NO_RESULTS_S) when searching/filtering and nothing matches.
+  * Matching (owner's rules): kanji in query -> substring anywhere; kana -> title starts with it; Latin/numbers ->
+    start of a word (_words: Latin/number runs; one query word may run on across words: "sakuranotoki"; several
+    must align). Over title + VNDB names. Fold: NFKC, casefold, katakana->hiragana, apostrophes dropped.
 - Search by other names: Game.names / names_for (VNDB title, alttitle, every titles[].title/latin, aliases; max 40)
   fetched by MainWindow._fetch_names after refresh (only with Settings VNDB on; one batched vndb.names() request;
   written into the cloud game file so both devices have them; failures retried next start). library.matches_search
