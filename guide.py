@@ -43,14 +43,19 @@ GUIDE = {
             "- Pressing Read on a game with no save folder does the same check first and asks whether to use what "
             "it found, so the other device's saves come across before the game starts.",
             "- If nothing is found, you can leave the save folder empty. The first time you play, Ikemen Reader "
-            "looks for where the game saves and asks you to confirm it. Just save at least once during that first "
-            "session. If the game also keeps data in the registry under its own name, that's included "
+            "looks for where the game saves and asks you to confirm it. A folder is only ticked for you when it's "
+            "clearly the game's; otherwise you pick one. Just save at least once during that first session. If the game also keeps data in the registry under its own name, that's included "
             "automatically; a registry key that might belong to it is offered separately, unticked.",
             "- If you've already played it on the other device, make sure the save folder is set before you first "
             "read it on this device. Then the other device's saves are put in place before the game starts, and "
             "you carry on where you left off. If it's left empty, Ikemen Reader doesn't yet know where to put them, "
             "so that first session starts without your progress. Afterwards you're asked which saves to keep: "
             "choose the other device's to get your progress back (the saves from that first session are backed up).",
+            "- When the other device sets a game's save folder and this device's is still empty, Ikemen Reader fills it "
+            "in by itself, but only when the place is certain (inside the game folder, or the same folder in your user "
+            "folder that already holds saves). Otherwise it stays a suggestion for you to check.",
+            "- Browse opens where its box points. With the box empty, the save folder's Browse opens the game's folder; "
+            "the others open This PC.",
             "- Launch With Luna and Launch With Locale Emulator start the game through those programs (set their "
             "locations in Settings first).",
         ]),
@@ -61,7 +66,7 @@ GUIDE = {
             "- You can browse other games while reading: selecting one shows its details at the bottom. Click an "
             "empty space (or the game you're reading) to bring back Now Reading and Stop.",
             "- Before the game starts, any newer saves from the other device are downloaded. When the game "
-            "closes, your saves are uploaded and your playtime is updated.",
+            "closes, your saves are uploaded and your time read is updated.",
             "- You don't need to start a game for its saves to sync. While Ikemen Reader is open, newer saves from "
             "the other device are downloaded a few seconds after they arrive, and saves made on this device "
             "without Ikemen Reader are uploaded. A game that's open outside Ikemen Reader is left alone until "
@@ -74,7 +79,8 @@ GUIDE = {
             "- If the saves changed on both devices since they last synced (for example, you read on both without "
             "syncing in between), you'll be asked which ones to keep. Ikemen Reader asks as soon as it notices "
             "(choose now, or Later), and again when you press Read; the game starts once you've chosen. "
-            "Whatever gets replaced is backed up first.",
+            "When you set a game's save folder yourself and its saves differ from the cloud copy, you're asked "
+            "straight away. Whatever gets replaced is backed up first.",
             "- This can also happen with a game set up on only one device (for example after moving or restoring its "
             "save files by hand). Then it's this device's saves against the copy it uploaded to the cloud earlier, "
             "and the messages say so.",
@@ -124,8 +130,13 @@ GUIDE = {
             "Library and follows the library's sort until you pick something else for it. Dragging a game to a new spot "
             "inside the folder gives the folder its own My Arrangement. A folder's own order and sort are shared "
             "with the other device.",
-            "- Hide Statistics (next to the menus at the top) hides playtime and last-played dates on the covers "
+            "- Covers show how long you've read a game and when you last read it (Today, 3 Days Ago, ...) when you "
+            "point at them; the bottom bar shows the same for the selected game or folder. Point at the time to see it "
+            "for each device, or at the day to see the date.",
+            "- Hide Statistics (next to the menus at the top) hides time read and last read on the covers "
             "and in the bottom bar. Press Show Statistics to bring them back; your choice is remembered.",
+            "- Click a game's or folder's name in the bottom bar to rename it: Enter saves, Esc cancels. A name "
+            "you type is kept (the window title won't replace it).",
             "- Set a game's reading status (Reading, Finished, Plan to Read, Dropped) in the bottom bar or by "
             "right-clicking it.",
             "- A game with a reading status gets a little bookmark in that status's colour in the top-right corner "
@@ -190,11 +201,14 @@ GUIDE = {
             "- 「この端末」には、今使っているパソコンでの .exe とセーブフォルダーを入力します。「もう一方の端末」は灰色で表示され、もう一方のパソコンで入力します。",
             "- セーブフォルダーは、提案として自動で入力されることがあります（もう一方の端末と同じ場所をこのパソコン用に置き換えたもの、またはゲームがすでに作ったセーブフォルダー）。フォルダーは、明らかにそのゲームのもの（ゲーム名そのものの名前で、セーブファイルが入っている）ときだけ提案されます。少しでも確かでない場合は、空欄のままになります。確認してから保存してください。",
             "- セーブフォルダーが未設定のゲームで「読む」を押したときも、先に同じ確認をして、見つかった場所を使うか尋ねます。これで、起動前にもう一方の端末のセーブを取り込めます。",
-            "- 何も見つからない場合は、セーブフォルダーは空欄のままでも大丈夫です。初めてプレイしたときに、セーブの場所を自動で探して確認を求めます。最初のプレイ中に、一度はセーブしてください。"
+            "- 何も見つからない場合は、セーブフォルダーは空欄のままでも大丈夫です。初めてプレイしたときに、セーブの場所を自動で探して確認を求めます。このゲームのものだとはっきり分かるフォルダーだけがあらかじめ選ばれ、それ以外はご自身で選びます。最初のプレイ中に、一度はセーブしてください。"
             "ゲームがレジストリにも自分の名前でデータを保存している場合は、それも自動で含まれます。そのゲームのものかもしれないレジストリキーは、チェックが外れた状態で別に表示されます。",
             "- もう一方の端末ですでにプレイしているゲームは、ここで初めて読む前に、この端末のセーブフォルダーが設定されていることを確認してください。そうすれば、起動前にもう一方の端末のセーブが配置され、続きから遊べます。"
             "空欄のままにすると、セーブをどこに置けばよいか分からないため、最初のプレイは進行状況なしで始まります。そのあと、どちらのセーブを残すか尋ねられたら、"
             "もう一方の端末のセーブを選ぶと進行状況が戻ります（最初のプレイのセーブはバックアップされます）。",
+            "- もう一方の端末でセーブフォルダーが設定され、この端末ではまだ空欄の場合、場所が確実なとき（ゲームフォルダーの中、"
+            "またはユーザーフォルダー内の同じ場所にすでにセーブがあるとき）に限り、自動で入力されます。それ以外は提案として表示されるので、確認してください。",
+            "- 「参照」は、入力欄に書かれた場所から開きます。空欄の場合、セーブフォルダーの「参照」はゲームのフォルダーを、それ以外は「PC」を開きます。",
             "- 「Lunaで起動」「Locale Emulatorで起動」を使うと、それぞれのプログラムを通してゲームを起動します（先に設定で場所を指定してください）。",
         ]),
         ("プレイ", [
@@ -202,13 +216,13 @@ GUIDE = {
             "- ゲームの実行中、「読む」ボタンは「終了」になります。押すと、ゲームの×ボタンと同じようにゲームを閉じます（ゲーム側で確認が表示される場合があります）。"
             "閉じない場合は、強制終了を選べます。",
             "- 読んでいる間も、ほかのゲームを選ぶと下部にその情報が表示されます。空いている場所（または読んでいるゲーム）をクリックすると、「読書中」と「終了」ボタンに戻ります。",
-            "- 起動前に、もう一方の端末の新しいセーブがあればダウンロードします。ゲームを終了すると、セーブをアップロードしてプレイ時間を記録します。",
+            "- 起動前に、もう一方の端末の新しいセーブがあればダウンロードします。ゲームを終了すると、セーブをアップロードして読書時間を記録します。",
             "- セーブを同期するためにゲームを起動する必要はありません。イケメンリーダーを開いている間は、もう一方の端末の新しいセーブが届いてから数秒でダウンロードされ、"
             "イケメンリーダーを使わずにこの端末で作ったセーブはアップロードされます。イケメンリーダー以外から開いているゲームは、ダウンロードした内容を上書きされないよう、閉じるまでそのままにします。",
             "- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
             "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"
             "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。）",
-            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。",
+            "- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。セーブフォルダーをご自身で設定し、クラウドのセーブと違っていた場合は、その場ですぐに尋ねます。",
             "- 1台の端末でしか設定していないゲームでも起こることがあります（例：セーブファイルを手動で移動・復元したとき）。その場合は、この端末のセーブと、以前この端末からクラウドにアップロードしたコピーとの比較になり、メッセージにもそう表示されます。"
             "置き換えられる方は先にバックアップされます。",
             "- ゲームを右クリックして「今すぐ同期」を選ぶと、すぐに同期できます。",
@@ -236,7 +250,9 @@ GUIDE = {
             "- 「自分の並び」のときにフォルダーの配置を選ぶと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先頭に」「末尾に」はまとめて、「混ぜる」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではライブラリの並び順に合わせます。"
             "フォルダーの中でゲームをドラッグして動かすと、そのフォルダー専用の「自分の並び」になります。フォルダーの並び順はもう一方の端末とも共有されます。",
-            "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーのプレイ時間と最終プレイ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",
+            "- カバーにマウスを合わせると、読書時間と最後に読んだ日（今日、3日前など）が表示されます。下部のバーには、選択中のゲームやフォルダーの同じ情報が表示されます。読書時間にマウスを合わせると端末ごとの時間が、日付の部分に合わせると正確な日付が表示されます。",
+            "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーの読書時間と最後に読んだ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",
+            "- 下部のバーでゲームやフォルダーの名前をクリックすると、その場で名前を変更できます。Enterで保存、Escで取り消します。入力した名前はそのまま保持されます（ゲーム画面のタイトルで置き換わりません）。",
             "- プレイ状況（プレイ中・読了・積みゲー・中断）は、下部のバーか右クリックで設定します。",
             "- プレイ状況を設定したゲームには、カバーの右上にその状況の色のしおりが付きます（フォルダーの中やフォルダーのカバーにも表示されます）。"
             "ゴミ箱の隣にあるしおりのボタンで表示・非表示を切り替えられます。この設定は次回以降も保持されます。色はカスタムテーマで変更できます。",

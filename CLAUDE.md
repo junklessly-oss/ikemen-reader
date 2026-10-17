@@ -37,8 +37,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 71 tests, all pass on the PC
-  (Python 3.14, `py -m unittest`). (Now 94 tests.) Process/window/registry tests run for real on Windows.
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 203 tests (2026-10-17), all pass on
+  the PC (Python 3.14, `py -m unittest`; ~3 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
   run it is copied from the old `%APPDATA%\VNLauncher` (old folder left as a safety copy).
@@ -108,7 +108,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Top bar: logo, search, sort (recent / hours / title, kana-aware), status filter, Hide/Show Statistics, then the
   status: only "Synced" / "Syncing" / "Error" (JA 同期済み / 同期中 / エラー; owner wants it this simple; Error =
   conflict, red, tooltip explains, click cycles conflicts), + Add game, Settings.
-- Bottom bar: Read (was Play; JA 読む, 14pt; "Now Reading"/読書中 while running; i18n bar.play), title, total playtime only, "Last played: <date>" (no device), long status line,
+- Bottom bar: Read (was Play; JA 読む, 17.5pt since 2026-10-17; "Now Reading"/読書中 while running; i18n bar.play), title + sync line, stats block (see Statistics restyle),
   reading status (Reading / Finished / Plan to read / Dropped), Open save folder, Edit, trash button
   (TrashButton, assets/Trash.png recoloured like the star; click = remove selected game, or drop a game
   on it; bare icon, no button box; hover = rise + grow 1.08 + one 0.5 s wiggle; game held over it = grow
@@ -319,7 +319,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    on = steady rocking (TrashButton motions). In the guide. DONE: bookmark = cached pixmap (_bookmark_pixmap; drawing the
    shape per frame tanked the 60 fps light redraws), flat fill + chunky border (~1/7 of its width, colour role
    mark_border, default #1C1C1C), rounded outer tips, SHARP notch point, width 12.5% of the grid cover width.
-   BookmarkButton has 13 px extra spacing before it so it sits centred. Status changes (_set_status) repaint
+   Edit | bookmark | trash are a sub-layout (2026-10-17): the bookmark ICON sits exactly midway with 36 px clear
+   space each side (measured in pixels; spacing 18 / 2 between the boxes), the trash can unmoved. Status changes (_set_status) repaint
    at once and record the signature (_own_change) so the live poll doesn't reload.
 5. Detection: save-folder suggestion must match the WHOLE title / full exe name / game folder name (not one
    word: "black" matched Documents\BLACKcyc\SaDisticBlooD_savefiles for Black Sheep Town), folder must hold
@@ -488,6 +489,203 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   includes 々〆〇 (素晴らしき日々 ends in 々).
 - Test libraries are copies of the real games: their PC save folders are REAL. Syncing in a temp cloud only uploads
   into the temp copy, but keep it that way (never point a test at G:).
+
+## Fewer guesses (2026-10-16; planned on the laptop, built on the PC; owner: "no guesses unless almost entirely certain")
+- Girls Book Maker got Documents\Books from the loose after-play detection (owner confirmed). Already corrected by
+  hand in the library.
+- After-play detection (detect.find_folders) uses the whole-name rule (_same_game) like suggestions: one shared word
+  ("Book" in "Books") no longer counts as "named after the game". Candidate.sure for folders = a save-named folder
+  inside the game folder, or one named after the whole game with save-like files. DetectDialog ticks a folder only
+  when exactly one is sure; otherwise nothing is ticked and "Use This" stays greyed until the owner picks.
+- Browse (owner's rule): a filled-in box opens there (a file preselected; a path that doesn't exist yet -> nearest
+  existing parent). Empty box: SAVE-FOLDER pickers (GameDialog._pick_save, DetectDialog "Somewhere Else") open the
+  game's folder (owner's original request); every other picker opens THIS PC (app.THIS_PC clsid: URL, verified on
+  the PC: Windows' dialog opens on This PC). All pickers go through app.pick_folder / pick_file / pick_files
+  (browse_start(path, fallback)).
+- Save folder set by hand (Edit with a changed save folder / registry key, a new game, "Set Up on This Device",
+  or filled in automatically): MainWindow._ask_now -> if the next check finds a mismatch (both sides have DIFFERENT
+  saves; an empty side = silent sync as before), _offer_conflicts skips Choose Now / Later and goes straight to
+  "which saves to keep" (sync_now), even if Later was said before.
+- Other device's save folder fills in this one (owner wanted it in real time): MainWindow._fill_save_folders runs
+  after every refresh (start, live change from the other device within one 4 s poll, own edits) -> app.certain_saves
+  (background) -> detect.certain_from_other_device: (a) inside the other device's game folder -> same place in this
+  game folder (exe must be set here; folder needn't exist); (b) under C:\Users\<other>\ -> this profile, only if the
+  folder exists here with save-like files. Never replaces a set folder, never a folder another game here uses, never
+  the game being read. Status line status.save_filled; then the usual check (empty here -> silent download).
+- Settings window opens no taller than the main window (SettingsDialog._height_cap via FitsScreen); the rest scrolls.
+- Guide (EN + JA): detection ticking, "asked straight away", automatic fill-in, Browse.
+- Not done (explained to the owner): "fresh game -> keep the launching device's saves without asking" (could
+  overwrite real progress on the second device). Signing / SmartScreen: owner said ignore for now (Microsoft Store
+  free for individuals since Sept 2025 but MSIX breaks our updater; Azure Artifact Signing is monthly).
+- Tests: test_features.FewerGuesses (9).
+
+## Statistics restyle (2026-10-17, owner picked from mockups)
+- Wording follows the Read button: Time Read / Last Read (JA 読書時間 / 最後に読んだ日), never played = Not Started
+  (未読). Sort names (Most Played / Recently Played) unchanged (owner's earlier final decision).
+- Bottom bar (owner's FINAL pick of four mocked-up layouts, 2026-10-17, after a centred TIME READ / LAST READ block
+  with dividers was tried and dropped: hard to space well): StatsLine on the sync line, right after the sync status
+  (LEAD 16 px): "[clock] 12h 05m   [calendar] 3 Days Ago", same look as the cover hover (numbers bright, units
+  small muted, icons in the text colour, level with the sync text). Groups that don't fit the width are left off
+  the end (date first); d_sync keeps its full width (policy Maximum). Tooltips: time -> per device (This Device /
+  Other Device), date -> full date. Folders: total time + latest read. Bar title = ElidedLabel ("..." + tooltip).
+- Cover hover (owner's pick): one level line "[clock] 12h 05m   [calendar] 3 Days Ago", icons + date in the number
+  style (white, medium), units smaller/softer; icons centred on the digits (digit_middle). Reading status left out
+  (the bookmark shows it); with Hide Statistics the status text shows as before. Narrow covers drop the date first.
+  Folder hover: "4 Games  [clock] 31h 20m". Runs drawn by draw_runs / runs_width; icons stat_icon (cached).
+- Relative dates: Today, Yesterday, N Days Ago (2-13), N Weeks Ago (14-31 days), then "Sep 12" this year, full
+  date before; future times (other device's clock) = Today. Capitalised like the rest of the UI.
+- Motion (owner chose 1+2+4+5 of the offered ideas; NOT a count-up on every selection): bar values change
+  with the bar's one cross-fade (see "The bottom bar's ONE cross-fade") when another game/folder is shown; after a reading
+  session Time Read counts up from the old total (COUNT_S 0.8, ease-out; MainWindow._count_up set in
+  _play_finished) while the clock's long hand sweeps once (stat_icon sweep, not cached). Cover hover stagger (stats
+  line 60 ms after the title) was tried and REMOVED by the owner: the line fades with the title. Title on hover sits
+  STAT_TITLE_LIFT 3 px higher above a stats line (not with stats hidden). Bar title = ElidedLabel ("..." + tooltip).
+- The refresh after a session briefly hides the line: _count_up waits up to 3 s for its game.
+- Tests: test_features.Statistics (5).
+
+## Rename from the bottom bar (2026-10-17, owner's request)
+- Click the game / folder name in the bottom bar (ElidedLabel.clicked, I-beam cursor when renameable) -> d_title_edit,
+  a normal text box (owner rejected an underline; padding 2/1 px, none at the sides: 5 px overlapped the stats line) that FLOATS over the
+  name (child of the bar, not in the layout: the bar keeps its height, the text stays exactly where the name was;
+  the label is blanked meanwhile). Its width follows what's typed (_place_title_edit), never past the drop-down.
+  Enter, focus loss or a click ANYWHERE else (ClickAway app filter, also on empty background) saves: game ->
+  library.update(title, title_locked=True, manual_title) like a title typed in Edit; folder -> rename_folder.
+  Esc cancels; empty / unchanged = nothing; taken title -> report_failure. The window's Enter / Backspace / Esc
+  shortcuts are held off while typing (eventFilter ShortcutOverride). Guide (EN + JA). Tests: RenameFromBar.
+  Gotchas fixed: ClickAway must ignore the press passing through the window object first (it closed + reopened the
+  box on every click inside it, re-selecting all); the label spans the whole bar, so the text cursor and the click
+  only count over the name itself (ElidedLabel._over_text).
+  Enter used to save AND start the game (the key went on after the box closed): the filter now consumes it, and
+  focus goes back to the grid (not the Read button). The box is offset so its text sits exactly on the name
+  (measured pixel-identical, EN + JA): pad_x 11 (Qt adds 2 px inside), box bottom = name bottom + 4.
+- Owner's spacing fix for the box (three rounds): name and stats line 9 px apart (info spacing, was 2); box padding
+  2 above / 1 below (box bottom = name bottom + 3, text still pixel-identical); the name + stats block raised 2 px
+  (bar top margin 23, info bottom margin 3: everything else unmoved) so it's centred on the dark band (bar + status line);
+  rename box: no side padding (3 px beside the text = the space above / below); title text is flush with the sync light.
+  Start-up height (_fit_start_height) is 1 px short of the full gap below row 2: exactly flush let the third row's
+  top edge show as a 1 px line on the owner's screen. Read button
+  scaled with it and its text a little more than the scale (17.5pt, padding 6px 32px, radius 10: 36 -> 43 px
+  visible; margin 4/3/2/3 so it's exactly centred on the dark band, 31 px above and below); bar 81 px. Edges (measured in pixels): Read button 25 px from the left, trash ICON 25 px from the right
+  (bar right margin 12: the trash box has room round the icon for its wiggle). JA folder count: {n}ゲーム (was {n}本).
+
+## Status line fades (2026-10-17, owner's idea)
+- FadingStatusBar (MainWindow.setStatusBar): bottom status messages fade in (0.2 s), fade out when cleared or timed
+  out (0.3 s); a new message replaces an old one out-then-in (old out in 0.15 s), never both. Drawn by us (text
+  position measured identical to Qt's own); showMessage / currentMessage unchanged. Tests: FadingStatus.
+
+## Empty library message (2026-10-17, owner's request)
+- No games yet: "No Games Yet" / ゲームがまだありません (owner's wording; was a long drag-or-click sentence) drawn on the
+  grid exactly like "No Results Found" (same size, faint colour, fade + rise; MainWindow.no_results_key remembers
+  which message so it doesn't change words while fading out). Adding the first game: it fades out, then the cover
+  fades in (refresh -> _slide_from({}, appear=True)). The self.empty label is now only for a missing cloud folder.
+  The fade step is capped at two frames (the window's slow first frame jumped it to the end).
+
+## Smoother Read button / lights / status time (2026-10-17, owner)
+- PulseButton is drawn by us now (not the style): colour eases (greyed / ready / hover, COLOUR_RATE); label + size
+  change at once under the bar's one cross-fade (the per-label fade + width glide were removed). Same size and place as before (margins 3/4/3/2, radius 10, measured).
+- The button said "Now Reading" during the save sync just before / after a session: now just Read (see "Session look").
+- Lights cross-fade on a PULSE change too (starting = blue busy -> playing = blue calm jumped mid-breath):
+  CardDelegate._light_fx keys on (colour, pulse).
+- Status line: a playtime in a message (status.played_for, now "Read for {time}" / 読書時間：{time}) has bright
+  numbers and small units (FadingStatusBar._runs). 
+- The words beside the bar's sync light (d_sync = SyncStatus, was a rich-text QLabel): change at once under
+  the bar's one cross-fade (its own out / resize / in + dot easing were removed). Tests: SmoothReadButton.
+- Drop-down arrows point the way the list will open (ThemedCombo._opens_up: no room for the list below on the screen
+  -> property opens_up -> ICONS["chevron_up"] via the style sheet), updated when the window moves / resizes, and
+  corrected to the real way on opening. Mostly the bottom bar's status drop-down with the window low on screen.
+
+## Changing window titles (2026-10-17, owner)
+- Window title -> game title: titles are counted while the game runs (votes per look). titles.session_title: one
+  title held >= 80 % of the session -> it; titles that kept changing (chapter / scene in the title) -> the longest
+  piece all lasting ones share (split at " - ", |, ：, brackets...; a title shown < 5 % e.g. "Goodbye!" ignored),
+  nothing shared -> no rename. launcher: a session title that differs from the last one (Game.auto_title) keeps
+  only what both share (shared_part); nothing shared = a real new name, taken. Locked titles never change.
+  Tests: ChangingWindowTitles.
+
+## Smooth hover popups + Read button centre (2026-10-17, owner)
+- All hover popups are ours (install_smooth_tips in main: TipTiming proxy style = wake-up 350 ms, TipManager app
+  filter -> SmoothTip): fade in 0.12 s / out 0.1 s, follow the mouse at 60 fps (eased) while it stays on the thing,
+  vanish when it leaves; placed below-right of the pointer, above it when there's no room below, kept inside the
+  window. A widget can narrow its spot with tip_at(pos) -> (text, zone): StatsLine (exactly the time / day),
+  SyncStatus (light + words), ElidedLabel (the shortened name only - the label spans the bar). Nothing else uses
+  QToolTip any more.
+- Read button grows / shrinks on BOTH sides around a fixed centre (see "The bottom bar's ONE cross-fade": fixed slot;
+  PulseButton.on_width re-measures the bar margin on label / font changes) (measured: +-1 px for every label, EN + JA; Read itself still
+  25 px from the edge). Tests: SmoothHoverPopups.
+
+## Session look: Syncing mirrors the real sync (2026-10-17, owner's rule)
+- The BUTTON only ever says Read or Stop (owner, final: a Syncing label / greyed moment was a blink of noise):
+  Stop while the game starts / runs, Read otherwise; never greyed around a session (presses are ignored while a
+  worker runs). The light + words show syncing only while the saves really sync AND only once that has taken
+  SYNC_SHOW_AFTER_S (0.3 s, from the sync's own start): a quick sync is never shown. MainWindow._session_look ->
+  (label, light). (Tried first: a fixed 0.8 s minimum, then a Syncing label - both dropped.)
+- On close the bar updates at once (_play_finished -> _update_details); the new playtime / count-up follow when the
+  background re-read lands (it used to wait for Google Drive: the "pause").
+- After a session the library is re-read in the background (refresh_soon: _load_library in a task, _apply_library
+  on the main thread): Google Drive is busy with the fresh upload and stalled the window (the "stutter").
+
+## Launch / close frame drops (2026-10-17, owner: "frame drop on both sync light changes")
+- Measured: during a launch's first seconds (watch polls every 0.1 s) and at close, a frame ran ~30 ms every ~1/8 s:
+  launcher._scan held Python ~14 ms each time (psutil ppid_map 7 ms + process_iter 7 ms). Now _snapshot() reads the
+  Toolhelp snapshot through ctypes (lets go of Python while Windows works) and each program's exe / start time is
+  asked once and remembered (_DETAILS; a pid whose parent changed was reused: asked again; warm_up fills it gently at
+  start). A 60 fps loop beside nonstop scanning: old 53/151 frames > 25 ms (worst 35), new 0 (worst 19). Full launch +
+  close bench (30-game library): 25 slow frames -> 0. Same answers as psutil (330/330 programs).
+
+## Close while a game runs (2026-10-17)
+- The "Game Still Running" pop-up passed its own title as the confirm button's label: now Cancel | Continue
+  (close.continue "Continue" / 続ける; Cancel far left, closing the pop-up = Cancel).
+- Diagnostics: IKEMEN_DEBUG_FRAMES=1 writes every frame > 30 ms to %APPDATA%\IkemenReaderrames.log (what the bar
+  showed + faulthandler stacks of every thread when held up > 35 ms). For measuring the owner's real launch / close.
+
+## Session changes as ONE step (2026-10-17; superseded by "The bottom bar's ONE cross-fade" below)
+- Still true: a "Starting" step under SYNC_SHOW_AFTER_S is skipped (launch = Read/Synced -> Stop/Now Reading once);
+  a press during that moment does nothing. The status drop-down hides in place while a game runs
+  (MainWindow._show_status: an opacity effect at 0, attached only then - text under one renders softer).
+
+## Real-PC hitch hunt (2026-10-17, frames.log on the owner's PC)
+- Launch: already_running's scan asked psutil for every program started since warm-up (holds Python) ->
+  launcher._details_win: OpenProcess + QueryFullProcessImageName + GetProcessTimes via ctypes (lets go of Python;
+  protected system programs -> (None, 0) at once). Identical answers to psutil (165/165).
+- Close: the after-session re-read cleared the cover-file memory -> the next paint re-asked Google Drive about every
+  cover (25 ms): refresh_soon(keep_files=True) there.
+- Focus changes redrew the WHOLE window (57 widgets had Active != Inactive palettes, Windows fills unset roles):
+  apply_palette copies every Active brush to Inactive -> 0. (Selected text keeps its focused colour unfocused.)
+- The breathing lights made the grid redraw every cover 60x a second (Qt merges the light squares into one paint
+  whose box is the whole grid; ~6 ms here, ~9 ms on the owner's PC). Now lights-only frames (MainWindow._tick sets
+  grid.light_frame) copy the covers from LibraryGrid._still (the grid rendered with delegate._skip_light) and draw
+  only the lights: pixel-identical, 2.6 vs 6.1 ms. Any other paint drops the picture; it's remade when next needed.
+  (Tried and dropped: painting each light square separately - identical but slower, 8.2 ms.)
+- Deselecting: the light's words cleared at once with the rest of the bar (SyncStatus.set_status).
+- Next log: the grid still redrew FULLY at launch / close (20-33 ms each; and each one dropped the still picture, so the
+  next frame rebuilt it). Sources: _sync_checked / _sync_wait_over / _play_finished asked viewport().update() though
+  only light colours changed -> MainWindow._lights_changed (nothing while pulsing: lights redraw every frame); and the
+  re-read after a session rebuilt the grid -> _rebuild keeps the grid when nothing visible changed (_entry_look:
+  ids, titles, covers, crops, statuses, folder mosaics), only for that re-read (_quiet_rebuild). Bench with the
+  owner's look: 0 full redraws at launch and close.
+- Still jitter ("vibration"): (1) any normal grid paint dropped the whole still picture, so the next lights frame rebuilt
+  it in full - 20-40 ms while a game starts / closes (CPU shared with the game). Now only the changed part is marked
+  (_still_dirty) and patched (_patch_still: viewport.render of just those rects, lights left out); a change over most
+  of the grid still remakes it. Pixel-identical. (2) The Read button's width and the bar's margin landed in different
+  frames (edges wobbled 1 px): now width via sizeHint (policy Fixed, fixed slot) + margin in the same layout pass.
+
+## Quicker changes (2026-10-17, owner: "slow... like 15 fps")
+- frames.log showed frames mostly on time (late ones = the game loading the CPU as it starts / closes); the 0.45 s
+  out-swap-in read as slow and steppy. LIGHT_FADE_S = 0.22 (was 0.45; every cover light's colour cross-fade).
+  The out-swap-in itself was then replaced by the bar's one cross-fade (below); its code is gone.
+
+## The bottom bar's ONE cross-fade (2026-10-17, owner chose cross-fade over instant)
+- The out-swap-in "blink" read as a flash; separate timers per piece read as choppy. Now every change of what the bar
+  shows goes through MainWindow._update_details: a picture of the bar just before (details.grab, ~1 ms) lies on top in
+  BarFader and fades away over BAR_XFADE_S 0.2 on the window's own animation clock (_tick), the new look already
+  underneath - old and new blend as one image. Underneath everything changes at once: the Read button's label + size,
+  SyncStatus words / dot, StatsLine (set_shown / switching), the status drop-down (hidden in place). The pieces'
+  own older fades were removed from the code (2026-10-17 sweep), so nothing animates underneath the cross-fade. Not while the
+  window is being resized or a name is being renamed. (Count-up after a session and the cover lights' own colour
+  fade stay as they are.)
+- The Read button keeps a FIXED space for its longest label (slot_labels Read / Stop / Open, re-measured on language /
+  font changes); the visible button is drawn centred in it, so it grows / shrinks around its centre and nothing beside
+  it moves (the cross-fade lines up: no doubled title). Read's visible left edge stays 25 px from the window.
 
 ## Ideas for later (owner interested, not scheduled)
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,

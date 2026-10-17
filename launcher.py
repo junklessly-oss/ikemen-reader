@@ -33,7 +33,7 @@ import luna
 import outside
 from library import Game, Library, LocalSettings
 from sync_engine import Action, ConflictResolver, SyncEngine, save_folder_problem
-from titles import clean_title, usable_window_title
+from titles import clean_title, session_title, shared_part, usable_window_title
 
 
 def _norm(p) -> str:
@@ -48,10 +48,101 @@ def _inside(path: str, folder: Path) -> bool:
     return n == f or n.startswith(f + os.sep)
 
 
+def _snapshot() -> Optional[list[tuple[int, int]]]:
+    """(pid, parent pid) of every running program, straight from Windows (Toolhelp snapshot) through ctypes - which
+    lets go of Python while Windows works, so the window keeps drawing (psutil's own table held Python ~7 ms each
+    time, and the launch / close watch asks several times a second: the sync light's fade stuttered)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ENTRY(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                        ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                        ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+        k32 = ctypes.windll.kernel32
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)            # TH32CS_SNAPPROCESS
+        if not snap or snap == wintypes.HANDLE(-1).value:
+            return None
+        try:
+            e = ENTRY()
+            e.dwSize = ctypes.sizeof(ENTRY)
+            out = []
+            ok = k32.Process32FirstW(snap, ctypes.byref(e))
+            while ok:
+                out.append((e.th32ProcessID, e.th32ParentProcessID))
+                ok = k32.Process32NextW(snap, ctypes.byref(e))
+            return out
+        finally:
+            k32.CloseHandle(snap)
+    except Exception:  # noqa: BLE001 - fall back to psutil
+        return None
+
+
+_DETAILS: dict[int, tuple[int, Optional[str], float]] = {}   # pid -> (parent, exe, start time): asked once each
+
+
+def _details_win(pid: int) -> Optional[tuple[Optional[str], float]]:
+    """(exe, start time) straight from Windows through ctypes - which lets go of Python while Windows answers, so
+    the window keeps drawing (psutil's exe() held it: a launch right after many programs had started hitched).
+    None: couldn't ask this way (psutil is tried instead)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        k32.OpenProcess.restype = wintypes.HANDLE
+        h = k32.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return None, 0.0                             # (a protected system program: never a game of ours)
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buf))
+            exe = buf.value if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)) else None
+            created, ex, kt, ut = (wintypes.FILETIME() for _ in range(4))
+            ct = 0.0
+            if k32.GetProcessTimes(h, ctypes.byref(created), ctypes.byref(ex), ctypes.byref(kt), ctypes.byref(ut)):
+                ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime     # 100 ns since 1601
+                ct = ticks / 1e7 - 11644473600.0                                  # -> seconds since 1970
+            return exe, ct
+        finally:
+            k32.CloseHandle(h)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _details(pid: int) -> tuple[Optional[str], float]:
+    """(exe, start time) of one program (None / 0 when it's gone or not ours to look at)."""
+    quick = _details_win(pid)
+    if quick is not None:
+        return quick
+    exe, ct = None, 0.0
+    try:
+        proc = psutil.Process(pid)
+        with proc.oneshot():
+            ct = proc.create_time()
+            try:
+                exe = proc.exe()
+            except psutil.Error:
+                exe = None
+    except psutil.Error:
+        pass
+    return exe, ct
+
+
 def _parents() -> Optional[dict[int, int]]:
-    """pid -> parent pid for every running program, in ONE call (~10 ms). Asking psutil for each process's
-    parent separately rebuilds that same table every time: ~10 ms per process, 3+ s for a first look at
-    ~300 programs, all of it keeping Python busy (the library's animations stuttered meanwhile)."""
+    """pid -> parent pid for every running program, in ONE call. Asking psutil for each process's parent separately
+    rebuilds that same table every time: ~10 ms per process, 3+ s for a first look at ~300 programs."""
+    snap = _snapshot()
+    if snap is not None:
+        return dict(snap)
     try:
         from psutil import _pswindows
         table = _pswindows.cext.ppid_map()
@@ -61,15 +152,28 @@ def _parents() -> Optional[dict[int, int]]:
 
 
 def _scan() -> list[dict]:
-    """pid, ppid, exe and create_time of every running program."""
-    parents = _parents()
-    if parents is None:
-        return [p.info for p in psutil.process_iter(["pid", "ppid", "exe", "create_time"])]
-    out = []
-    for p in psutil.process_iter(["pid", "exe", "create_time"]):
-        info = p.info
-        info["ppid"] = parents.get(info.get("pid"))
-        out.append(info)
+    """pid, ppid, exe and create_time of every running program. A program's exe and start time are asked once and
+    remembered (a pid whose parent changed was reused: asked again), so a scan is mostly the quick snapshot."""
+    snap = _snapshot()
+    if snap is None:
+        parents = _parents()
+        if parents is None:
+            return [p.info for p in psutil.process_iter(["pid", "ppid", "exe", "create_time"])]
+        out = []
+        for p in psutil.process_iter(["pid", "exe", "create_time"]):
+            info = p.info
+            info["ppid"] = parents.get(info.get("pid"))
+            out.append(info)
+        return out
+    out, alive = [], set()
+    for pid, ppid in snap:
+        alive.add(pid)
+        known = _DETAILS.get(pid)
+        if known is None or known[0] != ppid:
+            known = _DETAILS[pid] = (ppid, *_details(pid))
+        out.append({"pid": pid, "ppid": ppid, "exe": known[1], "create_time": known[2]})
+    for pid in [p for p in _DETAILS if p not in alive]:
+        del _DETAILS[pid]
     return out
 
 
@@ -124,9 +228,18 @@ def hold_warm_up(hold: bool, who: str = "egg") -> None:
 
 
 def warm_up() -> None:
-    """The first look at every running program's details takes a few seconds on Windows (psutil
-    caches them afterwards). Done in the background when the window opens, so Play reacts at once."""
-    for _ in psutil.process_iter(["exe", "create_time"]):     # (parents: one quick table when needed, _parents)
+    """The first look at every running program's details takes a few seconds on Windows. Done in the background
+    when the window opens (remembered in _DETAILS, which _scan then uses), so Read reacts at once and the launch
+    watch's scans are quick."""
+    snap = _snapshot()
+    if snap is None:
+        for _ in psutil.process_iter(["exe", "create_time"]):
+            time.sleep(0.01)  # a short pause per program, so the window's animations keep running smoothly
+            _warm_go.wait(10)  # (held: waits, but never forever)
+        return
+    for pid, ppid in snap:
+        if pid not in _DETAILS:
+            _DETAILS.setdefault(pid, (ppid, *_details(pid)))
         time.sleep(0.01)      # a short pause per program, so the window's animations keep running smoothly
         _warm_go.wait(10)     # (held: waits, but never forever)
 
@@ -440,7 +553,7 @@ def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll:
             time.sleep(0.25)             # it just closed: look for a hand-over to another process quickly
         else:
             time.sleep(min(poll, 0.1) if now - start < 3 else poll)   # waiting for it to appear
-    title = titles.most_common(1)[0][0] if titles else ""
+    title = session_title(titles)           # (a title that kept changing: only the part that stayed the same)
     if track_root and cmd:
         active += (first_seen or start) - start        # time before the first check counts too
     exact = None
@@ -604,6 +717,10 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
             library.record_session(game.game_id, machine, seconds)
             fresh = library.get(game.game_id)
             t = clean_title(info.window_title) if info.window_title else ""
+            if fresh and t and fresh.auto_title and t != fresh.auto_title:
+                # different from last session: a chapter / scene name in the title, or a new name? Only the part
+                # both sessions share is the game's name (nothing shared: the new one, e.g. a renamed release)
+                t = shared_part([t, fresh.auto_title]) or t
             if fresh and t and t != fresh.auto_title:
                 fresh = library.update(game.game_id, auto_title=t)   # remembered for the "Automatic" button
             if fresh and not fresh.title_locked and t and t != fresh.title:

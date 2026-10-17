@@ -25,8 +25,8 @@ S: dict[str, tuple[str, str]] = {
     "top.attention_tip":        ("Saves changed on both devices. Click to go to the game (click again for the next one).", "両方の端末でセーブが変更されています。クリックするとそのゲームに移動します（もう一度クリックすると次のゲームに移動します）。"),
     "top.hide_stats":           ("Hide Statistics", "統計を非表示"),
     "top.show_stats":           ("Show Statistics", "統計を表示"),
-    "top.stats_tip":            ("Show or hide playtime and last-played dates on the covers and the bottom bar.",
-                                 "カバーと下部のバーに表示されるプレイ時間と最終プレイ日を、表示または非表示にします。"),
+    "top.stats_tip":            ("Show or hide time read and last read on the covers and the bottom bar.",
+                                 "カバーと下部のバーに表示される読書時間と最後に読んだ日を、表示または非表示にします。"),
     "sort.recent":              ("Recently Played", "最近プレイした順"),
     "sort.hours":               ("Most Played", "プレイ時間が長い順"),
     "sort.title":               ("Title", "タイトル順"),
@@ -48,14 +48,13 @@ S: dict[str, tuple[str, str]] = {
 
     # ------------------------------------------------------------------ grid / bottom bar
     "grid.no_results":          ("No Results Found", "見つかりませんでした"),
-    "grid.empty":               ("No games yet. Drag a game's .exe here, or click \"Add Game\".",
-                                 "ゲームがまだありません。ゲームの .exe をここにドラッグするか、「ゲームを追加」をクリックしてください。"),
+    "grid.empty":               ("No Games Yet", "ゲームがまだありません"),
     "grid.no_cloud":            ("The cloud folder can't be found:\n{path}\n\nIs your cloud service's app running? "
                                  "You can change the folder in Settings.",
                                  "クラウドフォルダーが見つかりません：\n{path}\n\nクラウドサービスのアプリは起動していますか？"
                                  "フォルダーは設定で変更できます。"),
     "grid.drop_hint":           ("Drop to add", "ドロップして追加"),
-    "card.never":               ("Never Played", "未プレイ"),
+    "card.never":               ("Not Started", "未読"),
     "bar.play":                 ("Read", "読む"),
     "bar.playing":              ("Now Reading", "読書中"),
     "bar.stop":                 ("Stop", "終了"),
@@ -67,8 +66,8 @@ S: dict[str, tuple[str, str]] = {
                                  "強制終了しますか？セーブしていない内容は失われます。"),
     "stop.force":               ("Force Close", "強制終了"),
     "stop.keep":                ("Keep Open", "開いたままにする"),
-    "bar.played":               ("Played: {time}", "プレイ時間：{time}"),
-    "bar.last_played":          ("Last Played: {date}", "最終プレイ：{date}"),
+    "bar.time_read":            ("Time Read", "読書時間"),
+    "bar.last_read":            ("Last Read", "最後に読んだ日"),
     "bar.edit":                 ("Edit", "編集"),
     "bar.open_saves":           ("Open Save Folder", "セーブフォルダーを開く"),
     "bar.tip_busy":             ("Another game is running.", "別のゲームが起動中です。"),
@@ -139,8 +138,10 @@ S: dict[str, tuple[str, str]] = {
     "status.launching":         ("Starting the game...", "ゲームを起動中…"),
     "status.closed_syncing":    ("Game closed. Syncing saves...", "ゲームを終了しました。セーブを同期中…"),
     "status.detecting":         ("Game closed. Looking for its save files...", "ゲームを終了しました。セーブファイルを探しています…"),
-    "status.played_for":        ("{msg}  Played for {time}.", "{msg}　プレイ時間：{time}"),
+    "status.played_for":        ("{msg}  Read for {time}.", "{msg}　読書時間：{time}"),
     "status.auto_downloaded":   ("Downloaded newer saves for: {games}", "新しいセーブをダウンロードしました：{games}"),
+    "status.save_filled":       ("Save folder set up from the other device's for: {games}",
+                                 "もう一方の端末に合わせてセーブフォルダーを設定しました：{games}"),
     "status.startup_uploaded":  ("Uploaded newer saves for: {games}", "新しいセーブをアップロードしました：{games}"),
     "status.title_updated":     ('Title updated to "{title}" from the game window.', "ゲーム画面からタイトルを「{title}」に更新しました。"),
     "status.live_update":       ("Library updated from the other device.", "もう一方の端末の変更を反映しました。"),
@@ -217,8 +218,8 @@ S: dict[str, tuple[str, str]] = {
 
     # ------------------------------------------------------------------ folders
     "folder.new_name":          ("New Folder", "新しいフォルダー"),
-    "folder.count_one":         ("1 Game", "1本"),
-    "folder.count_many":        ("{n} Games", "{n}本"),
+    "folder.count_one":         ("1 Game", "1ゲーム"),
+    "folder.count_many":        ("{n} Games", "{n}ゲーム"),
     "folder.back":              ("‹  Library", "‹  ライブラリ"),
     "folder.back_tip":          ("Back to the library. Drop a game here to take it out of this folder.",
                                  "ライブラリに戻ります。ゲームをここにドロップすると、フォルダーから出せます。"),
@@ -623,8 +624,9 @@ S: dict[str, tuple[str, str]] = {
 
     # ------------------------------------------------------------------ misc
     "close.title":              ("Game Still Running", "ゲームが起動中です"),
-    "close.body":               ("{title} is still running. If you close Ikemen Reader now, this session's playtime won't be recorded, and your saves will upload the next time Ikemen Reader opens.\n\nClose anyway?",
-                                 '{title} はまだ起動中です。今イケメンリーダーを閉じると、今回のプレイ時間は記録されず、セーブは次にイケメンリーダーを起動したときにアップロードされます。\n\nそれでも閉じますか？'),
+    "close.continue":           ("Continue", "続ける"),
+    "close.body":               ("{title} is still running. If you close Ikemen Reader now, this session's reading time won't be recorded, and your saves will upload the next time Ikemen Reader opens.\n\nClose anyway?",
+                                 '{title} はまだ起動中です。今イケメンリーダーを閉じると、今回の読書時間は記録されず、セーブは次にイケメンリーダーを起動したときにアップロードされます。\n\nそれでも閉じますか？'),
     "file.programs":            ("Programs (*.exe *.lnk)", "プログラム (*.exe *.lnk)"),
     "file.pick_exe":            ("Choose the Game's .exe", "ゲームの .exe を選択"),
     "file.pick_saves":          ("Choose the Save Folder", "セーブフォルダーを選択"),
@@ -636,6 +638,8 @@ S: dict[str, tuple[str, str]] = {
     "date.format":              ("%b %d, %Y", "%Y年%m月%d日"),
     "date.today":               ("Today", "今日"),
     "date.yesterday":           ("Yesterday", "昨日"),
+    "date.days_ago":            ("{n} Days Ago", "{n}日前"),
+    "date.weeks_ago":           ("{n} Weeks Ago", "{n}週間前"),
     "datetime.format":          ("%Y-%m-%d %H:%M", "%Y年%m月%d日 %H:%M"),
 }
 
@@ -667,18 +671,49 @@ def playtime(seconds: int) -> str:
     return tr("time.h_m", h=h, m=rem // 60)
 
 
+def playtime_parts(seconds: float) -> list[tuple[str, str]]:
+    """Playtime as (number, unit) pairs, for drawing the numbers bright and the units small:
+    [("12", "h"), ("05", "m")] / [("12", "時間"), ("5", "分")]. Same rules as playtime()."""
+    seconds = int(seconds)
+    ja = _lang == "ja"
+    if 0 < seconds < 60:
+        return [(str(seconds), "秒" if ja else "s")]
+    h, rem = divmod(seconds, 3600)
+    if h == 0:
+        return [(str(rem // 60), "分" if ja else "m")]
+    return [(str(h), "時間" if ja else "h"), (str(rem // 60) if ja else f"{rem // 60:02d}", "分" if ja else "m")]
+
+
 def date(ts: float) -> str:
+    """The calendar date: Oct 3, 2026 / 2026年10月3日."""
     import time as _t
-    from datetime import date as _d, datetime as _dt
+    from datetime import datetime as _dt
     d = _dt.fromtimestamp(ts).date()
-    today = _d.today()
-    if d == today:
-        return tr("date.today")
-    if (today - d).days == 1:
-        return tr("date.yesterday")
     if _lang == "ja":
         return f"{d.year}年{d.month}月{d.day}日"            # 2026年10月3日 (no zero padding)
     return _t.strftime(tr("date.format"), _t.localtime(ts)).replace(" 0", " ")
+
+
+def ago(ts: float, today=None) -> str:
+    """When, the way people say it: Today, Yesterday, 3 Days Ago, 2 Weeks Ago, then the date (Sep 12 this
+    year, Dec 3, 2025 before). A time slightly in the future (the other device's clock) counts as today."""
+    from datetime import date as _d, datetime as _dt
+    d = _dt.fromtimestamp(ts).date()
+    today = today or _d.today()
+    days = (today - d).days
+    if days <= 0:
+        return tr("date.today")
+    if days == 1:
+        return tr("date.yesterday")
+    if days < 14:
+        return tr("date.days_ago", n=days)
+    if days <= 31:
+        return tr("date.weeks_ago", n=days // 7)
+    if d.year != today.year:
+        return date(ts)
+    if _lang == "ja":
+        return f"{d.month}月{d.day}日"
+    return f"{d.strftime('%b')} {d.day}"
 
 
 def datetime_str(ts: float) -> str:

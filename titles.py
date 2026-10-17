@@ -184,3 +184,41 @@ def usable_window_title(title: str) -> bool:
     bad = ("default ime", "msctfime", "error", "エラー", "warning", "警告", "cmd.exe", "console",
            "setup", "install", "unity", "directx", "opengl")
     return not any(t.lower() == b or t.lower().startswith(b + " ") for b in bad)
+
+
+# --------------------------------------------------------------------------- titles that change while reading
+# Some games put the chapter / scene / route in their window title ("Sakura - Chapter 3"). The part that stays
+# the same is the game's name; the part that changes must never become it.
+_SEGMENTS = re.compile(r"\s+[-–—|｜/／~～:：]\s+|[|｜]|[【】「」『』\[\]()（）〔〕<>＜＞]|\s[-–—]\s?|\s?[-–—]\s")
+
+
+def _segments(title: str) -> list[str]:
+    """A window title cut at its separators (" - ", "|", "：", brackets...), each piece trimmed."""
+    return [s.strip(" 　・") for s in _SEGMENTS.split(title) if s and s.strip(" 　・")]
+
+
+def shared_part(titles: list[str]) -> str:
+    """The longest piece every one of these titles has ("Sakura - Chapter 2" / "Sakura - Chapter 3" -> "Sakura");
+    "" if they share nothing (then it's no title to go by)."""
+    if not titles:
+        return ""
+    common = None
+    for t in titles:
+        segs = set(_segments(t))
+        common = segs if common is None else common & segs
+    usable = [s for s in (common or ()) if usable_window_title(s) and not re.fullmatch(r"[\d\s.]+", s)]
+    return max(usable, key=len) if usable else ""
+
+
+def session_title(votes: dict) -> str:
+    """The game's title from a session's window titles {title: how long it showed}. One title that held most of
+    the session (80 %) is it; titles that kept changing give the part they all share, or nothing at all."""
+    total = sum(votes.values())
+    if not total:
+        return ""
+    top, n = max(votes.items(), key=lambda kv: kv[1])
+    if n >= 0.8 * total:
+        return top
+    # the ones that really showed (not a title flashed for a moment, like "Goodbye!" at the very end)
+    lasting = [t for t, v in votes.items() if v >= 0.05 * total]
+    return shared_part(lasting)

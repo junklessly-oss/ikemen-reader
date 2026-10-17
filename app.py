@@ -24,16 +24,18 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
-                            QTimer, Signal)
-from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QIcon, QImage,
+                            QTimer, QUrl, Signal)
+from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRegion,
                            QRadialGradient)
-from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,
+from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QGraphicsOpacityEffect, QCheckBox, QComboBox,
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                                QProgressBar, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
-                               QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QVBoxLayout,
+                               QProxyStyle, QStatusBar, QStyledItemDelegate, QStyleOption, QStyleOptionButton, QStyleOptionViewItem, QVBoxLayout,
                                QWidget)
+
+import shiboken6
 
 import i18n
 import lnk
@@ -101,7 +103,7 @@ COLORS = dict(DARK)
 LIGHTS = dict(BASE_LIGHTS)
 MARKS = dict(BASE_MARKS)
 LOGO = dict(LOGO_ORIGINAL)
-ICONS = {"check": "", "chevron": ""}           # generated in the theme's colours (see _write_icons)
+ICONS = {"check": "", "chevron": "", "chevron_up": ""}   # generated in the theme's colours (see _write_icons)
 
 # custom theme editor: the main colours always show; the rest sit behind "Show All Colours"
 THEME_MAIN = [
@@ -161,6 +163,11 @@ def _write_icons() -> None:
                     f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 4.5 '
                     f'L6 8 L9.5 4.5" fill="none" stroke="{arrow}" stroke-width="1.6" stroke-linecap="round" '
                     f'stroke-linejoin="round"/></svg>'),
+        # (a drop-down whose list will open upwards shows its arrow pointing up)
+        "chevron_up": (f"chevron_up_{arrow[1:]}.svg",
+                       f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 7.5 '
+                       f'L6 4 L9.5 7.5" fill="none" stroke="{arrow}" stroke-width="1.6" stroke-linecap="round" '
+                       f'stroke-linejoin="round"/></svg>'),
     }
     for key, (name, svg) in files.items():
         f = d / name
@@ -359,7 +366,81 @@ class LibraryGrid(QListWidget):
             lo, hi = (mid + 1, hi) if rect(mid).top() <= view.bottom() else (lo, mid)
         return range(first, lo)
 
+    # Lights-only frames (the breathing sync lights, ~60 a second): the covers don't change, so they're copied
+    # from a picture of the grid made without its lights, and only the lights are drawn on top. Redrawing the
+    # covers every frame cost ~6-9 ms a frame on the owner's PC, which games starting / closing tipped into hitches.
+    light_frame: Optional[dict] = None   # set by MainWindow._tick: {"region": QRegion, "lights": [...]}
+    _still: Optional[QPixmap] = None     # the grid without lights (made when first needed)
+    _still_dirty = None                  # QRegion of it that's out of date (redrawn there, only there, when next used)
+
+    def _patch_still(self, region) -> None:
+        """Redraw just this part of the still picture (lights left out), the rest as it was."""
+        delegate = self.itemDelegate()
+        delegate._skip_light = True
+        self._making_still = True
+        try:
+            for r in region:
+                self.viewport().render(self._still, r.topLeft(), QRegion(r))
+        finally:
+            delegate._skip_light = False
+            self._making_still = False
+
+    def _make_still(self) -> Optional[QPixmap]:
+        vp = self.viewport()
+        dpr = vp.devicePixelRatioF()
+        pm = QPixmap(max(1, round(vp.width() * dpr)), max(1, round(vp.height() * dpr)))
+        pm.setDevicePixelRatio(dpr)
+        delegate = self.itemDelegate()
+        delegate._skip_light = True
+        self._making_still = True
+        try:
+            vp.render(pm)
+        finally:
+            delegate._skip_light = False
+            self._making_still = False
+        return pm
+
     def paintEvent(self, ev) -> None:
+        frame, self.light_frame = self.light_frame, None
+        if frame is not None and not getattr(self, "_making_still", False) and not self.bare                 and ev.region().subtracted(frame["region"]).isEmpty():
+            if self._still is None or self._still.size() != self.viewport().size() * self.viewport().devicePixelRatioF():
+                self._still, self._still_dirty = self._make_still(), None
+            elif self._still_dirty is not None and not self._still_dirty.isEmpty():
+                self._patch_still(self._still_dirty)  # (only what changed since: a hover, a cover loading...)
+                self._still_dirty = None
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing)
+            k = self._still.devicePixelRatio()
+            for r in ev.region():
+                p.drawPixmap(QRectF(r), self._still, QRectF(r.x() * k, r.y() * k, r.width() * k, r.height() * k))
+            delegate = self.itemDelegate()
+            for centre, iid in frame["lights"]:
+                if is_folder(iid):
+                    paint_light(p, centre, self.w.folder_colours(iid[len(FOLDER_PREFIX):]), "calm", self.w.settings.pulse)
+                else:
+                    delegate._paint_light(p, centre, self.w.light_state(iid), iid)
+            p.end()
+            return
+        if not getattr(self, "_making_still", False) and self._still is not None:
+            # something else was drawn: that part of the picture is out of date (patched when next used); a change
+            # over most of the grid (scrolling, a search...) just makes it again
+            vr = self.viewport().rect()
+            dirty = (self._still_dirty or QRegion()) | ev.region()
+            area = sum(r.width() * r.height() for r in dirty)
+            if area > 0.5 * vr.width() * vr.height():
+                self._still, self._still_dirty = None, None
+            else:
+                self._still_dirty = dirty
+        self._paint_part(ev)
+        if self.marker is not None and not self.bare:
+            p = QPainter(self.viewport())
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(COLORS["select"]))
+            p.drawRoundedRect(self.marker, 2, 2)
+            p.end()
+
+    def _paint_part(self, ev) -> None:
         backdrop = getattr(self.w, "backdrop", None)
         if backdrop is not None:
             p = QPainter(self.viewport())
@@ -396,7 +477,7 @@ class LibraryGrid(QListWidget):
                                 delegate.paint(p, opt, index)
                 finally:
                     delegate.under_pass = False
-            if self.w.no_results > 0 and not self.bare:  # searching / filtering found nothing
+            if self.w.no_results > 0 and not self.bare:  # nothing matches the search / filter, or no games yet
                 f = QFont(self.font())
                 f.setPointSizeF(f.pointSizeF() * 2.7)
                 p.setFont(f)
@@ -409,18 +490,13 @@ class LibraryGrid(QListWidget):
                 # above the middle (the optical centre: the true centre looks low), rising into place as it fades in
                 r = self.rect()
                 centre = self.viewport().mapFrom(self, QPoint(r.center().x(), r.top() + round(r.height() * NO_RESULTS_Y)))
-                box = QRect(0, 0, 4000, 400)
+                box = QRect(0, 0, max(200, round(r.width() * 0.8)), 1200)   # (a long sentence wraps, centred)
                 box.moveCenter(centre + QPoint(0, round(NO_RESULTS_RISE * (1 - k))))
-                p.drawText(box, Qt.AlignCenter, tr("grid.no_results"))
+                # (a quoted button name never splits across lines: "Add Game")
+                text = re.sub(r'"[^"]*"', lambda m: m.group(0).replace(" ", "\u00a0"), tr(self.w.no_results_key))
+                p.drawText(box, Qt.AlignCenter | Qt.TextWordWrap, text)
             p.end()
         super().paintEvent(ev)
-        if self.marker is not None and not self.bare:
-            p = QPainter(self.viewport())
-            p.setRenderHint(QPainter.Antialiasing)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(COLORS["select"]))
-            p.drawRoundedRect(self.marker, 2, 2)
-            p.end()
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
@@ -605,6 +681,12 @@ def apply_palette() -> None:
     pal.setColor(QPalette.Disabled, QPalette.Text, c["other_text"])
     pal.setColor(QPalette.Disabled, QPalette.ButtonText, c["other_text"])
     pal.setColor(QPalette.Disabled, QPalette.WindowText, c["other_text"])
+    # the window looks the same focused or not: make the unfocused colours exactly the focused ones. When they
+    # differ (Windows fills the roles we don't set), Qt redraws the WHOLE window every time focus moves - which on
+    # the owner's PC landed as a hitch right as a game's window took focus, and again as ours took it back
+    for r in QPalette.ColorRole:
+        if r != QPalette.NColorRoles:
+            pal.setBrush(QPalette.Inactive, r, pal.brush(QPalette.Active, r))
     app.setPalette(pal)
 
 
@@ -657,7 +739,9 @@ NO_RESULTS_RISE = 8                  # ... rising this many px into place ...
 NO_RESULTS_Y = 0.44                  # ... at this height of the library (the optical centre); it goes at once
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
-LIGHT_FADE_S = 0.45                  # a light changing colour cross-fades this long
+LIGHT_FADE_S = 0.22                  # a light changing colour cross-fades this long (owner: 0.45 felt slow)
+BAR_XFADE_S = 0.2                    # the bottom bar's one cross-fade, old look -> new look (BarFader)
+SYNC_SHOW_AFTER_S = 0.3              # a sync around a session shows "Syncing" only if it takes longer than this
 PREFETCH_QUIET_MS = 500              # covers are prepared in the background once nothing has changed this long
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
 RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
@@ -718,6 +802,7 @@ def build_style() -> str:
         _write_icons()
     check = Path(ICONS["check"]).as_posix()
     chevron = Path(ICONS["chevron"]).as_posix()
+    chevron_up = Path(ICONS["chevron_up"] or ICONS["chevron"]).as_posix()
     families = ", ".join('"' + f.replace('"', "") + '"' for f in ui_families())
     return f"""
 * {{ font-family: {families}; font-size: 10pt; color: {c['text']}; }}
@@ -741,6 +826,8 @@ QComboBox {{ padding-right: 26px; }}
 QComboBox::drop-down {{ border: none; width: 26px; subcontrol-origin: padding; subcontrol-position: center right; }}
 QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; }}
 QComboBox::down-arrow:on {{ top: 1px; }}
+QComboBox[opens_up="true"]::down-arrow {{ image: url({chevron_up}); }}
+QComboBox[opens_up="true"]::down-arrow:on {{ top: -1px; }}
 QComboBoxPrivateContainer {{ background: {c['input']}; border: none; }}
 QProgressBar {{ background: {c['input']}; border: none; border-radius: 4px; }}
 QProgressBar::chunk {{ background: {c['play']}; border-radius: 4px; }}
@@ -749,8 +836,8 @@ QComboBox QAbstractItemView {{ background: {c['input']}; border: 1px solid {c['b
 QPushButton {{ background: {c['button']}; border: 1px solid {c['button']}; border-radius: 6px; padding: 6px 14px; }}
 QPushButton:hover {{ background: {c['button_hover']}; border-color: {c['button_hover']}; }}
 QPushButton:disabled {{ color: {c['other_text']}; background: {c['other_bg']}; border-color: {c['other_bg']}; }}
-QPushButton#play {{ background: {c['play']}; color: {c['play_text']}; border: none; font-size: 14pt;
-                    padding: 5px 27px; margin: 3px; border-radius: 8px; }}
+QPushButton#play {{ background: {c['play']}; color: {c['play_text']}; border: none; font-size: 17.5pt;
+                    padding: 6px 32px; margin: 4px 3px 2px 3px; border-radius: 10px; }}
 QPushButton#play:hover {{ background: {c['play_hover']}; }}
 QPushButton#play:disabled {{ background: {c['play_disabled']}; color: {c['play_disabled_text']}; }}
 QPushButton#danger {{ color: {c['danger']}; }}
@@ -775,6 +862,8 @@ QPushButton#back:hover {{ color: {c['text']}; }}
 QFrame#folderbar {{ background: transparent; }}
 QFrame#band {{ background: {c['band']}; }}
 QLabel#title {{ font-size: 16pt; }}
+QLineEdit#title_edit {{ font-size: 16pt; padding: 2px 0 1px 0; }}
+QLineEdit#title_edit:focus {{ border-color: {c['focus']}; }}
 QLabel#muted, QLabel#hint {{ color: {c['muted']}; }}
 QLabel#hint {{ font-size: 9pt; }}
 QLabel#section {{ color: {c['muted']}; padding-top: 8px; }}
@@ -802,6 +891,8 @@ QSlider::groove:horizontal {{ height: 4px; background: {c['border']}; border-rad
 QSlider::sub-page:horizontal {{ background: {c['muted']}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ background: {c['select']}; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }}
 QToolTip {{ background: {c['input']}; color: {c['text']}; border: 1px solid {c['border']}; padding: 4px; }}
+QWidget#smooth_tip {{ background: {c['input']}; border: 1px solid {c['border']}; }}
+QLabel#smooth_tip_text {{ color: {c['text']}; padding: 4px; background: transparent; }}
 QMessageBox QLabel {{ min-width: 320px; }}
 """
 
@@ -819,16 +910,42 @@ def suggest_save(settings: LocalSettings, exe: str, title: str,
     return detect.suggest_save_folder(game_dir, [title, Path(exe).stem, Path(game_dir).name], other, usable, skip)
 
 
+def _save_folder_usable(settings: LocalSettings) -> Callable[[str], bool]:
+    skip = [settings.cloud_root, str(default_app_dir())] + [str(Path(p).parent) for p in (settings.luna_path, settings.le_path, settings.anki_path) if p]
+    return lambda p: save_folder_problem(str(p), settings.cloud_root) is None and not any(
+        os.path.normcase(str(p)).startswith(os.path.normcase(s)) for s in skip if s)
+
+
+def certain_saves(settings: LocalSettings, games: list[Game]) -> dict[str, str]:
+    """{game id: save folder} for games set up here with an empty save folder whose place on this device follows
+    for certain from the other device's (detect.certain_from_other_device). Never a folder another game here
+    already uses (same, inside or around). Touches the disk: run it in the background."""
+    me, other = settings.machine_name, other_slot(settings.machine_name)
+    usable = _save_folder_usable(settings)
+    norm = lambda p: os.path.normcase(os.path.abspath(p)).rstrip("\\/")
+    taken = [norm(g.paths_for(me).save_dir) for g in games if g.paths_for(me).save_dir]
+    out: dict[str, str] = {}
+    for g in games:
+        here, there = g.paths_for(me), g.paths_for(other)
+        if not here.exe or here.save_dir or not there.save_dir:
+            continue
+        p = detect.certain_from_other_device(str(Path(here.exe).parent), there.exe, there.save_dir)
+        if p is None or not usable(p):
+            continue
+        n = norm(str(p))
+        if any(t == n or t.startswith(n + os.sep) or n.startswith(t + os.sep) for t in taken):
+            continue
+        out[g.game_id] = str(p)
+        taken.append(n)
+    return out
+
+
 def open_folder(path: str) -> None:
     if path and Path(path).exists():
         try:
             os.startfile(path)  # type: ignore[attr-defined]  (Windows only)
         except OSError:
             pass                # Windows refused (no permission / no handler): nothing else to do
-
-
-def dot(colour_key: str) -> str:
-    return f'<span style="color:{LIGHTS[colour_key]}">●</span>'
 
 
 _BACK_KEYS = ("cancel", "no", "later")          # "don't do it" buttons: always on the far left
@@ -1335,6 +1452,668 @@ def fit_title(text: str, font: QFont, width: float, max_lines: int) -> tuple[QFo
     return font, lines
 
 
+# =========================================================================== statistics (playtime / last read)
+# Drawn as "runs": ("t", text, font, colour) / ("i", icon kind, colour, size) / ("g", gap). Numbers bright, units
+# small and muted, a clock / calendar icon in front, each icon centred on the digits so everything sits level.
+_STAT_ICONS: dict = {}
+
+
+def stat_icon(kind: str, colour: str, size: int, dpr: float = 1.0, sweep: float = 0.0) -> QPixmap:
+    """A thin line icon: "clock" (time read) or "calendar" (last read), drawn on a 16-unit grid.
+    sweep: the clock's long hand turned on by that many degrees (the count-up after a session; not cached)."""
+    key = (kind, colour, size, dpr)
+    pm = None if sweep else _STAT_ICONS.get(key)
+    if pm is None:
+        pm = QPixmap(max(1, round(size * dpr)), max(1, round(size * dpr)))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.transparent)
+        q = QPainter(pm)
+        q.setRenderHint(QPainter.Antialiasing)
+        q.scale(size / 16, size / 16)
+        pen = QPen(QColor(colour), 1.5)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        q.setPen(pen)
+        q.setBrush(Qt.NoBrush)
+        if kind == "clock":
+            q.drawEllipse(QPointF(8, 8), 6.2, 6.2)
+            a = math.radians(sweep)
+            tip = QPointF(8 + 3.4 * math.sin(a), 8 - 3.4 * math.cos(a))
+            q.drawPolyline([tip, QPointF(8, 8), QPointF(10.4, 9.6)])
+        else:
+            q.drawRoundedRect(QRectF(2, 3.2, 12, 10.8), 1.6, 1.6)
+            q.drawLine(QPointF(2, 6.6), QPointF(14, 6.6))
+            q.drawLine(QPointF(5.2, 1.8), QPointF(5.2, 4.4))
+            q.drawLine(QPointF(10.8, 1.8), QPointF(10.8, 4.4))
+        q.end()
+        if sweep:
+            return pm
+        if len(_STAT_ICONS) > 64:
+            _STAT_ICONS.clear()
+        _STAT_ICONS[key] = pm
+    return pm
+
+
+def time_runs(seconds: float, num: QFont, unit: QFont, num_colour: str, unit_colour: str) -> list:
+    out: list = []
+    for i, (n, u) in enumerate(i18n.playtime_parts(seconds)):
+        if i:
+            out.append(("g", 4 if i18n.language() == "en" else 1))
+        out += [("t", n, num, num_colour), ("g", 1), ("t", u, unit, unit_colour)]
+    return out
+
+
+def runs_width(runs: list) -> float:
+    w = 0.0
+    for r in runs:
+        if r[0] == "t":
+            w += QFontMetricsF(r[2]).horizontalAdvance(r[1])
+        elif r[0] == "i":
+            w += r[3]
+        else:
+            w += r[1]
+    return w
+
+
+def draw_runs(p: QPainter, x: float, baseline: float, runs: list, mid: float) -> float:
+    """Draw left to right on one baseline; icons centred on mid (the middle of the digits). Returns the end x."""
+    dpr = p.device().devicePixelRatioF() if p.device() is not None else 1.0
+    for r in runs:
+        if r[0] == "t":
+            p.setFont(r[2])
+            p.setPen(QColor(r[3]))
+            p.drawText(QPointF(x, baseline), r[1])
+            x += QFontMetricsF(r[2]).horizontalAdvance(r[1])
+        elif r[0] == "i":
+            size = r[3]
+            p.drawPixmap(QRectF(x, mid - size / 2, size, size),
+                         stat_icon(r[1], r[2], size, dpr, r[4] if len(r) > 4 else 0.0), QRectF())
+            x += size
+        else:
+            x += r[1]
+    return x
+
+
+def ink_left(text: str, font: QFont) -> float:
+    """Blank space before the first visible pixel of text."""
+    return QFontMetricsF(font).boundingRect(text).left() if text else 0.0
+
+
+ICON_INK = 1.8 / 16 - 0.75 / 16                # stat_icon's blank left edge, as a share of its size (half the pen)
+
+
+def run_ink(runs: list) -> float:
+    """Blank space before the first visible pixel of a line of runs."""
+    for r in runs:
+        if r[0] == "t":
+            return ink_left(r[1][:1], r[2])
+        if r[0] == "i":
+            return r[3] * ICON_INK
+        return 0.0
+    return 0.0
+
+
+def digit_middle(font: QFont) -> float:
+    """How far above the baseline the middle of the digits is (icons are centred there)."""
+    return QFontMetricsF(font).tightBoundingRect("0123456789").height() / 2
+
+
+class FadingStatusBar(QStatusBar):
+    """The status line at the very bottom ("Now Reading...", "Library updated..."): messages fade in, fade out
+    when they're cleared, and one replacing another fades out first, then the new one in (never both at once,
+    nothing slides). showMessage / clearMessage / currentMessage work as usual; only the drawing is ours."""
+    IN_S, OUT_S, SWAP_S = 0.2, 0.3, 0.15    # fade in / fade out when cleared / fade out when replaced
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._disp, self._alpha = "", 0.0       # what's on screen and how visible
+        self._last_tick = time.monotonic()
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.timeout.connect(self._tick)
+        self.messageChanged.connect(self._changed)
+
+    def _changed(self, _text: str) -> None:
+        self._last_tick = time.monotonic()
+        self._timer.start()
+        self.update()
+
+    def _tick(self) -> None:
+        now = time.monotonic()
+        dt, self._last_tick = now - self._last_tick, now
+        target = self.currentMessage()
+        if self._disp != target:
+            if self._disp and self._alpha > 0:  # the old one goes first
+                self._alpha = max(0.0, self._alpha - dt / (self.SWAP_S if target else self.OUT_S))
+            else:
+                self._disp, self._alpha = target, 0.0
+        elif self._disp and self._alpha < 1:
+            self._alpha = min(1.0, self._alpha + dt / self.IN_S)
+        if self._disp == target and (self._alpha >= 1 or not self._disp):
+            self._timer.stop()
+        self.update()
+
+    def paintEvent(self, ev) -> None:
+        p = QPainter(self)
+        opt = QStyleOption()
+        opt.initFrom(self)
+        self.style().drawPrimitive(QStyle.PE_Widget, opt, p, self)      # the band (style sheet background)
+        if self._disp:
+            rect = self.rect().adjusted(6, 0, -6, 0)                     # (where Qt's own status bar puts it)
+            p.setOpacity(ease(self._alpha))
+            runs = self._runs(self._disp)
+            if runs and runs_width(runs) <= rect.width():
+                fm = QFontMetricsF(self.font())
+                base = rect.top() + (rect.height() - fm.height()) / 2 + fm.ascent()
+                draw_runs(p, rect.left(), base, runs, base - digit_middle(self.font()))
+            else:
+                p.setPen(self.palette().color(self.foregroundRole()))
+                p.drawText(rect, Qt.AlignLeading | Qt.AlignVCenter | Qt.TextSingleLine,
+                           self.fontMetrics().elidedText(self._disp, Qt.ElideRight, rect.width()))
+        p.end()
+
+    _TIME = re.compile(r"(\d+)(時間|分|秒|[hms])(?![A-Za-z])")
+
+    def _runs(self, text: str) -> list:
+        """A message with a playtime in it ("Read for 1h 05m."): the time's numbers bright and its units small,
+        like the stats everywhere else; the words as usual. [] = no time in it (drawn as plain text)."""
+        if not self._TIME.search(text):
+            return []
+        plain = self.font()
+        unit = QFont(plain)
+        unit.setPointSizeF((plain.pointSizeF() if plain.pointSizeF() > 0 else 10) * 0.8)
+        muted = self.palette().color(self.foregroundRole()).name()
+        out, at = [], 0
+        for m in self._TIME.finditer(text):
+            if m.start() > at:
+                out.append(("t", text[at:m.start()], plain, muted))
+            out += [("t", m.group(1), plain, COLORS["text"]), ("g", 1), ("t", m.group(2), unit, muted)]
+            at = m.end()
+        if at < len(text):
+            out.append(("t", text[at:], plain, muted))
+        return out
+
+
+# =========================================================================== hover popups
+# Our own, everywhere (instead of Windows' tooltips): shown sooner (TIP_WAKE_MS), fading in and out, following the
+# mouse smoothly at 60 fps while it stays on the thing, only over the thing itself (a widget can narrow its own
+# spot with tip_at), and kept inside the window: below the pointer, or above it when there's no room below.
+TIP_WAKE_MS = 350                   # how long the mouse rests before a popup comes (Windows' own: ~700)
+TIP_IN_S, TIP_OUT_S = 0.12, 0.1
+TIP_FOLLOW = 18                     # how quickly it catches up with the mouse (per second)
+TIP_OFFSET = QPoint(14, 20)         # from the pointer (below-right), or above it when there's no room below
+
+
+class TipTiming(QProxyStyle):
+    """Only the hover-popup delays change (Qt asks the style for them); everything else is the style as it was."""
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None) -> int:
+        if hint == QStyle.SH_ToolTip_WakeUpDelay:
+            return TIP_WAKE_MS
+        if hint == QStyle.SH_ToolTip_FallAsleepDelay:
+            return 1500                   # moving straight on to the next thing: its popup comes at once
+        return super().styleHint(hint, option, widget, returnData)
+
+
+class SmoothTip(QWidget):
+    _one: Optional["SmoothTip"] = None
+
+    @classmethod
+    def instance(cls) -> "SmoothTip":
+        if cls._one is None:
+            cls._one = SmoothTip()
+        return cls._one
+
+    def __init__(self):
+        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowDoesNotAcceptFocus
+                         | Qt.WindowTransparentForInput | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setObjectName("smooth_tip")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        self.label = QLabel(objectName="smooth_tip_text")
+        self.label.setTextFormat(Qt.AutoText)
+        lay.addWidget(self.label)
+        self._owner: Optional[QWidget] = None
+        self._zone = QRect()                # where the mouse must stay (global)
+        self._pos = QPointF()
+        self._alpha, self._leaving = 0.0, False
+        self._last = time.monotonic()
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.timeout.connect(self._tick)
+
+    def show_for(self, owner: QWidget, text: str, zone: QRect) -> None:
+        """zone: in owner's coordinates."""
+        first = not self.isVisible() or self._leaving or self._owner is not owner
+        self._owner = owner
+        self._zone = QRect(owner.mapToGlobal(zone.topLeft()), zone.size())
+        if self.label.text() != text:
+            self.label.setText(text)
+            self.adjustSize()
+        if first:
+            self._pos = QPointF(self._target())   # starts right there, then follows
+            self.move(self._pos.toPoint())
+        self._leaving = False
+        if not self.isVisible():
+            self._alpha = 0.0
+            self.setWindowOpacity(0.0)
+            self.show()
+        self.raise_()
+        self._last = time.monotonic()
+        self._timer.start()
+
+    def leave(self) -> None:
+        if self.isVisible():
+            self._leaving = True
+            self._last = time.monotonic()
+            self._timer.start()
+
+    def _room(self) -> QRect:
+        """Where it may go: the window the thing is in (on its screen)."""
+        win = self._owner.window() if self._owner is not None else None
+        screen = (win.screen() if win is not None else None) or QApplication.primaryScreen()
+        room = screen.availableGeometry()
+        if win is not None and win.isVisible():
+            room = room.intersected(QRect(win.mapToGlobal(QPoint(0, 0)), win.size()))
+        return room
+
+    def _target(self) -> QPoint:
+        c = QCursor.pos()
+        room = self._room()
+        w, h = self.width(), self.height()
+        x = c.x() + TIP_OFFSET.x()
+        y = c.y() + TIP_OFFSET.y()
+        if y + h > room.bottom() - 4:                 # no room below: above the pointer instead
+            y = c.y() - h - 8
+        x = max(room.left() + 4, min(x, room.right() - 4 - w))
+        y = max(room.top() + 4, min(y, room.bottom() - 4 - h))
+        return QPoint(x, y)
+
+    def _tick(self) -> None:
+        now = time.monotonic()
+        dt, self._last = min(0.1, now - self._last), now
+        owner = self._owner
+        gone = owner is None or not shiboken6.isValid(owner) or not owner.isVisible() \
+            or not owner.window().isActiveWindow() and not owner.window().underMouse()
+        if not self._leaving and (gone or not self._zone.contains(QCursor.pos())):
+            self._leaving = True                         # the mouse left the thing: fade away
+        if self._leaving:
+            self._alpha = max(0.0, self._alpha - dt / TIP_OUT_S)
+            if self._alpha == 0.0:
+                self._timer.stop()
+                self.hide()
+                self._owner = None
+                return
+        else:
+            self._alpha = min(1.0, self._alpha + dt / TIP_IN_S)
+            t = QPointF(self._target())
+            k = min(1.0, dt * TIP_FOLLOW)
+            self._pos += (t - self._pos) * k
+            self.move(self._pos.toPoint())
+        self.setWindowOpacity(ease(self._alpha))
+
+
+class TipManager(QObject):
+    """App-wide: every hover popup goes through SmoothTip. A widget may say exactly where its popup applies with
+    tip_at(pos) -> (text, zone in its coordinates); otherwise its toolTip() over the whole widget."""
+
+    def eventFilter(self, obj, ev) -> bool:
+        t = ev.type()
+        if t == QEvent.ToolTip and isinstance(obj, QWidget) and not isinstance(obj, SmoothTip):
+            text, zone = obj.tip_at(ev.pos()) if hasattr(obj, "tip_at") else (obj.toolTip(), obj.rect())
+            if text:
+                SmoothTip.instance().show_for(obj, text, zone)
+                return True
+            if hasattr(obj, "tip_at"):
+                SmoothTip.instance().leave()
+                return True                              # (not over its text: no popup, not even the parent's)
+            return False                                 # (Qt passes it on to the parent, as usual)
+        if t in (QEvent.MouseButtonPress, QEvent.Wheel, QEvent.KeyPress, QEvent.ApplicationDeactivate) \
+                and SmoothTip._one is not None and SmoothTip._one.isVisible():
+            SmoothTip._one.leave()
+        return False
+
+
+_TIP_MANAGER: Optional[TipManager] = None
+
+
+def install_smooth_tips(app: QApplication) -> None:
+    global _TIP_MANAGER
+    if _TIP_MANAGER is None:
+        app.setStyle(TipTiming(app.style().name()))
+        _TIP_MANAGER = TipManager(app)
+        app.installEventFilter(_TIP_MANAGER)
+
+
+class BarFader(QWidget):
+    """The bottom bar's one cross-fade (owner: no blink, no pieces on their own timers, nothing sliding): when what
+    the bar shows changes, a picture of how it looked just before lies on top and fades away while the new look is
+    already there underneath - old and new blend as one image. Driven by the window's animation clock
+    (MainWindow._tick -> step); clicks pass through it."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._pm: Optional[QPixmap] = None
+        self._t0 = 0.0
+        self.alpha = 0.0
+        self.hide()
+
+    @property
+    def active(self) -> bool:
+        return self._pm is not None
+
+    def start(self, pm: QPixmap) -> None:
+        self._pm, self._t0, self.alpha = pm, time.monotonic(), 1.0
+        self.setGeometry(self.parentWidget().rect())
+        self.show()
+        self.raise_()
+        self.update()
+
+    def step(self) -> None:
+        if self._pm is None:
+            return
+        t = (time.monotonic() - self._t0) / BAR_XFADE_S
+        if t >= 1.0:
+            self._pm, self.alpha = None, 0.0
+            self.hide()
+            return
+        self.alpha = 1.0 - ease(t)
+        self.update()
+
+    def paintEvent(self, ev) -> None:
+        if self._pm is None:
+            return
+        p = QPainter(self)
+        p.setOpacity(self.alpha)
+        p.drawPixmap(0, 0, self._pm)
+        p.end()
+
+
+class ClickAway(QObject):
+    """While installed on the application: a mouse press anywhere but on `widget` calls `done` (renaming in
+    the bottom bar: clicking elsewhere saves what was typed, even where the click wouldn't take the focus)."""
+
+    def __init__(self, widget: QWidget, done: Callable[[], None]):
+        super().__init__(widget)
+        self.widget, self.done = widget, done
+
+    def eventFilter(self, obj, ev) -> bool:
+        # (widgets only: a press also passes through the window itself first, which isn't "elsewhere")
+        if ev.type() == QEvent.MouseButtonPress and isinstance(obj, QWidget)                 and obj is not self.widget and not self.widget.isAncestorOf(obj):
+            self.done()
+        return False
+
+
+class ElidedLabel(QLabel):
+    """One line of plain text that ends in "..." when it doesn't fit (instead of being cut off mid-letter);
+    pointing at it then shows the whole text. clicked: a left click (the bottom bar renames from it)."""
+    clicked = Signal()
+    clickable = False                       # set by the bar: the name can be renamed (text cursor over it)
+
+    def _over_text(self, x: float) -> bool:
+        r = self.contentsRect()
+        return bool(self.text()) and r.left() <= x <= r.left() + self.fontMetrics().horizontalAdvance(self._shown()) + 4
+
+    def mouseMoveEvent(self, ev) -> None:
+        over = self.clickable and self._over_text(ev.position().x())
+        self.setCursor(Qt.IBeamCursor if over else Qt.ArrowCursor)
+        super().mouseMoveEvent(ev)
+
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.LeftButton and self.clickable and self._over_text(ev.position().x()):
+            self.clicked.emit()
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self._tip()
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        self._tip()
+
+    def _shown(self) -> str:
+        return self.fontMetrics().elidedText(self.text(), Qt.ElideRight, max(0, self.contentsRect().width()))
+
+    def _tip(self) -> None:
+        self.setToolTip(self.text() if self.text() and self._shown() != self.text() else "")
+
+    def tip_at(self, pos: QPoint) -> tuple[str, QRect]:
+        """The whole name, only over the shortened name itself (the label spans the whole bar)."""
+        r = self.contentsRect()
+        w = self.fontMetrics().horizontalAdvance(self._shown())
+        zone = QRect(r.left(), r.top(), w + 2, r.height())
+        return (self.toolTip(), zone) if self.toolTip() and zone.contains(pos) else ("", QRect())
+
+    blank = False                           # (the rename box floats over it: draw nothing, keep the space)
+
+    def paintEvent(self, ev) -> None:
+        if self.blank:
+            return
+        p = QPainter(self)
+        self.style().drawItemText(p, self.contentsRect(), int(self.alignment()), self.palette(), self.isEnabled(),
+                                  self._shown(), self.foregroundRole())
+        p.end()
+
+
+class SyncStatus(QWidget):
+    """Bottom bar: the sync light's dot + its status ("● Synced"), or a folder's game count. Changes land at once:
+    the bar's one cross-fade (BarFader) blends the old look into the new."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # as wide as its words (never more), but it may be squeezed on a very narrow window
+        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        self.setMinimumWidth(1)
+        self._shown = (None, "", False)         # (light colour key or None, words, muted)
+        self._w = 0.0
+
+    def text(self) -> str:
+        return self._shown[1]
+
+    def tip_at(self, pos: QPoint) -> tuple[str, QRect]:
+        """Its explanation, only over the light and its words (TipManager)."""
+        zone = QRect(0, 0, math.ceil(min(self._w, self.width())), self.height())
+        return (self.toolTip(), zone) if self.toolTip() and zone.contains(pos) else ("", QRect())
+
+    def _natural(self, state) -> float:
+        key, words, _ = state
+        fm = QFontMetricsF(self.font())
+        return (fm.horizontalAdvance("● ") if key else 0) + fm.horizontalAdvance(words) + 2 if words else 0.0
+
+    def set_status(self, key: Optional[str], words: str, muted: bool = False) -> None:
+        want = (key, words, muted)
+        if want == self._shown:
+            return
+        self._shown = want
+        self._w = self._natural(want)
+        self.updateGeometry()
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(math.ceil(self._w), math.ceil(QFontMetricsF(self.font()).height()))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(1, self.sizeHint().height())
+
+    def changeEvent(self, ev) -> None:
+        super().changeEvent(ev)
+        if ev.type() in (QEvent.FontChange, QEvent.StyleChange):   # (language / font: the size follows at once)
+            self._w = self._natural(self._shown)
+            self.updateGeometry()
+
+    def paintEvent(self, ev) -> None:
+        key, words, muted = self._shown
+        if not words:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.setRenderHint(QPainter.Antialiasing)
+        f = self.font()
+        fm = QFontMetricsF(f)
+        p.setFont(f)
+        base = (self.height() - fm.height()) / 2 + fm.ascent()      # (as a label centres it: level with the stats)
+        x = 0.0
+        if key:
+            p.setPen(QColor(LIGHTS[key]))
+            p.drawText(QPointF(x, base), "●")
+            x += fm.horizontalAdvance("● ")
+        p.setPen(QColor(COLORS["muted" if muted else "text"]))
+        room = self.width() - x
+        p.drawText(QPointF(x, base), fm.elidedText(words, Qt.ElideRight, max(0, int(room))))
+        p.end()
+
+
+class StatsLine(QWidget):
+    """Bottom bar: "[clock] 12h 05m   [calendar] 3 Days Ago" on the sync line, right after the sync status, in the
+    same style as the cover hover (owner's pick of four layouts). Groups that don't fit are left off the end (the
+    date first). Pointing at the time shows it per device; pointing at the day shows the date itself.
+    Changes land at once (the bar's one cross-fade, BarFader, blends old and new); after a reading session the
+    time counts up from the old total while the clock's hand sweeps once round."""
+    LEAD = 16                               # after the sync status
+    COUNT_S = 0.8                           # count-up after a session
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        # takes what's left of the line: the sync status always comes first
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.seconds, self.last = 0.0, 0.0
+        self.per_device: list[tuple[str, float]] = []
+        self._spans: list = []                  # (x from, x to, tooltip) per drawn group
+        self._key = None                        # whose values these are (game / folder id)
+        self._count: Optional[tuple] = None     # (from seconds, since) while counting up
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.timeout.connect(self._tick)
+
+    def set_values(self, seconds: float, last: float, per_device: list[tuple[str, float]], key=None) -> None:
+        if key != self._key:
+            self._count = None                  # (a count-up belongs to the game it started on)
+            self._key = key
+        self.seconds, self.last, self.per_device = seconds, last, per_device
+        self.updateGeometry()
+        self.update()
+
+    def set_shown(self, on: bool) -> None:
+        """The whole line goes while a game runs and comes back after."""
+        self.setVisible(on)
+
+    def count_up(self, from_seconds: float) -> None:
+        """Time read rolls up from from_seconds to the current total (after a reading session)."""
+        if 0 <= from_seconds < self.seconds:
+            self._count = (from_seconds, time.monotonic())
+            self._timer.start()
+            self.update()
+
+    def _tick(self) -> None:
+        if self._count and time.monotonic() - self._count[1] >= self.COUNT_S:
+            self._count = None
+        if not self._count:
+            self._timer.stop()
+        self.update()
+
+    def _fonts(self) -> tuple[QFont, QFont]:
+        num = ui_font()                         # the sync line's size (the style sheet's 10 pt)
+        unit = ui_font()
+        unit.setPointSizeF(8)
+        return num, unit
+
+    def _groups(self, seconds: float, last: float, sweep: float = 0.0) -> list[tuple[list, str]]:
+        """(runs, tooltip) per group. sweep: the clock hand's extra turn, in degrees (count-up)."""
+        num, unit = self._fonts()
+        text, muted = COLORS["text"], COLORS["muted"]
+        icon = round(digit_middle(num) * 2 * 1.4)
+        tip = "<br>".join(f'{html.escape(n)}&nbsp;&nbsp;&nbsp;<b>{html.escape(i18n.playtime(s))}</b>'
+                          for n, s in self.per_device if s)
+        clock = ("i", "clock", text, icon, sweep) if sweep else ("i", "clock", text, icon)
+        groups = [([clock, ("g", 5)] + time_runs(seconds, num, unit, text, muted), tip) if seconds
+                  else ([("t", tr("card.never"), num, text)], "")]
+        if last:
+            groups.append(([("i", "calendar", text, icon), ("g", 5), ("t", i18n.ago(last), num, text)],
+                           i18n.date(last)))
+        return groups
+
+    def _fitting(self, groups: list) -> list:
+        """The groups that fit this width, from the start (the date goes first)."""
+        out, x = [], float(self.LEAD)
+        for runs, tip in groups:
+            w = runs_width(runs)
+            if x + w > self.width():
+                break
+            out.append((runs, tip))
+            x += w + STAT_GROUP_GAP
+        return out
+
+    def sizeHint(self) -> QSize:
+        groups = self._groups(self.seconds, self.last)
+        w = self.LEAD + sum(runs_width(r) for r, _ in groups) + STAT_GROUP_GAP * (len(groups) - 1)
+        return QSize(math.ceil(w), math.ceil(QFontMetricsF(self._fonts()[0]).height()))
+
+    def paintEvent(self, ev) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        num, _ = self._fonts()
+        fm = QFontMetricsF(num)
+        now = time.monotonic()
+        shown, last, sweep = self.seconds, self.last, 0.0
+        if self._count:
+            t = min(1.0, (now - self._count[1]) / self.COUNT_S)
+            k = 1 - (1 - t) ** 3                # quick start, gentle stop
+            shown = self._count[0] + (self.seconds - self._count[0]) * k
+            sweep = 360 * k
+        # same baseline as the sync status beside it (a label of the same font, centred the same way)
+        base = (self.height() - fm.height()) / 2 + fm.ascent()
+        x = float(self.LEAD)
+        self._spans = []
+        for runs, tip in self._fitting(self._groups(shown, last, sweep)):
+            end = draw_runs(p, x, base, runs, base - digit_middle(num))
+            self._spans.append((x, end, tip))
+            x = end + STAT_GROUP_GAP
+        p.end()
+
+    def tip_at(self, pos: QPoint) -> tuple[str, QRect]:
+        """Over the time: per device; over the day: the date - only right over them (TipManager)."""
+        for a, b, tip in self._spans:
+            if a <= pos.x() <= b and tip:
+                return tip, QRect(math.floor(a), 0, math.ceil(b - a) + 1, self.height())
+        return "", QRect()
+
+
+STAT_GROUP_GAP = 12                        # between "[clock] 12h 05m" and "[calendar] 3 Days Ago" on a cover
+STAT_TITLE_LIFT = 3                        # the hover title sits this much higher above a stats line
+
+
+def cover_stat_groups(font: QFont, seconds: float, last: float, count: str = "") -> list:
+    """The hover line of a cover (or folder: count + total time): groups of runs, light on the dark fade."""
+    num = QFont(font)
+    num.setWeight(QFont.Medium)
+    unit = QFont(font)
+    unit.setPointSizeF((font.pointSizeF() if font.pointSizeF() > 0 else 10) * 0.8)
+    plain = QFont(font)
+    text, soft = DARK["text"], DARK["focus"]
+    icon = round(digit_middle(num) * 2 * 1.4)
+    groups = []
+    if count:                                   # "4 Games": the number bright, the word softer
+        m = re.match(r"(\d+)(.*)", count)
+        groups.append([("t", m.group(1), num, text), ("t", m.group(2), plain, soft)] if m else [("t", count, plain, soft)])
+    if seconds:
+        groups.append([("i", "clock", text, icon), ("g", 5)] + time_runs(seconds, num, unit, text, soft))
+    elif not count:
+        groups.append([("t", tr("card.never"), num, text)])
+    if last:
+        groups.append([("i", "calendar", text, icon), ("g", 5), ("t", i18n.ago(last), num, text)])
+    return groups
+
+
 class CardDelegate(QStyledItemDelegate):
     def __init__(self, window: "MainWindow"):
         super().__init__(window)
@@ -1342,7 +2121,7 @@ class CardDelegate(QStyledItemDelegate):
         self.shadow = make_shadow(COVER_W, COVER_H)
         self._tiles: dict = {}             # rumbling (easter egg): each tile drawn upright once, then only turned
         self._skip_light = False           # (the lights stay live on top, so they keep breathing)
-        self._light_fx: dict = {}          # game id -> (old colour, new colour, since): lights cross-fading
+        self._light_fx: dict = {}          # game id -> (old look, new look, since): lights cross-fading
 
     def sizeHint(self, option, index) -> QSize:
         return QSize(round(GRID["cover_w"]) + 2 * CARD_PAD_X, round(GRID["cover_h"]) + CARD_PAD_TOP + CARD_PAD_BOTTOM)
@@ -1372,8 +2151,9 @@ class CardDelegate(QStyledItemDelegate):
             p.drawPixmap(sh, self.shadow, QRectF(self.shadow.rect()))
             p.setOpacity(1.0)
 
-    def _overlay(self, p: QPainter, option, cover: QRectF, e: float, title: str, line: str) -> None:
-        """Title + a small line fading in at the bottom on hover (always light: it sits on a dark fade)."""
+    def _overlay(self, p: QPainter, option, cover: QRectF, e: float, title: str, line) -> None:
+        """Title + a small line fading in at the bottom on hover (always light: it sits on a dark fade).
+        line: plain text, or groups of runs (cover_stat_groups); groups that don't fit are left off the end."""
         # a pixel past the edges on purpose: when the cover grows on hover its edges fall between pixels,
         # and an exact-size fade would leave a thin line of the cover showing (the rounded clip trims it)
         band = QRectF(cover.x() - 1, cover.bottom() - cover.height() * 0.42, cover.width() + 2, cover.height() * 0.42 + 1)
@@ -1386,7 +2166,17 @@ class CardDelegate(QStyledItemDelegate):
         f = QFont(option.font)
         fm_small = QFontMetrics(f)
         y = cover.bottom() - 12
-        if line:
+        if line and not isinstance(line, str):
+            groups = list(line)
+            room = cover.width() - 12 - 24      # (it sits beside the light, not over it: a bit wider than the title)
+            while len(groups) > 1 and sum(runs_width(g) for g in groups) + STAT_GROUP_GAP * (len(groups) - 1) > room:
+                groups.pop()                     # a narrow cover: the date goes first
+            base = y - fm_small.height() + fm_small.ascent()
+            # start where the title's first letter visibly starts (icons and letters carry a little blank edge)
+            x = cover.x() + 12 + self._title_ink(option, title, text_w) - run_ink(groups[0])
+            for g in groups:
+                x = draw_runs(p, x, base, g, base - digit_middle(f)) + STAT_GROUP_GAP
+        elif line:
             p.setPen(QColor(DARK["muted"]))
             p.setFont(f)
             p.drawText(QRectF(cover.x() + 12, y - fm_small.height(), text_w, fm_small.height()),
@@ -1401,10 +2191,22 @@ class CardDelegate(QStyledItemDelegate):
             p.setFont(ft)
             p.setPen(QColor(DARK["text"]))
             top = y - fm_small.height() - 4 - fm.height() * len(lines)
+            if line and not isinstance(line, str):
+                top -= STAT_TITLE_LIFT           # (stats line: a touch more room; statistics hidden: as before)
             for i, l in enumerate(lines):
                 p.drawText(QRectF(cover.x() + 12, top + i * fm.height(), text_w, fm.height()),
                            Qt.AlignLeft | Qt.AlignVCenter | Qt.TextDontClip, l)
         p.setOpacity(1.0)
+
+    @staticmethod
+    def _title_ink(option, title: str, width: float) -> float:
+        """How far right of its box the title's first letter visibly starts (0 without a title)."""
+        if not title:
+            return 0.0
+        ft = QFont(option.font)
+        ft.setPointSize(11)
+        ft, lines = fit_title(title, ft, width, 2)
+        return ink_left(lines[0][:1], ft) if lines and lines[0] else 0.0
 
     def _ring(self, p: QPainter, cover: QRectF) -> None:
         # the ring overlaps the cover's edge by half a pixel (same corner centre as the cover's
@@ -1509,7 +2311,9 @@ class CardDelegate(QStyledItemDelegate):
             if e > 0.01:
                 n = len(games)
                 count = tr("folder.count_one") if n == 1 else tr("folder.count_many", n=n)
-                self._overlay(q, option, rect, e, self.w.folder_name(fid), count)
+                total = sum(g.total_playtime for g in games)
+                line = cover_stat_groups(option.font, total, 0, count) if self.w.settings.show_stats else count
+                self._overlay(q, option, rect, e, self.w.folder_name(fid), line)
 
         self._clipped(p, cover, e, draw)
         if option.state & QStyle.State_Selected:
@@ -1630,13 +2434,12 @@ class CardDelegate(QStyledItemDelegate):
                 q.drawPixmap(rect, ph, QRectF(ph.rect()))
             # hover overlay: title + playtime fade in at the bottom (Steam style)
             if e > 0.01:
-                play_line = i18n.playtime(game.total_playtime) if game.total_playtime else tr("card.never")
-                if not self.w.settings.show_stats:
-                    play_line = ""                      # statistics hidden: the reading status only
-                if game.status:
-                    play_line += ("  ·  " if play_line else "") + tr(f"status.{game.status}")
                 if self.w.quiet(gid):
                     play_line = ""
+                elif self.w.settings.show_stats:            # time read + last read (the bookmark shows the status)
+                    play_line = cover_stat_groups(option.font, game.total_playtime, game.last_played)
+                else:                                       # statistics hidden: the reading status only
+                    play_line = tr(f"status.{game.status}") if game.status else ""
                 # placeholders already show the title in the middle
                 self._overlay(q, option, rect, e, game.title if pm else "", play_line)
 
@@ -1672,23 +2475,25 @@ class CardDelegate(QStyledItemDelegate):
         return wrap_title(text, fm, width, max_lines)
 
     def _paint_light(self, p: QPainter, c: QPointF, state: str, gid: str = "") -> None:
-        """A game's light. When its colour changes (blue while syncing -> green when done) it cross-fades
-        instead of switching (while the lights pulse: then they're redrawn every frame anyway)."""
+        """A game's light. When its look changes - colour (blue while syncing -> green when done) or pulse
+        (quick while starting -> calm once reading: the halo would jump mid-breath) - it cross-fades instead
+        of switching (while the lights pulse: then they're redrawn every frame anyway)."""
         colour_key, pulse, _ = STATE_LOOK.get(state, STATE_LOOK["checking"])
         on = self.w.settings.pulse
         if gid and on:
             now = time.monotonic()
-            old, new, t0 = self._light_fx.get(gid, (colour_key, colour_key, 0.0))
-            if new != colour_key:
-                old, new, t0 = new, colour_key, now
+            look = (colour_key, pulse)
+            old, new, t0 = self._light_fx.get(gid, (look, look, 0.0))
+            if new != look:
+                old, new, t0 = new, look, now
             self._light_fx[gid] = (old, new, t0)
             a = (now - t0) / LIGHT_FADE_S
             if old != new and a < 1:
                 a = ease(a)
-                paint_light(p, c, old, pulse, on, halo=1 - a)     # the old colour underneath...
+                paint_light(p, c, old[0], old[1], on, halo=1 - a)  # the old look underneath...
                 p.save()
                 p.setOpacity(a)                                    # ...the new one coming up over it
-                paint_light(p, c, new, pulse, on)
+                paint_light(p, c, new[0], new[1], on)
                 p.restore()
                 return
         paint_light(p, c, colour_key, pulse, on)
@@ -1908,6 +2713,42 @@ class CropView(QWidget):
             self.set_zoom(self.zoom * (1.1 if ev.angleDelta().y() > 0 else 1 / 1.1))
 
 
+# =========================================================================== file pickers
+# Every Browse opens where its box points (the nearest folder that exists, when the path doesn't yet), or - with
+# nothing filled in - in This PC, never in whatever folder Windows remembers from the last Browse. Save-folder
+# pickers with an empty box open the game's own folder instead (owner's choice: saves are often near the game).
+THIS_PC = "clsid:0AC0837C-BBF8-452A-850D-79D08E667CA7"     # FOLDERID_ComputerFolder (Qt understands clsid: URLs)
+
+
+def browse_start(path: str = "", fallback: str = "") -> QUrl:
+    for p in ((path or "").strip().strip('"'), (fallback or "").strip().strip('"')):
+        if not p:
+            continue
+        q = Path(p)
+        if q.is_absolute():
+            if q.is_file():
+                return QUrl.fromLocalFile(str(q))           # opens its folder with the file selected
+            for d in (q, *q.parents):
+                if d.is_dir():
+                    return QUrl.fromLocalFile(str(d))
+    return QUrl(THIS_PC) if sys.platform == "win32" else QUrl.fromLocalFile(str(Path.home()))
+
+
+def pick_folder(parent, caption: str, path: str = "", fallback: str = "") -> str:
+    url = QFileDialog.getExistingDirectoryUrl(parent, caption, browse_start(path, fallback), supportedSchemes=["file"])
+    return str(Path(url.toLocalFile())) if url.isValid() and url.toLocalFile() else ""
+
+
+def pick_file(parent, caption: str, path: str = "", filter: str = "") -> str:
+    url, _ = QFileDialog.getOpenFileUrl(parent, caption, browse_start(path), filter, supportedSchemes=["file"])
+    return url.toLocalFile() if url.isValid() else ""
+
+
+def pick_files(parent, caption: str, filter: str = "") -> list[str]:
+    urls, _ = QFileDialog.getOpenFileUrls(parent, caption, browse_start(), filter, supportedSchemes=["file"])
+    return [u.toLocalFile() for u in urls if u.isValid() and u.toLocalFile()]
+
+
 # =========================================================================== small widgets
 def browse_row(edit: QLineEdit, on_browse, label: str) -> QHBoxLayout:
     row = QHBoxLayout()
@@ -2054,9 +2895,51 @@ class ThemedCombo(QComboBox):
         self._slide_timer.setTimerType(Qt.PreciseTimer)
         self._slide_timer.setInterval(0)                                # paced by time, like the other animations
         self._slide_timer.timeout.connect(self._slide)
+        self._watched: Optional[QWidget] = None
 
     def _box(self) -> QWidget:
         return self.view().parentWidget()          # Qt's frame round the list: the pop-up window itself
+
+    # -- the arrow points the way the list will open (up when there isn't room for it below on the screen)
+    def _opens_up(self) -> bool:
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None or not self.isVisible():
+            return False
+        room = screen.availableGeometry()
+        top = self.mapToGlobal(QPoint(0, 0)).y()
+        bottom = top + self.height()
+        rows = min(self.count(), self.maxVisibleItems())
+        need = sum(self.view().sizeHintForRow(i) for i in range(rows)) + 8     # (+ the list's frame)
+        return bottom + need > room.bottom() and top - need >= room.top()
+
+    def _update_arrow(self) -> None:
+        up = self._opens_up()
+        if bool(self.property("opens_up")) != up:
+            self.setProperty("opens_up", up)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
+
+    def showEvent(self, ev) -> None:
+        super().showEvent(ev)
+        win = self.window()
+        if win is not self._watched:               # (moving / resizing the window changes the room below)
+            if self._watched is not None:
+                self._watched.removeEventFilter(self)
+            win.installEventFilter(self)
+            self._watched = win
+        QTimer.singleShot(0, self._update_arrow)
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        self._update_arrow()
+
+    def eventFilter(self, obj, ev) -> bool:
+        # (Qt may call this while the drop-down is still being built: nothing to watch yet then)
+        if obj is getattr(self, "_watched", None) and ev.type() in (QEvent.Move, QEvent.Resize, QEvent.Show,
+                                                                     QEvent.ScreenChangeInternal):
+            QTimer.singleShot(0, self._update_arrow)
+        return False
 
     def showPopup(self) -> None:
         box = self._box()
@@ -2071,6 +2954,10 @@ class ThemedCombo(QComboBox):
         self.view().viewport().repaint()
         box.repaint()
         self._down = box.mapToGlobal(QPoint(0, 0)).y() >= self.mapToGlobal(QPoint(0, 0)).y()
+        if bool(self.property("opens_up")) == self._down:     # (the guess was off: the arrow follows the real way)
+            self.setProperty("opens_up", not self._down)
+            self.style().unpolish(self)
+            self.style().polish(self)
         self._t0 = self._last = time.monotonic()
         self._slide()
         self._slide_timer.start()
@@ -2247,8 +3134,13 @@ class EscWatcher(QObject):
 
 class PulseButton(QPushButton):
     """The Read / Stop button: while the mouse is over it (and it can be pressed) it swells and settles
-    slowly, like breathing. A 3 px margin round the button leaves room to grow without being cut off."""
+    slowly, like breathing. A 3 px margin round the button leaves room to grow without being cut off.
+    Drawn here (not by the style): its colour eases (greyed <-> ready <-> hover). A new label lands at once -
+    the bar's one cross-fade (BarFader) blends the old label into the new."""
     PULSE, PERIOD = 0.03, 1.6           # grows up to 3 %, one beat every 1.6 s
+    MARGINS = (3, 4, 3, 2)              # left, top, right, bottom: as the style sheet's margin (centred on the band)
+    RADIUS = 10
+    COLOUR_RATE = 14                    # colours ease (per second; ~0.2 s)
 
     def __init__(self, **kw):
         super().__init__(**kw)
@@ -2256,62 +3148,133 @@ class PulseButton(QPushButton):
         self._scale = 1.0
         self._since = 0.0
         self._t = time.monotonic()
+        self._bg: Optional[QColor] = None
+        self._fg: Optional[QColor] = None
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.PreciseTimer)                   # even frames (see EasterEgg._rumble)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
+        self.on_width: Optional[Callable[[], None]] = None   # its label / font changed (the bar keeps it in place)
+
+    def _width_changed(self) -> None:
+        if self.on_width is not None:
+            self.on_width()
+        self.updateGeometry()
+
+    slot_labels: tuple = ()             # every label it can show (Read / Stop / Open): its space fits the longest
+
+    def sizeHint(self) -> QSize:
+        natural = super().sizeHint()
+        w = max([natural.width()] + [self.width_for(t) for t in self.slot_labels])
+        return QSize(w, natural.height())
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def width_for(self, text: str) -> int:
+        """The button's natural width with this label (as sizeHint would be)."""
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        opt.text = text
+        fm = self.fontMetrics()
+        return self.style().sizeFromContents(QStyle.CT_PushButton, opt,
+                                             QSize(fm.horizontalAdvance(text), fm.height()), self).width()
+
+    # -- what it should look like right now
+    def _targets(self) -> tuple[QColor, QColor]:
+        if not self.isEnabled():
+            return QColor(COLORS["play_disabled"]), QColor(COLORS["play_disabled_text"])
+        return QColor(COLORS["play_hover" if self._hover else "play"]), QColor(COLORS["play_text"])
+
+    def _natural_width(self) -> int:
+        return super().sizeHint().width()
+
+    def setText(self, text: str) -> None:
+        if text == self.text():
+            return
+        super().setText(text)
+        self._width_changed()
+        self.update()
 
     def _pulsing(self) -> bool:
         return self._hover and self.isEnabled()
 
+    def _kick(self) -> None:
+        self._t = time.monotonic()
+        self._timer.start()
+
     def enterEvent(self, ev) -> None:
         super().enterEvent(ev)
         self._hover = True
-        self._since = self._t = time.monotonic()
-        self._timer.start()
+        self._since = time.monotonic()
+        self._kick()
 
     def leaveEvent(self, ev) -> None:
         super().leaveEvent(ev)
         self._hover = False
-        self._timer.start()
+        self._kick()
 
     def changeEvent(self, ev) -> None:
         super().changeEvent(ev)
-        if ev.type() == QEvent.EnabledChange:
+        if ev.type() in (QEvent.EnabledChange, QEvent.StyleChange, QEvent.FontChange):
             self._since = time.monotonic()
-            self._timer.start()
+            if ev.type() != QEvent.EnabledChange:   # (theme / language font: the size follows at once)
+                self._width_changed()
+            self._kick()
 
     def _step(self) -> None:
         now = time.monotonic()
         dt, self._t = min(0.1, now - self._t), now
+        busy = False
+        # breathing while hovered
         if self._pulsing():
             t = now - self._since
             self._scale = 1 + self.PULSE * (1 - math.cos(2 * math.pi * t / self.PERIOD)) / 2
+            busy = True
         else:
             self._scale += (1.0 - self._scale) * min(1.0, dt * 16)    # settle back (~0.2 s, at any frame rate)
             if abs(self._scale - 1.0) < 0.001:
                 self._scale = 1.0
-                self._timer.stop()
+            else:
+                busy = True
+        # colours ease towards greyed / ready / hover
+        bg, fg = self._targets()
+        k = min(1.0, dt * self.COLOUR_RATE)
+        for name, want in (("_bg", bg), ("_fg", fg)):
+            cur = getattr(self, name) or want
+            mixed = QColor.fromRgbF(*(a + (b - a) * k for a, b in zip(cur.getRgbF(), want.getRgbF())))
+            close = all(abs(a - b) < 0.004 for a, b in zip(mixed.getRgbF(), want.getRgbF()))
+            setattr(self, name, want if close else mixed)
+            busy = busy or not close
+        if not busy:
+            self._timer.stop()
         self.update()
 
     def paintEvent(self, ev) -> None:
-        if self._scale == 1.0:
-            super().paintEvent(ev)
-            return
-        # only the button itself grows; its text stays exactly where it is (scaled text shimmers)
+        if self._bg is None:
+            self._bg, self._fg = self._targets()
+        elif (self._bg, self._fg) != self._targets() and not self._timer.isActive():
+            self._kick()                               # (e.g. the theme changed: ease to the new colours)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
-        opt = QStyleOptionButton()
-        self.initStyleOption(opt)
-        c = QRectF(self.rect()).center()
-        p.save()
-        p.translate(c)
-        p.scale(self._scale, self._scale)
-        p.translate(-c)
-        self.style().drawControl(QStyle.CE_PushButtonBevel, opt, p, self)
-        p.restore()
-        self.style().drawControl(QStyle.CE_PushButtonLabel, opt, p, self)
+        l, t, r, b = self.MARGINS
+        # the visible button, as wide as its label needs, centred in the space kept for the longest label: a new
+        # label grows / shrinks it equally both ways and nothing beside it moves (the bar's cross-fade lines up)
+        n = self._natural_width()
+        x = math.floor((self.width() - n) / 2)
+        box = QRectF(x + l, t, n - l - r, self.height() - t - b)
+        # only the button itself grows; its label stays exactly where it is (scaled text shimmers)
+        c = box.center()
+        grown = QRectF(c.x() - box.width() * self._scale / 2, c.y() - box.height() * self._scale / 2,
+                       box.width() * self._scale, box.height() * self._scale)
+        p.setPen(Qt.NoPen)
+        p.setBrush(self._bg)
+        p.drawRoundedRect(grown, self.RADIUS * self._scale, self.RADIUS * self._scale)
+        if self.text():
+            p.setPen(self._fg)
+            p.setFont(self.font())
+            p.drawText(box, Qt.AlignCenter, self.text())
         p.end()
 
 
@@ -3145,7 +4108,7 @@ class FontDialog(QDialog):
 
     @guarded
     def _add(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, tr("font.pick"), "", tr("font.files"))
+        path = pick_file(self, tr("font.pick"), "", tr("font.files"))
         if not path:
             return
         fam = add_user_font(path)
@@ -3394,7 +4357,7 @@ class BackgroundDialog(QDialog):
         self._changed()
 
     def _choose(self) -> None:
-        f, _ = QFileDialog.getOpenFileName(self, tr("bg.choose"), "", tr("file.images"))
+        f = pick_file(self, tr("bg.choose"), "", tr("file.images"))
         if not f:
             return
         if QImage(f).isNull():
@@ -3440,15 +4403,33 @@ class FitsScreen:
         room = self._screen_room(self)
         frame = self.frameGeometry().height() - self.geometry().height() if self.isVisible() else 32
         self._most = room.height() - max(frame, 32) - 8
+        cap = self._height_cap()
+        if cap:
+            self._most = min(self._most, cap - frame)     # (the real title bar: the heights match exactly)
         self._set_fit_height(width, min(content + buttons, self._most))
         # the estimate above can be a few pixels short (wrapped hints): then a scroll bar with nothing to
         # scroll appeared. Once laid out, grow by whatever is left over, as far as the screen allows.
         self._top_ups = 3
         QTimer.singleShot(0, self._top_up)
 
+    def _height_cap(self) -> int:
+        """Tallest the whole window (frame included) may open; 0 = only the screen limits it."""
+        return 0
+
+    def _align_with(self) -> Optional[QWidget]:
+        """A window to open centred over (top and bottom line up when the heights match); None = Qt's placing."""
+        return None
+
     def _set_fit_height(self, width: int, h: int) -> None:
         self.setMinimumHeight(min(320, h))
         self.resize(width, h)
+        target = self._align_with() if getattr(self, "_aligning", False) else None
+        if self.isVisible() and target is not None and target.isVisible():
+            deco_w = self.frameGeometry().width() - self.geometry().width()
+            deco_h = self.frameGeometry().height() - self.geometry().height()
+            t = target.frameGeometry()
+            self.move(t.left() + (t.width() - (width + deco_w)) // 2,
+                      t.top() + (t.height() - (h + deco_h)) // 2)
         if self.isVisible():                    # keep the whole window on the screen
             room = self._screen_room(self)
             frame = max(self.frameGeometry().height() - self.geometry().height(), 32)
@@ -3468,10 +4449,21 @@ class FitsScreen:
 
     def showEvent(self, ev) -> None:
         super().showEvent(ev)
+        self._aligning = True                   # only while opening: a window moved by hand stays put
         self._fit_height()
+        QTimer.singleShot(400, lambda: setattr(self, "_aligning", False))
 
 
 class SettingsDialog(FitsScreen, QDialog):
+    def _height_cap(self) -> int:
+        """Owner's choice: Settings opens no taller than the main window (the rest scrolls)."""
+        main = self._align_with()
+        return main.frameGeometry().height() if main is not None and main.isVisible() else 0
+
+    def _align_with(self) -> Optional[QWidget]:
+        """...and centred over it, so at the same height top and bottom line up (owner's request)."""
+        return self.parentWidget().window() if self.parentWidget() else None
+
     def __init__(self, current: Optional[LocalSettings], parent=None, welcome: bool = False):
         super().__init__(parent)
         self._i18n: list[Callable] = []          # re-applies every text when the language is switched
@@ -3845,23 +4837,22 @@ class SettingsDialog(FitsScreen, QDialog):
         return str(keep) if keep else ""
 
     def _pick_cloud(self):
-        start = self.cloud.text() or str(Path.home())
-        d = QFileDialog.getExistingDirectory(self, tr("settings.pick_cloud"), start)
+        d = pick_folder(self, tr("settings.pick_cloud"), self.cloud.text())
         if d:
-            self.cloud.setText(str(Path(d)))
+            self.cloud.setText(d)
 
     def _pick_le(self):
-        f, _ = QFileDialog.getOpenFileName(self, tr("settings.pick_le"), self.le.text(), "LEProc.exe (LEProc.exe);;*.exe")
+        f = pick_file(self, tr("settings.pick_le"), self.le.text(), "LEProc.exe (LEProc.exe);;*.exe")
         if f:
             self.le.setText(str(Path(f)))
 
     def _pick_luna(self):
-        f, _ = QFileDialog.getOpenFileName(self, tr("settings.pick_luna"), self.luna.text(), "*.exe")
+        f = pick_file(self, tr("settings.pick_luna"), self.luna.text(), "*.exe")
         if f:
             self.luna.setText(str(Path(f)))
 
     def _pick_anki(self):
-        f, _ = QFileDialog.getOpenFileName(self, tr("settings.pick_anki"), self.anki.text(), "*.exe")
+        f = pick_file(self, tr("settings.pick_anki"), self.anki.text(), "*.exe")
         if f:
             self.anki.setText(str(Path(f)))
 
@@ -4433,7 +5424,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
         self.zoom.blockSignals(False)
 
     def _pick_art(self):
-        f, _ = QFileDialog.getOpenFileName(self, tr("file.pick_cover"), "", tr("file.images"))
+        f = pick_file(self, tr("file.pick_cover"), "", tr("file.images"))
         if f and QImage(f).isNull():
             message(self, tr("bg.bad_image"))          # damaged, or not really an image
             return
@@ -4491,7 +5482,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
 
     # -- paths
     def _pick_exe(self, edit: QLineEdit):
-        f, _ = QFileDialog.getOpenFileName(self, tr("file.pick_exe"), edit.text(), tr("file.programs"))
+        f = pick_file(self, tr("file.pick_exe"), edit.text(), tr("file.programs"))
         if f:
             exe = lnk.resolve_game_exe(f) or f
             edit.setText(str(Path(exe)))
@@ -4501,11 +5492,10 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
                 self._suggest_save()
 
     def _pick_save(self, edit: QLineEdit):
-        exe = self.fields[self.machine][0].text()
-        start = edit.text() or (str(Path(exe).parent) if exe else os.environ.get("APPDATA", ""))
-        d = QFileDialog.getExistingDirectory(self, tr("file.pick_saves"), start)
+        exe = self.fields[self.machine][0].text().strip()
+        d = pick_folder(self, tr("file.pick_saves"), edit.text(), str(Path(exe).parent) if exe else "")
         if d:
-            edit.setText(str(Path(d)))
+            edit.setText(d)
 
     def _shared_save_folder(self, save_dir: str) -> Optional[Game]:
         """Another game whose save folder on This Device is the same as, inside, or around this one."""
@@ -4644,9 +5634,10 @@ class ConflictDialog(QDialog):
 class DetectDialog(QDialog):
     """After a first play without a save folder: confirm where the game saves."""
 
-    def __init__(self, game: Game, candidates: list, app_dir: Path, parent=None, cloud_root: str = ""):
+    def __init__(self, game: Game, candidates: list, app_dir: Path, parent=None, cloud_root: str = "",
+                 game_dir: str = ""):
         super().__init__(parent)
-        self.cloud_root = cloud_root
+        self.cloud_root, self.game_dir = cloud_root, game_dir
         self.setWindowTitle(tr("detect.title"))
         self.setMinimumWidth(620)
         self.game = game
@@ -4670,10 +5661,11 @@ class DetectDialog(QDialog):
             lay.addSpacing(4)
             lay.addWidget(section(tr("detect.section_saves")))
         self.group = QButtonGroup(self)
-        for i, c in enumerate(folders):
+        sure_folders = [c for c in folders if c.sure]
+        for c in folders:
             rb = QRadioButton(f"{c.path}\n{tr('detect.files', n=c.files)}")
             rb.setProperty("path", c.path)
-            rb.setChecked(i == 0)
+            rb.setChecked(len(sure_folders) == 1 and c is sure_folders[0])   # a guess is never ticked for you
             self.group.addButton(rb)
             lay.addWidget(rb)
         if regs and not folders:
@@ -4714,6 +5706,8 @@ class DetectDialog(QDialog):
             use = QPushButton(tr("detect.use"))
             use.setDefault(True)
             use.clicked.connect(self._use)
+            use.setEnabled(self.group.checkedButton() is not None)     # nothing ticked: pick one first
+            self.group.buttonToggled.connect(lambda *_: use.setEnabled(self.group.checkedButton() is not None))
             row.addWidget(use)
         lay.addSpacing(8)
         lay.addLayout(row)
@@ -4731,7 +5725,7 @@ class DetectDialog(QDialog):
         return True
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, tr("file.pick_saves"), os.environ.get("APPDATA", ""))
+        d = pick_folder(self, tr("file.pick_saves"), "", self.game_dir)
         if d and self._ok(str(Path(d))):
             self.save_dir = str(Path(d))
             self.registry_key = self._registry_choice()
@@ -4839,6 +5833,11 @@ class MainWindow(TaskOwner, QMainWindow):
         self.checker: Optional[StatusChecker] = None
         self.syncer: Optional[SyncWorker] = None      # Sync Now / Choose Now running
         self._conflicts_snoozed: set = set()  # "both changed" games not to ask about until the other device changes something
+        self._ask_now: set = set()            # save folder just set here: a save mismatch goes straight to "which to keep"
+        self._fill_busy = False               # _fill_save_folders running
+        self._count_up: Optional[tuple] = None   # (game id, total before the session): the bar counts up once
+        self._waiting: Optional[tuple] = None    # (game id, since, after a session?): a sync not shown yet
+        self._phase_t0 = 0.0                     # when play_phase last changed
         self._recheck = False
         self.playing_id: Optional[str] = None
         self._quiet_polls = 0                # live polls since the last full save check
@@ -4867,6 +5866,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self._view_save = QTimer(self, singleShot=True, interval=VIEW_SAVE_DELAY_MS)   # see _save_view_choice
         self._view_save.timeout.connect(self._save_view_choice_now)
         self.no_results = 0.0                         # "No Results Found" shown 0..1 (it fades)
+        self.no_results_key = "grid.no_results"       # ...or "grid.empty" (no games yet): kept while it fades out
         self.bookmark_alpha = 1.0 if settings.show_bookmarks else 0.0   # bookmarks shown 0..1 (they fade)
         self._leaving: list = []                       # [(snapshot, rects, start)]: covers fading out (each change
                                                        # adds one; earlier ones finish their fade, never cut short)
@@ -4992,20 +5992,57 @@ class MainWindow(TaskOwner, QMainWindow):
         dl = QHBoxLayout(self.details)
         # the status line below makes the dark band 22 px taller; shift the contents down by half of
         # that so they sit centred in the whole band (14 + 11 above, 14 - 11 below)
-        dl.setContentsMargins(22, 25, 22, 3)
+        # right 12: the trash can's box has room round the icon for its wiggle; the icon itself then sits as
+        # far from the right edge as the Read button from the left (25 px)
+        dl.setContentsMargins(22, 23, 12, 3)
         dl.setSpacing(12)
         self.play_btn = PulseButton(objectName="play")
+        self.play_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.play_btn.clicked.connect(self._play_button)
+        # its label (Read / Stop / Open) grows or shrinks the visible button on both sides around a fixed centre
+        def keep_centre(b=self.play_btn, lay=dl) -> None:
+            # its space fits the longest label; Read's visible left edge stays where it always was (25 px)
+            b.slot_labels = (tr("bar.play"), tr("bar.stop"), tr("bar.open"))
+            slot = b.sizeHint().width()
+            read = b.width_for(tr("bar.play")) + b._natural_width() - b.width_for(b.text())
+            left = max(0, 22 - math.floor((slot - read) / 2))
+            m = lay.contentsMargins()
+            if m.left() != left:
+                lay.setContentsMargins(left, m.top(), m.right(), m.bottom())
+            b.updateGeometry()
+        self.play_btn.on_width = keep_centre
         dl.addWidget(self.play_btn)
         dl.addSpacing(10)
         info = QVBoxLayout()
-        info.setSpacing(2)
-        self.d_title = QLabel(objectName="title")
+        info.setSpacing(9)                      # (room for the rename box between the name and the line below)
+        # the name + stats block sits 2 px higher than the rest (top margin 23, not 25) and keeps 3 px below it, so
+        # everything else stays put (measured, to the pixel): the block is then centred on the dark band (it sat
+        # 1.5-3 px low)
+        info.setContentsMargins(0, 0, 0, 3)
+        self.d_title = ElidedLabel(objectName="title")
         self.d_title.setTextFormat(Qt.PlainText)
-        self.d_sync = QLabel()                 # sync status, then playtime and last played, on one line
-        for w in (self.d_title, self.d_sync):
-            w.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            info.addWidget(w)
+        self.d_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.d_title.clicked.connect(self._start_rename)
+        self.d_title.setMouseTracking(True)        # (text cursor only over the name itself)
+        info.addWidget(self.d_title)
+        # click the name to rename the game / folder in place: Enter or clicking elsewhere saves, Esc cancels
+        # (it floats over the name, not in the layout: the bar keeps its height and the text doesn't move)
+        self.d_title_edit = QLineEdit(self.details, objectName="title_edit")
+        self.d_title_edit.hide()
+        self.d_title_edit.editingFinished.connect(lambda: self._finish_rename(True))
+        self.d_title_edit.textChanged.connect(lambda _t: self._place_title_edit())
+        self.d_title_edit.installEventFilter(self)
+        self._renaming: Optional[tuple] = None      # ("game" | "folder", id) while the name is being edited
+        self._click_away = ClickAway(self.d_title_edit, lambda: self._finish_rename(True))
+        line = QHBoxLayout()                   # sync status, then time read + last read
+        line.setSpacing(0)
+        self.d_sync = SyncStatus()             # (a long message may still be cut on a very narrow window)
+        line.addWidget(self.d_sync)
+        self.d_stats = StatsLine()
+        self.d_stats.hide()
+        line.addWidget(self.d_stats, 1)
+        line.addStretch()                      # (stats hidden: the line still takes the spare width, not the buttons)
+        info.addLayout(line)
         dl.addLayout(info, 1)
         self.d_status = ThemedCombo()
         self.d_status.currentIndexChanged.connect(self._status_changed)
@@ -5021,14 +6058,22 @@ class MainWindow(TaskOwner, QMainWindow):
         self.trash_btn.clicked.connect(lambda: self.remove_game(self.selected_id() or ""))
         self.trash_btn.installEventFilter(self)       # games can be dropped on it
         dl.addWidget(self.saves_btn)
-        dl.addWidget(self.edit_btn)
-        # the icons carry invisible padding and Edit doesn't: this evens out the space on both sides
-        dl.addSpacing(13)
-        dl.addWidget(self.bookmark_btn)
-        dl.addWidget(self.trash_btn)
+        # Edit | bookmark | trash: the icons' boxes carry invisible room round them (for their motion), so the
+        # spacing is set by what you see: the bookmark icon sits exactly midway, 36 px of clear space each side
+        # (measured: 18 + the bookmark's own 18 / 2 + the boxes' 18 + 16), the trash can unmoved from the edge
+        tail = QHBoxLayout()
+        tail.setSpacing(0)
+        tail.addWidget(self.edit_btn)
+        tail.addSpacing(18)
+        tail.addWidget(self.bookmark_btn)
+        tail.addSpacing(2)
+        tail.addWidget(self.trash_btn)
+        dl.addLayout(tail)
         root.addWidget(self.details)
+        self._fader = BarFader(self.details)       # the bar's one cross-fade (on top of everything in it)
         # create the status line now (Qt makes it on the first message otherwise): the band then
         # always has the same height, so the bar's contents stay centred and nothing jumps
+        self.setStatusBar(FadingStatusBar(self))   # (messages fade in and out)
         self.statusBar().setSizeGripEnabled(False)
 
         refresh = QAction(self)
@@ -5096,9 +6141,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.retranslate()
         self._update_sync_label()
         self._update_details()
-        if not self.games:
-            self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root)
-                               if not Path(self.settings.cloud_root).is_dir() else tr("grid.empty"))
+        if not Path(self.settings.cloud_root).is_dir():
+            self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root))
         self.grid.viewport().update()
         self._styled_fonts = ui_families()
 
@@ -5198,7 +6242,8 @@ class MainWindow(TaskOwner, QMainWindow):
         if self.isMaximized() or self.isFullScreen():
             return
         self._fit_grid()
-        need = ROW_GAP + self.START_ROWS * (round(GRID["cover_h"]) + ROW_GAP)
+        # (1 px short of the full gap below: at exactly the gap, the next row's top edge could show as a line)
+        need = ROW_GAP + self.START_ROWS * (round(GRID["cover_h"]) + ROW_GAP) - 1
         h = self.height() + need - self.grid.viewport().height()
         room = (self.screen() or QApplication.primaryScreen()).availableGeometry()
         frame = max(self.frameGeometry().height() - self.height(), 32)
@@ -5317,25 +6362,103 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def refresh(self) -> None:
         """Re-read the library from the cloud folder, then rebuild the grid."""
-        self._forget_files()
-        games = self.library.list_games() if Path(self.settings.cloud_root).is_dir() else []
-        self.games = {g.game_id: g for g in games}
-        self.folder_names = self.library.list_folders() if games else {}
-        self._read_orders()
-        self._rebuild()
-        if not Path(self.settings.cloud_root).is_dir():
-            self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root))
-        else:
-            self.empty.setText(tr("grid.empty"))
-        self.empty.setVisible(not games)
-        self.grid.setVisible(bool(games))
-        self.details.setVisible(bool(games))
-        self._check_sync()
+        self._apply_library(self._load_library())
+
+    def refresh_soon(self, keep_files: bool = False) -> None:
+        """refresh(), with the reading done in the background: right after a session Google Drive is busy with the
+        save just uploaded and can take a while to answer - the window mustn't stop while it does. keep_files: the
+        covers didn't change (a session ended): keep remembering their files, or the next paint asks Google Drive
+        about every cover again (the grid's draw took 25 ms on the owner's PC right after closing a game)."""
+        library = self.library
+
+        def done(data: dict) -> None:
+            if library is self.library:
+                self._apply_library(data, keep_files)
+
+        self._run(lambda: self._load_library(library), done, lambda _e: self.refresh())
+
+    def _load_library(self, library: Optional[Library] = None) -> dict:
+        """Everything refresh needs from the cloud folder (only reading: safe in the background)."""
+        library = library or self.library
+        out = {"cloud": Path(library.root).is_dir()}
+        out["games"] = library.list_games() if out["cloud"] else []
+        out["folders"] = library.list_folders() if out["games"] else {}
         try:
-            self._live_sig = self.library.change_signature()
+            out["meta"] = {fid: {"sort": v["sort"], "order": v["order"]} for fid, v in library._folders_raw().items()}
+            out["order"] = library.library_order()
         except OSError:
-            self._live_sig = None
+            out["meta"] = out["order"] = None
+        try:
+            out["sig"] = library.change_signature()
+        except OSError:
+            out["sig"] = None
+        return out
+
+    _quiet_rebuild = False                   # (the re-read after a session: the grid may stay as it is)
+
+    def _apply_library(self, data: dict, keep_files: bool = False) -> None:
+        if not keep_files:
+            self._forget_files()
+        self._quiet_rebuild = keep_files
+        games = data["games"]
+        was_empty = not self.games
+        self.games = {g.game_id: g for g in games}
+        self.folder_names = data["folders"]
+        if data["meta"] is not None:
+            self.folder_meta, self.library_order = data["meta"], data["order"]
+        try:
+            self._rebuild()
+        finally:
+            self._quiet_rebuild = False
+        if was_empty and games and self.no_results > 0 and self.isVisible():
+            self._slide_from({}, appear=True)            # the first games fade in once "No Games Yet" has gone
+        cloud = Path(self.settings.cloud_root).is_dir()
+        self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root))
+        self.empty.setVisible(not cloud)             # (no games yet: drawn on the grid like No Results Found)
+        self.grid.setVisible(cloud)
+        self.details.setVisible(bool(games))
+        self._update_anim()
+        self._check_sync()
+        self._live_sig = data["sig"]
         self._fetch_names()
+        self._fill_save_folders()
+
+    def _fill_save_folders(self) -> None:
+        """The other device set a game's save folder and this device's is still empty: fill it in by itself when
+        its place here is certain (certain_saves), within one live poll of the change arriving. Then the usual
+        check syncs it: nothing here -> silent download; files of its own here -> straight to "which to keep"."""
+        if self._fill_busy or not self.games:
+            return
+        self._fill_busy = True
+        library, settings, games = self.library, self.settings, list(self.games.values())
+
+        def done(found: dict) -> None:
+            self._fill_busy = False
+            if library is not self.library or not found:
+                return
+            me, filled = self.settings.machine_name, []
+            for gid, folder in found.items():
+                g = self.library.get(gid)
+                if g is None or g.paths_for(me).save_dir or not g.paths_for(me).exe or gid == self.playing_id:
+                    continue                            # changed meanwhile / being read: left alone
+                try:
+                    g = self.library.set_paths(gid, me, save_dir=folder)
+                except (OSError, KeyError, ValueError):
+                    continue                            # tried again at the next refresh
+                if gid in self.games:
+                    self.games[gid].paths = g.paths
+                self._ask_now.add(gid)
+                filled.append(g.title)
+            if filled:
+                sep = "、" if i18n.language() == "ja" else ", "
+                self.statusBar().showMessage(tr("status.save_filled", games=sep.join(filled)), 10000)
+                self._own_change()
+                self._update_details()
+                self._check_sync()
+
+        def failed(_e) -> None:
+            self._fill_busy = False
+        self._run(lambda: certain_saves(settings, games), done, failed)
 
     def _fetch_names(self) -> None:
         """Search also finds games by the other names VNDB knows them by (English title, romaji, aliases).
@@ -5434,7 +6557,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 ([tr("status.auto_downloaded", games=sep.join(downloaded))] if downloaded else [])
         if notes:
             self.statusBar().showMessage("  ".join(notes), 10000)
-        self.grid.viewport().update()
+        self._lights_changed()
         self._update_details()
         self._update_sync_label()
         if self._recheck:
@@ -5444,13 +6567,21 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def _offer_conflicts(self) -> None:
         """Saves changed on both devices can't sync silently: ask once (Choose Now / Later). Later isn't
-        asked again for the same games until the other device changes something new."""
+        asked again for the same games until the other device changes something new. A game whose settings
+        were just saved here skips that step: straight to "which saves to keep" (even if Later was said before)."""
         conflicts = [gid for gid, s in self.sync_states.items() if s == "conflict" and gid in self.games
                      and gid != self.playing_id]
-        new = [gid for gid in conflicts if gid not in self._conflicts_snoozed]
+        self._ask_now &= set(conflicts)             # (the others synced by themselves, or need nothing)
+        new = [gid for gid in conflicts if gid not in self._conflicts_snoozed or gid in self._ask_now]
         if not new or self.worker is not None or self.syncer is not None or self._ghost is not None \
                 or QApplication.activeModalWidget() is not None or QApplication.activePopupWidget() is not None:
             return                                  # nothing new, or busy: asked again at the next check
+        if self._ask_now:
+            direct = [self.games[gid] for gid in conflicts if gid in self._ask_now]
+            self._ask_now = set()
+            self._conflicts_snoozed |= {g.game_id for g in direct}
+            self.sync_now(direct)
+            return
         games = [self.games[gid] for gid in conflicts]
         listing = "\n".join("• " + g.title for g in games)
         mixed = "_mixed" if any(self.only_here(g) or self.first_sync(g) for g in games) else ""
@@ -5536,6 +6667,16 @@ class MainWindow(TaskOwner, QMainWindow):
         else:
             entries = top
 
+        # nothing visible changed (e.g. the re-read after a session: only playtime / dates, which show on hover):
+        # keep the grid as it is - rebuilding redrew every cover (20-30 ms on the owner's PC, right as a game closed)
+        look = [self._entry_look(kind, obj) for kind, obj in entries]
+        if self._quiet_rebuild and look == getattr(self, "_grid_look", None) and self.grid.count() == len(entries):
+            sel = self.selected_id()
+            if sel != current:
+                self._select(current) if current else self.grid.clearSelection()
+            self._after_rebuild(entries)
+            return
+        self._grid_look = look
         scroll = self.grid.verticalScrollBar().value()       # keep your place (a refresh mustn't jump to the top)
         self.grid.clear()
         for kind, obj in entries:
@@ -5552,7 +6693,17 @@ class MainWindow(TaskOwner, QMainWindow):
         if select is None:
             self.grid.doItemsLayout()
             self.grid.verticalScrollBar().setValue(scroll)
+        self._after_rebuild(entries)
 
+    def _entry_look(self, kind: str, obj) -> tuple:
+        """Everything about a tile that shows without hovering (to know when a rebuild would change nothing)."""
+        if kind == "game":
+            return ("g", obj.game_id, obj.title, obj.artwork, obj.crop_zoom, obj.crop_x, obj.crop_y, obj.status)
+        inner = tuple((g.game_id, g.artwork, g.crop_zoom, g.crop_x, g.crop_y, g.status)
+                      for g in self.folder_games.get(obj, [])[:4])
+        return ("f", obj, self.folder_name(obj), len(self.folder_games.get(obj, [])), inner)
+
+    def _after_rebuild(self, entries) -> None:
         inside = self.current_folder is not None
         self.folderbar.setVisible(inside)
         if inside:
@@ -5783,7 +6934,8 @@ class MainWindow(TaskOwner, QMainWindow):
     def _play_button(self) -> None:
         g = self.bar_game()
         if g is not None and self._running(g.game_id):
-            self._stop_game()
+            if self._session_look(g.game_id)[0] == "bar.stop":
+                self._stop_game()                   # (only once it shows Stop: before, a press does nothing)
             return
         self.activate_selected()
 
@@ -5820,8 +6972,11 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def quiet(self, gid: str) -> bool:
         """No playtime / reading status while the game is running, or before it has any save data
-        (the "Save at least once!" state): only the message matters then."""
-        return gid == self.playing_id or self.sync_states.get(gid) == "detect"
+        (the "Save at least once!" state): only the message matters then. (While the button shows Stop: so the
+        stats and the drop-down go and come back in the same moment as the button, light and words change.)"""
+        if gid == self.playing_id:
+            return self._session_look(gid)[0] == "bar.stop"
+        return self.sync_states.get(gid) == "detect"
 
     def folder_colours(self, fid: str) -> list[str]:
         """The light colours of the games in a folder, each once, most important first."""
@@ -5834,7 +6989,8 @@ class MainWindow(TaskOwner, QMainWindow):
             states = {self.light_state(g.game_id) for g in self.folder_games.get(gid[len(FOLDER_PREFIX):], [])}
             return next((s for s in STATE_PRIORITY if s in states), "synced")
         if gid == self.playing_id:
-            return self.play_phase if self.play_phase in ("syncing", "starting") else "playing"
+            return self._session_look(gid)[1]
+
         return self.sync_states.get(gid, "checking")
 
     # ------------------------------------------------------------------ sort / filter
@@ -5994,14 +7150,37 @@ class MainWindow(TaskOwner, QMainWindow):
             self._set_status(g.game_id, s)
 
     # ------------------------------------------------------------------ bottom bar / top status
+    def _bar_sig(self) -> tuple:
+        """What the bottom bar shows (to know whether a call changed it)."""
+        st = self.d_stats
+        return (self.d_title.text(), self.play_btn.text(), self.d_sync._shown, st.isVisible(), st.seconds, st.last,
+                st._key, self.d_status.isVisible(), self.d_status.currentIndex(),
+                bool(self.d_status.graphicsEffect()), self.edit_btn.text(), self.saves_btn.isVisible())
+
     def _update_details(self) -> None:
+        """Bring the bar up to date; when what it shows changes, the old look cross-fades into the new (BarFader)."""
+        fade = self.details.isVisible() and not self._resizing and not getattr(self, "_renaming", None)             and hasattr(self, "_fader")
+        before = self._bar_sig() if fade else None
+        pm = self.details.grab() if fade else None   # (~1 ms; includes a cross-fade still under way)
+        self._update_details_now()
+        if fade and self._bar_sig() != before:
+            self._fader.start(pm)
+            self._update_anim()
+
+    def _update_details_now(self) -> None:
+        self.d_title.clickable = self._rename_target() is not None
+        if not self.d_title.clickable:
+            self.d_title.setCursor(Qt.ArrowCursor)
         fid = None if self._bar_shows_running() else self.selected_folder()
         if fid:
             n = len(self.folder_games.get(fid, []))
             self.d_title.setText(self.folder_name(fid))
             count = tr("folder.count_one") if n == 1 else tr("folder.count_many", n=n)
-            self.d_sync.setText(f'<span style="color:{COLORS["muted"]}">{html.escape(count)}</span>')
+            self.d_sync.set_status(None, count, muted=True)
             self.d_sync.setToolTip("")
+            gs = self.folder_games.get(fid, [])
+            self._show_stats(self.settings.show_stats and n > 0, sum(g.total_playtime for g in gs),
+                             max((g.last_played for g in gs), default=0), gs)
             self.play_btn.setText(tr("bar.open"))
             self.play_btn.setEnabled(True)
             self.play_btn.setToolTip("")
@@ -6009,6 +7188,7 @@ class MainWindow(TaskOwner, QMainWindow):
             self.edit_btn.setEnabled(True)
             self.trash_btn.setEnabled(False)          # folders aren't removed this way
             self.saves_btn.hide()
+            self.d_status.setGraphicsEffect(None)
             self.d_status.hide()
             return
         self.saves_btn.show()
@@ -6019,11 +7199,13 @@ class MainWindow(TaskOwner, QMainWindow):
             w.setEnabled(g is not None)
         self.trash_btn.setEnabled(g is not None and not busy)
         if g is None:                               # nothing selected: an empty bar, buttons greyed out
-            for lab in (self.d_title, self.d_sync):
-                lab.setText("")
+            self.d_stats.set_shown(False)
+            self.d_title.setText("")
+            self.d_sync.set_status(None, "")
             self.d_sync.setToolTip("")
             self.play_btn.setText(tr("bar.play"))
             self.play_btn.setToolTip("")
+            self.d_status.setGraphicsEffect(None)
             self.d_status.setVisible(True)
             if self.d_status.currentIndex() != 0 and not self.d_status.view().isVisible():
                 self.d_status.blockSignals(True)       # (greyed, showing no game's status - not the last one's)
@@ -6031,24 +7213,16 @@ class MainWindow(TaskOwner, QMainWindow):
                 self.d_status.blockSignals(False)
             return
         self.d_title.setText(g.title)
-        parts = [tr("bar.played", time=i18n.playtime(g.total_playtime)) if g.total_playtime else tr("card.never")]
-        if g.last_played:
-            parts.append(tr("bar.last_played", date=i18n.date(g.last_played)))
         colour_key, _, text_key = STATE_LOOK[self.light_state(g.game_id)]
         text_key = self.solo_key(text_key, g)
-        sep = "&nbsp;&nbsp;·&nbsp;&nbsp;"
         quiet = self.quiet(g.game_id)
-        extra = "" if (quiet or not self.settings.show_stats) else f'<span style="color:{COLORS["muted"]}">{sep}{sep.join(html.escape(s) for s in parts)}</span>'
-        main = f"{dot(colour_key)} {html.escape(tr(text_key))}"
-        # safety net for small windows: drop the playtime part before the sync message gets cut off
-        if extra and self._html_width(main + extra) > self.d_sync.width() > 0:
-            extra = ""
-        self.d_sync.setText(main + extra)
+        self.d_sync.set_status(colour_key, tr(text_key))
+        self._show_stats(self.settings.show_stats and not quiet, g.total_playtime, g.last_played, [g])
         tip = self.solo_key(STATE_LOOK[self.light_state(g.game_id)][2].replace("sync.state.", "sync.tip."), g)
         self.d_sync.setToolTip(tr(tip) if tip in i18n.S else "")
         # leave the drop-down alone while its list is open (a background refresh mustn't redraw or close it)
         if not self.d_status.view().isVisible():
-            self.d_status.setVisible(not quiet)
+            self._show_status(not quiet)
             want = max(0, self.d_status.findData(g.status))
             if self.d_status.currentIndex() != want:
                 self.d_status.blockSignals(True)
@@ -6058,24 +7232,127 @@ class MainWindow(TaskOwner, QMainWindow):
         mine = g.paths_for(self.settings.machine_name)
         ready = bool(mine.exe)
         running = self._running(g.game_id)
-        self.play_btn.setText(tr("bar.stop") if running else
-                              tr("bar.playing") if g.game_id == self.playing_id else tr("bar.play"))
-        self.play_btn.setEnabled((ready and not busy) or (running and not self.stop_pending))
+        if g.game_id == self.playing_id:            # in a session: mirrors it (see _session_look)
+            self.play_btn.setText(tr(self._session_look(g.game_id)[0]))
+            # never greyed for the moments around a session (it flickered): pressing Read then just does nothing
+            self.play_btn.setEnabled(not self.stop_pending)
+        else:
+            self.play_btn.setText(tr("bar.play"))
+            self.play_btn.setEnabled(ready and not busy)
         self.saves_btn.setEnabled(bool(mine.save_dir) and Path(mine.save_dir).is_dir())
         self.play_btn.setToolTip(tr("bar.tip_stop") if running else
                                  tr("bar.tip_busy") if busy else ("" if ready else tr("bar.tip_no_exe")))
 
-    def _html_width(self, text: str) -> int:
-        from PySide6.QtGui import QTextDocument
-        doc = QTextDocument()
-        doc.setDefaultFont(self.d_sync.font())
-        doc.setDocumentMargin(0)
-        doc.setHtml(text)
-        return int(doc.idealWidth()) + 2
+    def _rename_target(self) -> Optional[tuple]:
+        fid = None if self._bar_shows_running() else self.selected_folder()
+        if fid:
+            return ("folder", fid)
+        g = self.bar_game()
+        return ("game", g.game_id) if g else None
+
+    def _start_rename(self) -> None:
+        target = self._rename_target()
+        if target is None or self._renaming:
+            return
+        self._renaming = target
+        e = self.d_title_edit
+        e.setText(self.folder_name(target[1]) if target[0] == "folder" else self.games[target[1]].title)
+        self.d_title.blank = True
+        self.d_title.update()
+        self._place_title_edit()
+        e.show()
+        e.raise_()
+        e.setFocus()
+        e.selectAll()
+        QApplication.instance().installEventFilter(self._click_away)   # a click anywhere else saves
+
+    def _place_title_edit(self) -> None:
+        """The box sits round the name with the usual text-box gaps, the text exactly where the name was;
+        as wide as what's typed (at least a little), never past the drop-down."""
+        e = self.d_title_edit
+        if not self._renaming:
+            return
+        pad_x = 3                                    # border 1 + Qt's own 2: text lands where the name was, and the
+                                                     # space beside it matches the space above / below (owner)
+        lab = self.d_title.geometry()                # (in the bar's coordinates: the bar is its parent)
+        top_left = lab.topLeft()
+        h = e.sizeHint().height()                    # (padding 2 above / 1 below: clear of the line beneath)
+        text_w = e.fontMetrics().horizontalAdvance(e.text() or " ") + 2      # (+ room for the cursor)
+        right_edge = (self.d_status.geometry().left() if self.d_status.isVisible()
+                      else self.edit_btn.geometry().left()) - 12
+        x = top_left.x() - pad_x
+        w = max(40, min(text_w + 2 * pad_x, right_edge - x))
+        e.setGeometry(x, top_left.y() + lab.height() + 3 - h, w, h)   # text level with the name (measured, to the pixel)
+
+    def _finish_rename(self, save: bool) -> None:
+        """Enter / clicking elsewhere: save; Esc: back as it was. A game's typed title is kept as its own
+        (locked, like a title typed in Edit); an empty name or the same name changes nothing."""
+        if not self._renaming:
+            return
+        (kind, iid), self._renaming = self._renaming, None
+        QApplication.instance().removeEventFilter(self._click_away)
+        text = self.d_title_edit.text().strip()
+        if self.d_title_edit.hasFocus():
+            self.grid.setFocus()                    # (not the Read button: a later Enter / Space would start the game)
+        self.d_title_edit.hide()
+        self.d_title.blank = False
+        self.d_title.update()
+        if not save or not text:
+            return
+        try:
+            if kind == "folder":
+                if text != self.folder_name(iid):
+                    self.library.rename_folder(iid, text)
+                    self.refresh()
+            else:
+                g = self.library.get(iid)
+                if g and text != g.title:
+                    self.library.update(iid, title=text, title_locked=True, manual_title=text)
+                    self.refresh()
+        except (ValueError, KeyError, OSError) as e:
+            report_failure(self, e)
+
+    def _show_status(self, on: bool) -> None:
+        """The reading-status drop-down is hidden while a game runs and back after, keeping its place so nothing in
+        the bar moves (the bar's one cross-fade, BarFader, blends it out / in). Hidden = an opacity effect at 0,
+        attached only then: Qt draws text under one a little softer."""
+        d = self.d_status
+        d.setEnabled(on)
+        d.show()
+        if on:
+            d.setGraphicsEffect(None)
+        elif d.graphicsEffect() is None:
+            fx = QGraphicsOpacityEffect(d)
+            fx.setOpacity(0.0)
+            d.setGraphicsEffect(fx)
+
+    def _show_stats(self, want: bool, seconds: float, last: float, games: list) -> None:
+        """Time read + last read after the sync status (what doesn't fit is left off the end: StatsLine).
+        Pointing at the time shows it per device."""
+        if not want:
+            self.d_stats.set_shown(False)           # (e.g. a game starting)
+            return
+        me, other = self.settings.machine_name, other_slot(self.settings.machine_name)
+        per = [(tr("game.this_device"), sum(g.playtime.get(me, 0) for g in games)),
+               (tr("game.other_device"), sum(g.playtime.get(other, 0) for g in games))]
+        self.d_stats.set_values(seconds, last, per, key=tuple(g.game_id for g in games))
+        if self._count_up and time.monotonic() - self._count_up[2] > 3:
+            self._count_up = None                           # (that game wasn't shown after its session)
+        if self._count_up and len(games) == 1 and games[0].game_id == self._count_up[0]:
+            self.d_stats.count_up(self._count_up[1])        # a session just ended: the time rolls up
+            self._count_up = None
+        self.d_stats.set_shown(True)                        # (e.g. a game just closed)
+
+    _resizing = False
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
-        self._update_details()          # re-check whether the playtime still fits
+        self._resizing = True           # (no cross-fade while the window is being resized)
+        try:
+            self._update_details()      # re-check whether the playtime still fits
+        finally:
+            self._resizing = False
+        self._place_title_edit()        # (renaming: the box follows the name)
 
     def _update_sync_label(self) -> None:
         """The one-line status in the top bar. Details (device, cloud folder) live in Settings."""
@@ -6119,6 +7396,19 @@ class MainWindow(TaskOwner, QMainWindow):
         if not hasattr(self, "anim"):       # still building the window
             return False
         t = ev.type()
+        if obj is self.d_title_edit and t in (QEvent.ShortcutOverride, QEvent.KeyPress):
+            # typing a name: Enter / Backspace / Esc belong to the box, not to the window's shortcuts
+            # (open the game, leave the folder); Esc here cancels the rename
+            if t == QEvent.ShortcutOverride and ev.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter,
+                                                             Qt.Key_Backspace):
+                ev.accept()
+                return False
+            if t == QEvent.KeyPress and ev.key() == Qt.Key_Escape:
+                self._finish_rename(False)
+                return True
+            if t == QEvent.KeyPress and ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._finish_rename(True)           # saves, and the key stops here (it used to start the game)
+                return True
         if obj is self.grid.verticalScrollBar():
             if t == QEvent.Enter:
                 self._sb_hover = True
@@ -6711,6 +8001,7 @@ class MainWindow(TaskOwner, QMainWindow):
                   or self.sb_alpha > 0 or self._sb_target() > 0   # keep ticking until it has faded out
                   or self._ghost is not None or self.drag_dim > 0
                   or self._landing is not None or bool(self.slides) or self._search_moving()
+                  or (hasattr(self, "_fader") and self._fader.active)
                   or self.bookmark_alpha != (1.0 if self.settings.show_bookmarks else 0.0))
         if needed and not self.anim.isActive():
             self._last_tick = time.monotonic()
@@ -6719,9 +8010,22 @@ class MainWindow(TaskOwner, QMainWindow):
             self.anim.stop()
             self.grid.viewport().update()
 
+    def showing_empty_library(self) -> bool:
+        """No games at all yet (the cloud folder is there): said the same way as No Results Found."""
+        return not self.games and Path(self.settings.cloud_root).is_dir()
+
     def _no_results_target(self) -> float:
-        """1 once nothing matches AND the last cover has finished fading out (never both on screen at once)."""
-        return 1.0 if self.showing_no_results() and not self._leaving else 0.0
+        """1 once nothing matches (or there are no games) AND the last cover has finished fading out (never both
+        on screen at once). The message is remembered, so it doesn't change words while fading out."""
+        if self._leaving:
+            return 0.0
+        if self.showing_empty_library():
+            self.no_results_key = "grid.empty"
+            return 1.0
+        if self.showing_no_results():
+            self.no_results_key = "grid.no_results"
+            return 1.0
+        return 0.0
 
     def _search_moving(self) -> bool:
         return bool(self.appearing) or bool(self._leaving) \
@@ -6771,6 +8075,8 @@ class MainWindow(TaskOwner, QMainWindow):
         from PySide6.QtGui import QRegion
         region = QRegion()
         view = self.grid.viewport().rect()
+        lights = []                                       # (centre, id) of the lights redrawn on their own
+        lights_only = not moving and self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0)             and self._ghost is None and self._landing is None and not self.rumble
         for i in self.grid.visible_range():
             it = self.grid.item(i)
             r = self.grid.visualItemRect(it)
@@ -6781,6 +8087,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 c = CardDelegate.light_center(CardDelegate.cover_rect(r, self.hover.get(iid, 0.0)))
                 rad = int(LIGHT_R * 2.9) + 2
                 region += QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
+                lights.append((c, iid))
         if self.slides:                                   # covers sliding: the whole grid moves
             if now - self._slide_t0 >= SLIDE_S:
                 self.slides = {}
@@ -6792,7 +8099,9 @@ class MainWindow(TaskOwner, QMainWindow):
                 self.appearing = {}
             target = self._no_results_target()
             if self.no_results != target:
-                d = (step * HOVER_MS) / ((NO_RESULTS_S if target > self.no_results else NO_RESULTS_OUT_S) * 1000)
+                # (at most two frames' worth: a slow first frame - the window just opened - mustn't jump the fade)
+                frame_ms = min(step * HOVER_MS, 2000 / 60)
+                d = frame_ms / ((NO_RESULTS_S if target > self.no_results else NO_RESULTS_OUT_S) * 1000)
                 self.no_results = min(target, self.no_results + d) if target > self.no_results \
                     else max(target, self.no_results - d)
             region = QRegion(view)
@@ -6803,9 +8112,14 @@ class MainWindow(TaskOwner, QMainWindow):
         if not region.isEmpty():
             # (not while a folder opens / closes: the animation covers the grid, and each of these little
             # updates would make it redraw out of step)
+            if lights_only and not self.slides and not self._search_moving() and lights:
+                self.grid.light_frame = {"region": region, "lights": lights}
             self.grid.viewport().update(region)
         if self.settings.pulse:
             self.sync_light.update()
+        if self._fader.active:                            # the bottom bar's cross-fade, on this same clock
+            self._fader.step()
+            changed = True
         if not changed:
             self._update_anim()   # stops the timer when nothing moves and pulsing is off
 
@@ -6831,7 +8145,7 @@ class MainWindow(TaskOwner, QMainWindow):
             QTimer.singleShot(0, lambda: self._add_files(paths))   # let the drag finish first
 
     def add_game(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, tr("file.pick_exe"), "", tr("file.programs"))
+        files = pick_files(self, tr("file.pick_exe"), tr("file.programs"))
         if files:
             self._add_files(files)
 
@@ -6862,12 +8176,14 @@ class MainWindow(TaskOwner, QMainWindow):
                     except (OSError, KeyError) as e:
                         report_failure(self, e)
                         continue
-                    GameDialog(self.library, self.settings, game, parent=self).exec()   # e.g. its save folder
+                    if GameDialog(self.library, self.settings, game, parent=self).exec():   # e.g. its save folder
+                        self._ask_now.add(match.game_id)
                     last = match.game_id
                     continue
             d = GameDialog(self.library, self.settings, exe=exe, parent=self)
             if d.exec() and d.saved_id:
                 last = d.saved_id
+                self._ask_now.add(d.saved_id)
         self.refresh()
         if last:
             self._select(last)
@@ -6917,8 +8233,13 @@ class MainWindow(TaskOwner, QMainWindow):
     def edit_game(self, g: Optional[Game]) -> None:
         if g is None:
             return
-        d = GameDialog(self.library, self.settings, self.library.get(g.game_id) or g, parent=self)
+        g = self.library.get(g.game_id) or g
+        mine = lambda x: (x.paths_for(self.settings.machine_name).save_dir, x.registry_key) if x else None
+        before = mine(g)
+        d = GameDialog(self.library, self.settings, g, parent=self)
         if d.exec():
+            if mine(self.library.get(g.game_id)) != before:     # save folder set up / changed here: ask right away
+                self._ask_now.add(g.game_id)
             self.refresh()
 
     @guarded
@@ -6987,6 +8308,7 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         self.playing_id = g.game_id
         self.stop_pending = False
+        self._waiting = None                        # (a new session: nothing from the last one carries over)
         self.worker = PlayWorker(self.library.get(g.game_id) or g, self.settings, self.library, self.engine,
                                  without, watch)
         self.worker.status.connect(self._play_status)
@@ -7039,9 +8361,51 @@ class MainWindow(TaskOwner, QMainWindow):
             self.statusBar().showMessage(tr(key))
 
     def _on_phase(self, phase: str) -> None:
+        if phase == "syncing" and self.playing_id:  # (timed from when the sync itself begins)
+            self._sync_wait(self.playing_id, after_session=self.play_phase in ("starting", "playing"))
+        if phase == "starting":                     # shown only if the game takes a moment to appear
+            QTimer.singleShot(round(SYNC_SHOW_AFTER_S * 1000) + 10, self._sync_wait_over)
+        self._phase_t0 = time.monotonic()
         self.play_phase = phase
         self._update_sync_label()
         self._update_details()
+
+    # Syncing (button, light, words) mirrors the real sync, but only once it has taken SYNC_SHOW_AFTER_S: a quick
+    # one is never shown (Stop -> Read, Read -> Stop, no flash in between). Around it - checks before starting,
+    # recording the session after - the button and light keep the look from before (Read / Stop).
+    def _sync_wait(self, gid: str, after_session: bool) -> None:
+        self._waiting = (gid, time.monotonic(), after_session)
+        QTimer.singleShot(round(SYNC_SHOW_AFTER_S * 1000) + 10, self._sync_wait_over)
+
+    def _session_look(self, gid: str) -> tuple[str, str]:
+        """(button label key, light state) for the game in a session right now. The button only ever says Read or
+        Stop (owner: a Syncing label was a blink of noise): Stop while the game starts / runs, Read otherwise."""
+        phase = self.play_phase
+        w = self._waiting if self._waiting and self._waiting[0] == gid else None
+        if phase == "starting":
+            if time.monotonic() - self._phase_t0 >= SYNC_SHOW_AFTER_S:
+                return "bar.stop", "starting"
+            # a game that appears straight away: no separate "Starting" step (the look before stays until it
+            # shows, then button, light and words change once, together)
+            return "bar.play", self.sync_states.get(gid, "checking")
+        if phase == "playing":
+            return "bar.stop", "playing"
+        if phase == "syncing" and w and time.monotonic() - w[1] >= SYNC_SHOW_AFTER_S:
+            return "bar.play", "syncing"
+        return "bar.play", ("playing" if w and w[2] else self.sync_states.get(gid, "checking"))
+
+    def _sync_wait_over(self) -> None:
+        if self.worker is not None or (self._waiting and time.monotonic() - self._waiting[1] >= SYNC_SHOW_AFTER_S):
+            self._update_details()                  # still syncing: now it says so (or it already ended)
+            self._update_sync_label()
+            self._lights_changed()
+
+    def _lights_changed(self) -> None:
+        """Only the sync lights' colours changed. While they pulse they're redrawn every frame anyway (on their own,
+        from the grid's still picture): asking for a whole-grid redraw here cost 20-30 ms on the owner's PC right at
+        a game's start / close - the hitch. Without pulsing, the grid is redrawn as before."""
+        if not self.settings.pulse:
+            self.grid.viewport().update()
 
     def only_here(self, g: Optional[Game]) -> bool:
         """Set up on this device but not the other: then a save mismatch can't be "both devices" (the cloud copy
@@ -7094,9 +8458,14 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         msg = tr(r.message) if r.message else ""
         self.statusBar().showMessage(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)), 15000)
+        if game and r.seconds > 0:
+            self._count_up = (game.game_id, max(0.0, game.total_playtime - r.seconds), time.monotonic())
         if r.new_title:
             self.statusBar().showMessage(tr("status.title_updated", title=r.new_title), 15000)
-        self.refresh()
+        self._update_details()                      # the bar at once (Stop -> Read); the new playtime etc. follow
+        self._update_sync_label()                   # when the library has been re-read:
+        self._lights_changed()
+        self.refresh_soon(keep_files=True)          # (in the background: Google Drive is busy with the new save)
         self.raise_()
         self.activateWindow()
         if game and not game.paths_for(self.settings.machine_name).save_dir:
@@ -7132,7 +8501,9 @@ class MainWindow(TaskOwner, QMainWindow):
 
     @guarded
     def _confirm_detection(self, game: Game, r: PlayResult) -> None:
-        d = DetectDialog(game, r.candidates, self.app_dir, self, cloud_root=self.settings.cloud_root)
+        exe = game.paths_for(self.settings.machine_name).exe
+        d = DetectDialog(game, r.candidates, self.app_dir, self, cloud_root=self.settings.cloud_root,
+                         game_dir=str(Path(exe).parent) if exe else "")
         if d.exec() and d.save_dir:
             res = finish_first_play(game, self.settings, self.library, self.engine, d.save_dir,
                                     d.registry_key, self._conflict_choice)
@@ -7332,8 +8703,9 @@ class MainWindow(TaskOwner, QMainWindow):
         self._flush_view_choice()                   # (a view choice made just now)
         if self.worker:
             g = self.games.get(self.playing_id)
-            if not ask_yes_no(self, tr("close.body", title=g.title if g else ""), tr("close.title"),
-                              tr("game.cancel")):
+            if message(self, tr("close.body", title=g.title if g else ""), tr("close.title"),
+                       [("cancel", tr("game.cancel")), ("continue", tr("close.continue"))],
+                       dismiss="cancel") != "continue":
                 e.ignore()
                 return
             os._exit(0)  # the game keeps running; nothing of ours is mid-write while we only watch it
@@ -7372,6 +8744,71 @@ def _install_stall_log() -> None:
     t.timeout.connect(beat)
     t.start()
     _DIAG["timer"] = t
+
+
+def _install_frame_log() -> None:
+    """Diagnostics, only with IKEMEN_DEBUG_FRAMES=1, from pressing Read until a few seconds after the game closes:
+    every animation frame that comes over 20 ms after the last, and every paint over 8 ms, are written to
+    %APPDATA%\\IkemenReader\\frames.log with what the bar showed; a hold-up over 40 ms also gets what every thread
+    (the window's included) was doing (faulthandler)."""
+    if os.environ.get("IKEMEN_DEBUG_FRAMES") != "1":
+        return
+    import faulthandler
+    f = open(default_app_dir() / "frames.log", "a", encoding="utf-8", buffering=1)
+    f.write(f"\n===== started {time.strftime('%H:%M:%S')} =====\n")
+    state = {"until": 0.0, "last": time.monotonic()}
+
+    def stamp() -> str:
+        return f"{time.strftime('%H:%M:%S')}.{int(time.time() * 1000) % 1000:03d}"
+
+    def window() -> Optional["MainWindow"]:
+        return next((x for x in QApplication.topLevelWidgets() if isinstance(x, MainWindow)), None)
+
+    def recording() -> bool:
+        w = window()
+        if w is not None and w.worker is not None:
+            state["until"] = time.monotonic() + 4        # (and 4 s after the session ends)
+        return time.monotonic() < state["until"]
+
+    def what() -> str:
+        w = window()
+        if w is None:
+            return ""
+        g = w.bar_game()
+        return (f"phase={w.play_phase} button={w.play_btn._shown!r} light="
+                f"{w.light_state(g.game_id) if g else '-'} words={w.d_sync._shown[1]!r}")
+
+    # the window's own animation frames (lights, covers): how late each one comes
+    orig_tick = MainWindow._tick
+
+    def tick(self) -> None:
+        now = time.monotonic()
+        gap = (now - state["last"]) * 1000
+        state["last"] = now
+        if recording():
+            if gap > 20:
+                f.write(f"{stamp()} late frame: {gap:.0f} ms since the last  {what()}\n")
+            faulthandler.dump_traceback_later(0.04, repeat=False, file=f)
+        t = time.perf_counter()
+        orig_tick(self)
+        d = (time.perf_counter() - t) * 1000
+        if d > 8 and recording():
+            f.write(f"{stamp()} slow step: MainWindow._tick {d:.1f} ms\n")
+    MainWindow._tick = tick
+
+    def timed(cls) -> None:
+        orig = cls.paintEvent
+
+        def paint(self, ev) -> None:
+            t = time.perf_counter()
+            orig(self, ev)
+            d = (time.perf_counter() - t) * 1000
+            if d > 8 and recording():
+                f.write(f"{stamp()} slow paint: {cls.__name__} {d:.1f} ms\n")
+        cls.paintEvent = paint
+    for cls in (LibraryGrid, Backdrop, SyncStatus, StatsLine, PulseButton, ThemedCombo):
+        timed(cls)
+    _DIAG["frames"] = f
 
 
 def diag(text: str) -> None:
@@ -7506,6 +8943,7 @@ def main() -> None:
     install_error_net()
     install_menu_lines(app)
     _install_stall_log()
+    _install_frame_log()
     load_fonts()
     startup.refresh()          # if it starts with Windows, keep that entry pointing at this copy
     settings = load_local_settings()
@@ -7519,6 +8957,7 @@ def main() -> None:
         apply_theme("dark")
     app.setWindowIcon(app_icon())
     apply_palette()
+    install_smooth_tips(app)            # (hover popups: sooner, fading, following the mouse, inside the window)
     app.setStyleSheet(build_style())
     if settings is not None:
         i18n.set_language(settings.language)
