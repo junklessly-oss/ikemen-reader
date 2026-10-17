@@ -239,6 +239,16 @@ class OutsideProgramTests(unittest.TestCase):
         self.assertEqual({k.upper(): v for k, v in out.items()}, {"PATH": r"C:\Windows", "KEEP": "me"})
         self.assertIsNone(outside.environment(frozen=False))     # running from source: inherit as is
 
+    def test_own_settings_are_never_passed_on(self):
+        """"Ignore Windows zoom" is for Ikemen Reader alone: Luna (also Qt) and games keep following the zoom."""
+        with mock.patch.dict(os.environ, {"KEEP": "me"}, clear=True), mock.patch.object(outside, "_OURS", set()):
+            outside.own_setting("QT_FONT_DPI", "96")
+            self.assertEqual(os.environ["QT_FONT_DPI"], "96")                    # ours...
+            for frozen in (False, True):
+                out = outside.environment(frozen=frozen)
+                self.assertNotIn("QT_FONT_DPI", {k.upper() for k in out})       # ...not theirs
+                self.assertEqual(out.get("KEEP"), "me")
+
     @unittest.skipUnless(IS_WINDOWS, "Windows' DLL search folder")
     def test_dll_folder_is_normal_while_starting_and_ours_again_after(self):
         import ctypes

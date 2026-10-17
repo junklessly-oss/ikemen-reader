@@ -132,7 +132,7 @@ GUIDE = {
             "with the other device.",
             "- Covers show how long you've read a game and when you last read it (Today, 3 Days Ago, ...) when you "
             "point at them; the bottom bar shows the same for the selected game or folder. Point at the time to see it "
-            "for each device, or at the day to see the date.",
+            "for each device, or at the day to see the date you last read it on each device.",
             "- Hide Statistics (next to the menus at the top) hides time read and last read on the covers "
             "and in the bottom bar. Press Show Statistics to bring them back; your choice is remembered.",
             "- Click a game's or folder's name in the bottom bar to rename it: Enter saves, Esc cancels. A name "
@@ -250,7 +250,7 @@ GUIDE = {
             "- 「自分の並び」のときにフォルダーの配置を選ぶと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先頭に」「末尾に」はまとめて、「混ぜる」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではライブラリの並び順に合わせます。"
             "フォルダーの中でゲームをドラッグして動かすと、そのフォルダー専用の「自分の並び」になります。フォルダーの並び順はもう一方の端末とも共有されます。",
-            "- カバーにマウスを合わせると、読書時間と最後に読んだ日（今日、3日前など）が表示されます。下部のバーには、選択中のゲームやフォルダーの同じ情報が表示されます。読書時間にマウスを合わせると端末ごとの時間が、日付の部分に合わせると正確な日付が表示されます。",
+            "- カバーにマウスを合わせると、読書時間と最後に読んだ日（今日、3日前など）が表示されます。下部のバーには、選択中のゲームやフォルダーの同じ情報が表示されます。読書時間にマウスを合わせると端末ごとの時間が、日付の部分に合わせると端末ごとの最後に読んだ日付が表示されます。",
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーの読書時間と最後に読んだ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",
             "- 下部のバーでゲームやフォルダーの名前をクリックすると、その場で名前を変更できます。Enterで保存、Escで取り消します。入力した名前はそのまま保持されます（ゲーム画面のタイトルで置き換わりません）。",
             "- プレイ状況（プレイ中・読了・積みゲー・中断）は、下部のバーか右クリックで設定します。",

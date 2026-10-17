@@ -249,6 +249,16 @@ def already_running(game_dir: Path) -> bool:
     return bool(_related_processes(None, game_dir))
 
 
+def running_pids(game_dir: Path) -> list[int]:
+    """The programs from this game's folder running right now (to force them closed)."""
+    return list(_related_processes(None, game_dir))
+
+
+def force_close_running(game_dir: Path) -> None:
+    """End whatever runs from this game's folder (the owner pressed Force Close: anything unsaved is lost)."""
+    _force_close(running_pids(game_dir))
+
+
 def _window_titles() -> dict[int, list[str]]:
     """pid -> titles of its visible top-level windows (Windows only)."""
     if sys.platform != "win32":

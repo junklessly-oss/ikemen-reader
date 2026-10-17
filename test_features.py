@@ -1028,6 +1028,92 @@ class BottomBarWhilePlaying(unittest.TestCase):
             finally:
                 w.worker = None
                 w.close()
+                app.wait_for_tasks(5)   # (the settings share still writing into tmp failed its cleanup now and then)
+
+    def test_reload_and_status_pick(self):
+        """A full reload (e.g. the upload after a session changed the cloud folder) with the same game selected: the
+        bar is updated once and nothing fades (refilling the grid passed the selection through other games and
+        none - the name / light / stats flickered). Picking a status: only its words fade, the name's way."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            g = lib.add_game("Alpha", "PC", exe=r"C:\a\a.exe")
+            lib.add_game("Beta", "PC", exe=r"C:\b\b.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.resize(1200, 800)
+                w.show()
+                w.refresh()
+                w._select(g.game_id)
+                end = time.monotonic() + 0.6
+                while time.monotonic() < end:
+                    QApplication.processEvents()
+                    time.sleep(0.005)
+                shown = []
+                real = w._update_details_now
+                with mock.patch.object(w, "_update_details_now", lambda: (shown.append(w.selected_id()), real())):
+                    lib.update(g.game_id, auto_title="x")
+                    w.refresh()
+                self.assertEqual(set(shown), {g.game_id})            # never another game or none in between
+                self.assertEqual(w._fader.pieces, {})                # nothing faded
+                w.d_status.setCurrentIndex(w.d_status.findData("reading"))
+                self.assertEqual(sorted(w._fader.pieces), ["status"])
+                f = w._fader.pieces["status"]
+                self.assertEqual((f.out_s, f.in_s), (app.BAR_OUT_S, app.BAR_IN_S))
+                self.assertEqual(f.rect, w._status_text_rect())      # the words only, not the box
+                self.assertEqual(lib.get(g.game_id).status, "reading")
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_stats_come_back_with_synced(self):
+        """The game closed: the light says Now Reading until the saves have uploaded (and the button Stop, so both
+        change together) - the time / date stay away until then, never beside Now Reading."""
+        import threading
+        from types import SimpleNamespace
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            g = Library(cloud).add_game("A", "PC", exe=r"C:\a\a.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.refresh()
+                w._select(g.game_id)
+                w.worker = SimpleNamespace(stop_pressed=threading.Event(), force_close=threading.Event())
+                w.playing_id = g.game_id
+                w.play_phase = "playing"
+                self.assertTrue(w.quiet(g.game_id))
+                w._update_details()
+                self.assertFalse(w.d_status.isHidden())             # the status keeps showing while reading
+                self.assertFalse(w.d_status.blank)                  # (owner: no fade around a session)
+                w._sync_wait(g.game_id, after_session=True)        # closed: uploading (not shown yet)
+                w.play_phase = "syncing"
+                # still Stop + Now Reading: button and light change together, in one update (owner, 2026-10-17)
+                self.assertEqual(w._session_look(g.game_id), ("bar.stop", "playing"))
+                self.assertTrue(w.quiet(g.game_id))                 # -> no stats yet
+                w._waiting = (g.game_id, time.monotonic() - 1, True)
+                self.assertEqual(w._session_look(g.game_id)[1], "syncing")
+                self.assertTrue(w.quiet(g.game_id))
+                w.worker, w.playing_id, w.play_phase = None, None, "done"   # synced: the session is over
+                self.assertFalse(w.quiet(g.game_id))
+                w._update_details()
+                self.assertFalse(w.d_status.blank)
+                self.assertFalse(w.d_status.testAttribute(app.Qt.WA_TransparentForMouseEvents))
+            finally:
+                w.worker = None
+                w.close()
+                app.wait_for_tasks(5)
 
 
 class SaveFolderSuggestions(unittest.TestCase):
@@ -1241,11 +1327,13 @@ class Version101QuickFixes(unittest.TestCase):
         from PySide6.QtWidgets import QApplication, QDialog, QPushButton
         import app
         QApplication.instance() or QApplication([])
-        cases = [([("yes", "Remove"), ("no", "Cancel")], ["Cancel", "Remove"], "Remove"),
+        # (Enter = the safe button on the left: what it always did on screen, where Qt gave Enter to the focused
+        # leftmost button - set outright since 2026-10-17)
+        cases = [([("yes", "Remove"), ("no", "Cancel")], ["Cancel", "Remove"], "Cancel"),
                  ([("no", "Cancel"), ("yes", "Confirm")], ["Cancel", "Confirm"], "Cancel"),
                  ([("setup", "Set Up"), ("new", "Add as New"), ("cancel", "Cancel")],
-                  ["Cancel", "Add as New", "Set Up"], "Set Up"),
-                 ([("now", "Choose Now"), ("later", "Later")], ["Later", "Choose Now"], "Choose Now")]
+                  ["Cancel", "Add as New", "Set Up"], "Cancel"),
+                 ([("now", "Choose Now"), ("later", "Later")], ["Later", "Choose Now"], "Later")]
         for buttons, order, default in cases:
             seen = {}
 
@@ -2240,6 +2328,55 @@ class SmoothAnimations(unittest.TestCase):
         QApplication.processEvents()
         return app, w, lib
 
+    def test_vsync_clock_ticks_per_frame_and_stops(self):
+        """Hover popups follow the mouse once per screen refresh (a 16 ms timer juddered on a 143 Hz screen)."""
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        clock = app.VsyncClock()
+        ticks = []
+        clock.timeout.connect(lambda: ticks.append(time.perf_counter()))
+        clock.start()
+        self.assertTrue(clock.isActive())
+        end = time.monotonic() + 0.5
+        while time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.001)
+        self.assertGreaterEqual(len(ticks), 20)                  # (>= 40 a second, whatever the screen)
+        clock.stop()
+        QApplication.processEvents()
+        n = len(ticks)
+        end = time.monotonic() + 0.1
+        while time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.001)
+        self.assertEqual(len(ticks), n)                          # stopped: nothing more
+        self.assertIsInstance(app.SmoothTip.instance()._timer, app.VsyncClock)
+
+    def test_rocking_runs_on_the_windows_clock(self):
+        """The easter egg sets how strongly the covers rock; the window's own animation clock draws it (one evenly
+        spaced redraw per frame - the egg's timer redrawing as well gave uneven frames and hitches)."""
+        with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w, _ = self._window(tmp, n=6, art_every=1)
+            try:
+                egg = app.EasterEgg(w)
+                egg._rocker._scale = egg._rocker.HOT_SCALE
+                t = w.rumble_t
+                egg._rumble_step()
+                self.assertGreater(w.rumble, 0)
+                self.assertEqual(w.rumble_t, t)                  # (the egg only sets the strength)
+                self.assertTrue(w.anim.isActive())
+                w._tick()
+                self.assertGreater(w.rumble_t, t)                # the window's frame moves it on
+                egg._rocker.hide()
+                egg._rumble_step()
+                self.assertEqual(w.rumble, 0)
+                egg.dismiss()
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
     def test_visible_range_matches_a_full_scan(self):
         with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
             app, w, _ = self._window(tmp)
@@ -2473,7 +2610,15 @@ class Statistics(unittest.TestCase):
         b.show()
         QApplication.processEvents()
         b.set_values(180, now, [], key=("d",))
-        self.assertEqual((b.seconds, b.last, b._timer.isActive()), (180, now, False))   # at once
+        self.assertEqual((b.seconds, b.last), (180, now))            # the new values at once...
+        self.assertTrue(b.switching)                                 # ...faded in place (icons stay)
+        self.assertEqual(b._switch[0][0][0][0][1], "clock")         # (from the old groups: 1h 00m)
+        end = time.monotonic() + 1
+        while b.switching and time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        QApplication.processEvents()
+        self.assertFalse(b.switching)
         b.count_up(10)
         self.assertEqual(b._count[0], 10)
         b.grab()
@@ -2487,6 +2632,75 @@ class Statistics(unittest.TestCase):
         b.count_up(500)                                             # (never counts down)
         self.assertIsNone(b._count)
         b.close()
+
+    def test_last_read_per_device(self):
+        """The day's hover box: when each device last read it; Never Played / Not Recorded (both read it before dates
+        were kept per device: the shared date can't be told apart)."""
+        from library import Game
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Library(Path(tmp))
+            g = lib.add_game("A", "PC", exe=r"C:\a\a.exe")
+            self.assertEqual(lib.get(g.game_id).last_played_on("PC"), 0.0)          # never
+            lib.record_session(g.game_id, "PC", 60, when=1000.0)
+            lib.record_session(g.game_id, "Laptop", 60, when=2000.0)
+            g = lib.get(g.game_id)                                                  # (survives the file)
+            self.assertEqual((g.last_played_on("PC"), g.last_played_on("Laptop")), (1000.0, 2000.0))
+        old = Game("b", "B", playtime={"PC": 60.0}, last_played=500.0)              # from before: one device
+        self.assertEqual((old.last_played_on("PC"), old.last_played_on("Laptop")), (500.0, 0.0))
+        both = Game("c", "C", playtime={"PC": 60.0, "Laptop": 5.0}, last_played=500.0)
+        self.assertEqual((both.last_played_on("PC"), both.last_played_on("Laptop")), (None, None))
+        bad = Game.from_json(json.dumps({"game_id": "d", "title": "D", "last_played_by": {"PC": "x", "L": float("nan")}}))
+        self.assertEqual(bad.last_played_by, {})
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        b = app.StatsLine()
+        b.set_values(60, 1000.0, [], per_last=[("This Device", 1000.0), ("Other Device", 0.0), ("X", None)])
+        tip = b._groups(60, 1000.0)[1][1]
+        self.assertIn("Never Played", tip)
+        self.assertIn("Not Recorded", tip)
+        self.assertIn(app.i18n.date(1000.0), tip)
+        # the time's box lists both devices too: one that never read it says Never Played
+        b.set_values(60, 1000.0, [("This Device", 60.0), ("Other Device", 0.0)])
+        time_tip = b._groups(60, 1000.0)[0][1]
+        self.assertIn("This Device", time_tip)
+        self.assertIn("Other Device&nbsp;&nbsp;&nbsp;<b>Never Played</b>", time_tip)
+
+    def test_count_up_waits_for_the_new_total(self):
+        """A game closes: the bar updates at once with the old total (the new one comes with the background
+        re-read). The count-up must wait for the new total, not start and drop itself on the first update."""
+        import dataclasses
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            g = Library(cloud).add_game("A", "PC", exe=r"C:\a\a.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.resize(1200, 800)
+                w.show()
+                w.refresh()
+                old = dataclasses.replace(w.games[g.game_id], playtime={"PC": 600.0})
+                w.games[g.game_id] = old
+                w._select(g.game_id)
+                w._count_up = (g.game_id, 600.0, time.monotonic())   # a 300 s session just ended
+                w._update_details()                                   # the bar at once: still the old total
+                self.assertIsNone(w.d_stats._count)
+                self.assertIsNotNone(w._count_up)                     # still waiting
+                w.games[g.game_id] = dataclasses.replace(old, playtime={"PC": 900.0})   # the re-read lands
+                w._update_details()
+                self.assertEqual(w.d_stats._count[0], 600.0)          # counts up 600 -> 900
+                self.assertIsNone(w._count_up)
+                # ...but only once the bar has settled: the old total sits still through the cross-fade first
+                self.assertGreater(w.d_stats._count[1], time.monotonic() + app.BAR_OUT_S + app.BAR_IN_S)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
 
 
 class RenameFromBar(unittest.TestCase):
@@ -2951,7 +3165,8 @@ class SmoothHoverPopups(unittest.TestCase):
                 self.assertTrue(w.isVisible())             # Cancel: stays open
                 buttons = asked.call_args[0][3]
                 self.assertEqual(buttons, [("cancel", app.tr("game.cancel")), ("continue", app.tr("close.continue"))])
-                self.assertEqual(app.i18n.S["close.continue"], ("Continue", "続ける"))
+                # (the question is "Close anyway?": the button answers it - 2026-10-17 text pass)
+                self.assertEqual(app.i18n.S["close.continue"], ("Close Anyway", "それでも閉じる"))
             finally:
                 w.worker = None
                 w.close()
@@ -2994,9 +3209,84 @@ class SmoothHoverPopups(unittest.TestCase):
                 w.close()
                 app.wait_for_tasks(5)
 
-    def test_bar_cross_fades_as_one(self):
-        """Selecting another game: the bar's old look lies on top and fades (one image, the window's clock), the new
-        look already underneath; then the layer goes."""
+    def test_still_patch_of_a_thin_strip_keeps_the_cover(self):
+        """A thin strip near a cover's bottom edge (a folder hover's region splits the light squares into such strips)
+        is patched with the cover in it, not bare backdrop (Qt's own idea of where covers are is GRID_TOP_SHIFT
+        higher - the dark rectangles under the lights)."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            Library(cloud).add_game("A", "PC", exe=r"C:\a\a.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.resize(1200, 800)
+                w.show()
+                w.refresh()
+                self._run(0.3)
+                grid = w.grid
+                grid._still = grid._make_still()
+                fresh = grid._still.toImage()
+                cover = app.CardDelegate.cover_rect(grid.visualItemRect(grid.item(0)), 0.0).toAlignedRect()
+                strip = app.QRect(cover.right() - 40, cover.bottom() - 9, 35, 8)   # inside the cover, at its foot
+                grid._still.fill(app.QColor("red"))                                  # (so a missed patch shows)
+                grid._patch_still(app.QRegion(strip))
+                k = fresh.devicePixelRatio()
+                got = grid._still.toImage()
+                at = (round(strip.center().x() * k), round(strip.center().y() * k))
+                self.assertEqual(got.pixelColor(*at), fresh.pixelColor(*at))
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_still_picture_is_never_made_while_painting(self):
+        """render() inside paintEvent lost the frame (lights froze; under the easter egg's dark cover their squares
+        went black): the still picture is made / patched in _tick, before the frame is asked for, and its size
+        check matches at every scale (Python's round(802.5) = 802 had it remade every frame at 125 %)."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            Library(cloud).add_game("A", "PC", exe=r"C:\a\a.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.resize(1200, 800)
+                w.show()
+                w.refresh()
+                w.settings.pulse = True
+                w.anim.stop()
+                self._run(0.3)
+                grid = w.grid
+                for dirty in (None, app.QRegion(app.QRect(0, 0, 5, 5))):
+                    grid._still_dirty = dirty
+                    w._tick()
+                    self.assertIsNotNone(grid.light_frame)
+                    self.assertEqual(grid._still.size(), grid._still_size())     # ready (and patched) beforehand
+                    self.assertIsNone(grid._still_dirty)
+                    with mock.patch.object(app.LibraryGrid, "_make_still") as make, \
+                            mock.patch.object(app.LibraryGrid, "_patch_still") as patch:
+                        grid.viewport().repaint(grid.light_frame["region"])
+                    make.assert_not_called()
+                    patch.assert_not_called()
+                with mock.patch.object(grid.viewport(), "devicePixelRatioF", return_value=1.25), \
+                        mock.patch.object(grid.viewport(), "height", return_value=642):
+                    self.assertEqual(grid._still_size().height(), 803)          # as Qt rounds (802.5 -> 803)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_bar_pieces_fade_out_then_in(self):
+        """Selecting another game: the pieces that changed (the name) fade out, then in; pieces that look the same
+        (Edit, the Read button) are left alone; then the layer goes (owner, 2026-10-17: only the Read button
+        cross-fades)."""
         from unittest import mock
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
@@ -3017,23 +3307,44 @@ class SmoothHoverPopups(unittest.TestCase):
                 self._run(0.4)
                 w._select(z.game_id)
                 QApplication.processEvents()
-                self.assertTrue(w._fader.active)                          # old look on top...
-                self.assertEqual(w.d_title.text(), "Zeta Long Title")      # ...new one already underneath
-                alphas = []
-                end = time.monotonic() + 0.6
+                f = w._fader
+                self.assertTrue(f.active)
+                self.assertEqual(w.d_title.text(), "Zeta Long Title")      # (new look already underneath)
+                self.assertIn("title", f.pieces)                           # the name: out, then in
+                self.assertFalse(f.pieces["title"].cross)
+                self.assertNotIn("edit", f.pieces)                         # unchanged: left alone
+                self.assertNotIn("button", f.pieces)                       # Read -> Read: nothing to cross-fade
+                self.assertEqual(f.pieces["title"].out_s, app.BAR_OUT_S)   # the name: the bar's one pace
+                # the status words alone: the empty box behind them is the box itself (no guessed colour)
+                bare = w._bar_without_status_words()
+                self.assertFalse(w.d_status.blank)                          # (put back)
+                self.assertEqual(bare.size(), w.details.grab().size())
+                first = f.pieces["title"].t0
+                w._update_details()                                        # updated again mid-fade, same look:
+                self.assertEqual(f.pieces["title"].t0, first)              # no restart (that was the flicker)
+                self._run(0.6)
+                w.grid.clearSelection()                                    # nothing selected, then a game again:
+                self._run(0.6)
+                w._select(a.game_id)
+                QApplication.processEvents()
+                starts = {p.t0 for p in f.pieces.values()}
+                self.assertIn("title", f.pieces)
+                self.assertIn("button", f.pieces)
+                self.assertEqual(len(starts), 1)                           # the whole bar: one moment...
+                self.assertTrue(all(p.cross and p.xfade_s == app.BAR_WAKE_S for p in f.pieces.values()))   # ...one time
+                end = time.monotonic() + app.BAR_OUT_S + app.BAR_IN_S + 0.3
                 while time.monotonic() < end:
                     QApplication.processEvents()
-                    alphas.append(w._fader.alpha)
                     time.sleep(0.005)
-                self.assertFalse(w._fader.active)
-                self.assertFalse(w._fader.isVisible())
-                fading = [x for x in alphas if 0 < x < 1]
-                self.assertTrue(fading and fading == sorted(fading, reverse=True))   # only ever fading away
+                self.assertFalse(f.active)
+                self.assertFalse(f.isVisible())
             finally:
                 w.close()
                 app.wait_for_tasks(5)
 
-    def test_read_button_grows_on_both_sides(self):
+    def test_read_button_keeps_one_size(self):
+        """Read / Stop / Open: the same size and place (owner, 2026-10-17: the few px between them read as noise);
+        only a label that needs more room makes it bigger, and Read's left edge never moves."""
         from unittest import mock
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
@@ -3052,21 +3363,102 @@ class SmoothHoverPopups(unittest.TestCase):
                 w._select(g.game_id)
                 self._run(0.3)
                 b = w.play_btn
-                centre = b.geometry().center().x()
-                left = b.geometry().left()
-                was = b.width()
-                b.setText("Starting the Game")                     # (any longer label)
-                self._run(0.6)
-                # centre stayed (as far as the 22 px margin allows: the off-screen test fonts run very wide)
-                overflow = max(0.0, (b.width() - was) / 2 - 22)
-                self.assertLessEqual(abs(b.geometry().center().x() - centre), overflow + 1)
-                self.assertLess(b.geometry().left(), left)                         # grew to the left too
+                geo = b.geometry()
+                self.assertEqual(geo.left() + b.MARGINS[0], 25)                    # visible edge 25 px in
+                for key in ("bar.stop", "bar.open", "bar.play"):
+                    b.setText(app.tr(key))
+                    self._run(0.3)
+                    self.assertEqual(b.geometry(), geo, key)                       # one size, one place
+                b.setText("Starting the Game Now")                                # (a label needing more room)
+                self._run(0.3)
+                self.assertGreater(b.width(), geo.width())
+                self.assertEqual(b.geometry().left(), geo.left())
                 b.setText(app.tr("bar.play"))
-                self._run(0.6)
-                self.assertEqual(b.geometry().left(), left)                        # back exactly where it was
+                self._run(0.3)
+                self.assertEqual(b.geometry(), geo)                                # back exactly as it was
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class PopupTextPass(unittest.TestCase):
+    """2026-10-17 pass over every pop-up: risky questions default to the safe answer, a launch problem with nothing to
+    choose says OK (not a lone Cancel), titles fit their messages."""
+
+    def _shown(self, call):
+        """(window title, buttons left to right, the Enter button) of the pop-up `call` opens."""
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from unittest import mock
+        from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+        import app
+        QApplication.instance() or QApplication([])
+        seen = {}
+
+        def fake_exec(d):
+            d.show()                                   # (really on screen: Qt moves Enter with the focus)
+            QApplication.processEvents()
+            bs = d.findChildren(QPushButton)
+            seen.update(title=d.windowTitle(), buttons=[b.text() for b in bs],
+                        default=[b.text() for b in bs if b.isDefault()])
+            d.close()
+            return 0
+        with mock.patch.object(QDialog, "exec", fake_exec):
+            call(app)
+        return seen
+
+    def test_force_close_enter_keeps_it_open(self):
+        s = self._shown(lambda app: app.ask_yes_no(None, "x", app.tr("stop.force"), app.tr("stop.keep"),
+                                                   title=app.tr("stop.title")))
+        self.assertEqual(s["buttons"], ["Keep Open", "Force Close"])    # safe one far left...
+        self.assertEqual(s["default"], ["Keep Open"])                   # ...and Enter (only it)
+        self.assertEqual(s["title"], "Game Still Open")
+
+    def test_enter_is_the_safe_button_whenever_there_is_one(self):
+        s = self._shown(lambda app: app.ask_yes_no(None, "x", app.tr("restore.restore"), app.tr("game.cancel")))
+        self.assertEqual((s["buttons"], s["default"]), (["Cancel", "Restore"], ["Cancel"]))
+        s = self._shown(lambda app: app.message(None, "x", "T", [("watch", "Wait"), ("force", "Force Close"),
+                                                                ("cancel", "Cancel")]))
+        self.assertEqual((s["buttons"], s["default"]), (["Cancel", "Force Close", "Wait"], ["Cancel"]))
+        s = self._shown(lambda app: app.message(None, "x"))              # a plain note: its one button
+        self.assertEqual(s["default"], ["OK"])
+
+    def test_message_closes_itself_when_done(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        state = {"n": 0}
+
+        def done() -> bool:
+            state["n"] += 1
+            return state["n"] >= 2                   # (e.g. the game was closed meanwhile)
+        t0 = time.monotonic()
+        self.assertEqual(app.message(None, "x", buttons=[("cancel", "Cancel")], done_when=done), "done")
+        self.assertLess(time.monotonic() - t0, 3)
+
+    def test_status_line_texts_are_short(self):
+        """The strip at the very bottom gets short versions (owner: the long ones ran off the window)."""
+        import i18n
+        try:
+            for lang in ("en", "ja"):
+                i18n.set_language(lang)
+                for key in [k[:-len(":line")] for k in i18n.S if k.endswith(":line")]:
+                    self.assertLessEqual(len(i18n.line(key, title="Sakura no Toki")), 60, key)
+                    self.assertLess(len(i18n.line(key, title="x")), len(i18n.tr(key, title="x")) + 1, key)
+            i18n.set_language("en")
+            self.assertEqual(i18n.line("sync.pushed"), i18n.tr("sync.pushed"))     # (no short one: the usual text)
+            self.assertEqual(i18n.games_list(["A", "B"]), "A, B")
+            self.assertEqual(i18n.games_list(["A", "B", "C"]), "3 games")
+        finally:
+            i18n.set_language("en")
+
+    def test_every_text_has_both_languages_and_fills_in(self):
+        import i18n
+        import string
+        for key, (en, ja) in i18n.S.items():
+            self.assertTrue(en and ja, key)
+            names = lambda t: {f for _, f, _, _ in string.Formatter().parse(t) if f}
+            self.assertEqual(names(en), names(ja), key)                 # same {placeholders} in both
 
 
 class FewerGuesses(unittest.TestCase):

@@ -55,15 +55,19 @@ S: dict[str, tuple[str, str]] = {
                                  "フォルダーは設定で変更できます。"),
     "grid.drop_hint":           ("Drop to add", "ドロップして追加"),
     "card.never":               ("Not Started", "未読"),
+    "stats.never_played":       ("Never Played", "未プレイ"),   # last read per device: never on that one
+    "stats.not_recorded":       ("Not Recorded", "記録なし"),   # read there before dates were kept per device
     "bar.play":                 ("Read", "読む"),
     "bar.playing":              ("Now Reading", "読書中"),
     "bar.stop":                 ("Stop", "終了"),
     "bar.tip_stop":             ("Close the game (it may ask to confirm in its own window).",
                                  "ゲームを終了します（ゲーム側で確認が表示される場合があります）。"),
-    "stop.body":                ("{title} is still open. It may be asking something in its own window. "
-                                 "Force it to close? Anything not saved in the game will be lost.",
-                                 "{title} はまだ開いています。ゲームの画面で確認が表示されているかもしれません。"
-                                 "強制終了しますか？セーブしていない内容は失われます。"),
+    "stop.title":               ("Game Still Open", "ゲームがまだ開いています"),
+    "stop.body":                ("{title} is still open. It may be waiting for an answer in its own window "
+                                 "(such as \"Quit the game?\"). Force it to close? Anything you haven't saved in the game "
+                                 "will be lost.",
+                                 "{title} はまだ開いています。ゲームの画面で確認（「終了しますか？」など）が表示されているかもしれません。"
+                                 "強制終了しますか？ゲーム内でセーブしていない内容は失われます。"),
     "stop.force":               ("Force Close", "強制終了"),
     "stop.keep":                ("Keep Open", "開いたままにする"),
     "bar.time_read":            ("Time Read", "読書時間"),
@@ -211,6 +215,8 @@ S: dict[str, tuple[str, str]] = {
     "play.detect_none":         ("Couldn't find where the game saves. Did you save at least once?",
                                  "セーブの場所が見つかりませんでした。一度はセーブしましたか？"),
     "play.title":               ("Can't Start the Game", "ゲームを起動できません"),
+    "play.title_running":       ("Game Already Running", "ゲームはすでに起動中です"),
+    "play.ok":                  ("OK", "OK"),
     "play.retry_without_luna":  ("Read Without Luna", "Lunaなしで読む"),
     "play.retry_without_le":    ("Read Without Locale Emulator", "Locale Emulatorなしで読む"),
     "play.retry":               ("Try Again", "もう一度試す"),
@@ -298,8 +304,8 @@ S: dict[str, tuple[str, str]] = {
     "game.save":                ("Save", "保存"),
     "game.cancel":              ("Cancel", "キャンセル"),
     "game.exe_missing":         ("This Device's .exe wasn't found:\n{path}", "この端末の .exe が見つかりません：\n{path}"),
-    "add.existing":             ("\"{title}\" is already in your library from the other device. Set it up on this device, "
-                                 "so both share the same saves?",
+    "add.existing":             ("\"{title}\" is already in your library from the other device. Set it up on this device "
+                                 "so both devices share the same saves?",
                                  "「{title}」は、もう一方の端末からすでにライブラリに追加されています。この端末でも設定して、"
                                  "同じセーブを共有しますか？"),
     "add.set_up":               ("Set Up on This Device", "この端末で設定する"),
@@ -328,10 +334,19 @@ S: dict[str, tuple[str, str]] = {
     "error.unexpected":         ("Something unexpected went wrong, but nothing was lost. The details were saved to:\n{path}",
                                  "予期しない問題が発生しましたが、何も失われていません。詳細は次の場所に保存されました：\n{path}"),
     "error.use_anyway":         ("Use Anyway", "このまま使う"),
+    "error.save_shared_title":  ("Save Folder Already in Use", "このセーブフォルダーは使用中です"),
     "sync.failed":              ("Couldn't sync the saves because a file is in use or can't be written. Nothing was lost, and Ikemen Reader will try again next time.",
                                  'ファイルが使用中か書き込めないため、セーブを同期できませんでした。何も失われていません。次回もう一度同期します。'),
-    "play.already_running":     ('This game is already running. If Ikemen Reader syncs now, the running game could overwrite those saves later. Choose Wait for It to Close to sync once the game closes, or close the game first.',
-                                 'このゲームはすでに起動しています。今同期すると、起動中のゲームがあとでそのセーブを上書きする恐れがあります。「終了まで待つ」を選ぶとゲームの終了後に同期します。または、先にゲームを閉じてください。'),
+    "play.already_running":     ("This game is already running outside Ikemen Reader. If its saves were synced now, the running "
+                                 "game could overwrite them later.\n\n"
+                                 "Close the game and it will start here by itself, or choose Force Close (anything not saved "
+                                 "in the game will be lost). To keep playing it as it is, choose Wait for It to Close: the "
+                                 "saves sync once it closes.",
+                                 "このゲームはイケメンリーダーの外ですでに起動しています。今セーブを同期すると、起動中のゲームがあとで"
+                                 "上書きしてしまう恐れがあります。\n\n"
+                                 "ゲームを閉じると、ここから自動で起動します。「強制終了」を選ぶこともできます（ゲーム内でセーブして"
+                                 "いない内容は失われます）。このまま続けて遊ぶ場合は「終了まで待つ」を選んでください。ゲームの終了後に"
+                                 "セーブが同期されます。"),
     "play.watch":               ('Wait for It to Close',
                                  '終了まで待つ'),
     "close.syncing":            ('Your saves are syncing right now. Please wait a moment, then close Ikemen Reader.',
@@ -480,6 +495,8 @@ S: dict[str, tuple[str, str]] = {
     "settings.device_taken":    ('Device {n} is already used by another computer ({computer}). Use Device {other} instead?',
                                  '端末{n}はすでに別のパソコン（{computer}）で使われています。端末{other}に変更しますか？'),
     "settings.device_taken_keep": ("Use Device {n} Anyway", "このまま端末{n}を使う"),
+    "settings.device_use":      ("Use Device {n}", "端末{n}を使う"),
+    "settings.device_taken_title": ("Device Number Already Used", "この端末番号は使用中です"),
     "settings.cloud":           ("Cloud Folder", "クラウドフォルダー"),
     "settings.cloud_hint":      ('Any folder that a cloud service of your choice keeps in sync. Choose the same folder on both devices.',
                                  'お好みのクラウドサービスで同期されるフォルダーなら、どれでも使えます。両方の端末で同じフォルダーを選んでください。'),
@@ -624,7 +641,7 @@ S: dict[str, tuple[str, str]] = {
 
     # ------------------------------------------------------------------ misc
     "close.title":              ("Game Still Running", "ゲームが起動中です"),
-    "close.continue":           ("Continue", "続ける"),
+    "close.continue":           ("Close Anyway", "それでも閉じる"),
     "close.body":               ("{title} is still running. If you close Ikemen Reader now, this session's reading time won't be recorded, and your saves will upload the next time Ikemen Reader opens.\n\nClose anyway?",
                                  '{title} はまだ起動中です。今イケメンリーダーを閉じると、今回の読書時間は記録されず、セーブは次にイケメンリーダーを起動したときにアップロードされます。\n\nそれでも閉じますか？'),
     "file.programs":            ("Programs (*.exe *.lnk)", "プログラム (*.exe *.lnk)"),
@@ -641,6 +658,39 @@ S: dict[str, tuple[str, str]] = {
     "date.days_ago":            ("{n} Days Ago", "{n}日前"),
     "date.weeks_ago":           ("{n} Weeks Ago", "{n}週間前"),
     "datetime.format":          ("%Y-%m-%d %H:%M", "%Y年%m月%d日 %H:%M"),
+
+    # ------------------------------------------------------------------ status line (the strip at the very bottom)
+    # Short versions ("<key>:line") of messages that also appear there: the full text belongs in pop-ups and tips; the
+    # one-line strip only says what happened (owner: the long ones didn't fit the window). See line().
+    "play.no_exe:line":          ("The game's .exe wasn't found on This Device.", "この端末でゲームの .exe が見つかりません。"),
+    "play.luna_missing:line":    ("Luna isn't set up on This Device.", "この端末ではLunaが設定されていません。"),
+    "play.luna_unknown_game:line": ("Luna doesn't know this game yet.", "Lunaにこのゲームがまだ登録されていません。"),
+    "play.luna_running:line":    ("Luna is already open.", "Lunaがすでに起動しています。"),
+    "play.le_missing:line":      ("Locale Emulator isn't set up on This Device.", "この端末ではLocale Emulatorが設定されていません。"),
+    "play.needs_admin:line":     ("The game needs administrator rights.", "このゲームには管理者権限が必要です。"),
+    "play.admin_declined:line":  ("Not started: permission wasn't given.", "許可されなかったため、起動しませんでした。"),
+    "play.cancelled:line":       ("Stopped waiting for the game.", "ゲームの起動を待つのをやめました。"),
+    "play.luna_failed:line":     ("Luna closed before the game started.", "ゲームの起動前にLunaが終了しました。"),
+    "play.never_started:line":   ("The game didn't start.", "ゲームが起動しませんでした。"),
+    "play.already_running:line": ("The game is already running outside Ikemen Reader.",
+                                  "ゲームはイケメンリーダーの外ですでに起動しています。"),
+    "play.not_launched_conflict:line": ("Not started: choose which saves to keep first.",
+                                  "起動しませんでした：先に残すセーブを選んでください。"),
+    "play.not_launched_conflict_first:line": ("Not started: choose which saves to keep first.",
+                                  "起動しませんでした：先に残すセーブを選んでください。"),
+    "play.not_launched_conflict_solo:line": ("Not started: choose which saves to keep first.",
+                                  "起動しませんでした：先に残すセーブを選んでください。"),
+    "play.detect_none:line":     ("Couldn't find where the game saves.", "セーブの場所が見つかりませんでした。"),
+    "sync.failed:line":          ("Couldn't sync the saves. Trying again next time.", "セーブを同期できませんでした。次回もう一度試します。"),
+    "sync.conflict_unresolved:line": ("The saves differ, so nothing was changed.", "セーブが異なるため、何も変更しませんでした。"),
+    "sync.conflict_unresolved_first:line": ("The saves differ, so nothing was changed.", "セーブが異なるため、何も変更しませんでした。"),
+    "sync.conflict_unresolved_solo:line": ("The saves differ, so nothing was changed.", "セーブが異なるため、何も変更しませんでした。"),
+    "error.save_broad:line":     ("That save folder can't be used. Check it in Edit.", "そのセーブフォルダーは使えません。「編集」で確認してください。"),
+    "error.save_cloud:line":     ("That save folder can't be used. Check it in Edit.", "そのセーブフォルダーは使えません。「編集」で確認してください。"),
+    "error.save_relative:line":  ("That save folder can't be used. Check it in Edit.", "そのセーブフォルダーは使えません。「編集」で確認してください。"),
+    "status.now_custom:line":    ("Switched to My Arrangement.", "「自分の並び」に切り替えました。"),
+    "status.title_updated:line": ('Title updated to "{title}".', "タイトルを「{title}」に更新しました。"),
+    "status.n_games":            ("{n} games", "{n}ゲーム"),
 }
 
 
@@ -659,6 +709,18 @@ def tr(key: str, /, **kw) -> str:
         return key
     text = pair[1] if _lang == "ja" else pair[0]
     return text.format(**kw) if kw else text
+
+
+def line(key: str, /, **kw) -> str:
+    """The text for the status line: the short "<key>:line" version when there is one, else the usual text."""
+    return tr(key + ":line", **kw) if key + ":line" in S else tr(key, **kw)
+
+
+def games_list(titles: list[str]) -> str:
+    """Game titles for the status line: one or two by name, more as a count (a long list ran off the window)."""
+    if len(titles) <= 2:
+        return ("、" if _lang == "ja" else ", ").join(titles)
+    return tr("status.n_games", n=len(titles))
 
 
 def playtime(seconds: int) -> str:

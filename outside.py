@@ -20,14 +20,25 @@ from typing import Optional
 
 FROZEN = bool(getattr(sys, "frozen", False))
 _PACKAGING_VARS = ("QT_PLUGIN_PATH", "QML2_IMPORT_PATH")
+_OURS: set[str] = set()          # settings Ikemen Reader made for itself (own_setting): never passed on
 _lock = threading.Lock()
+
+
+def own_setting(name: str, value: str) -> None:
+    """Set an environment setting meant for Ikemen Reader alone: programs it starts don't get it (e.g. "ignore
+    Windows zoom" - Luna is a Qt program too, and would ignore the zoom as well)."""
+    os.environ[name] = value
+    _OURS.add(name.upper())
 
 
 def environment(frozen: bool = FROZEN) -> Optional[dict[str, str]]:
     """The environment for a program we start (None = just inherit ours: nothing to remove)."""
-    if not frozen:
+    if not frozen and not _OURS:
         return None
-    env = {k: v for k, v in os.environ.items()
+    env = {k: v for k, v in os.environ.items() if k.upper() not in _OURS}
+    if not frozen:
+        return env
+    env = {k: v for k, v in env.items()
            if not k.upper().startswith("_PYI") and k.upper() not in _PACKAGING_VARS}
     own = getattr(sys, "_MEIPASS", "")
     for key in [k for k in env if k.upper() == "PATH"]:

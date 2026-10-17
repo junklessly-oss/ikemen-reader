@@ -211,10 +211,22 @@ class Game:
     folder: str = ""                                    # id of the folder it's in ("" = main grid)
     names: list[str] = field(default_factory=list)      # other names from VNDB (English title, aliases...): search
     names_for: str = ""                                 # the vndb_id those names belong to
+    last_played_by: dict[str, float] = field(default_factory=dict)  # unix time per device (since 2026-10-17)
 
     @property
     def total_playtime(self) -> float:
         return sum(self.playtime.values())
+
+    def last_played_on(self, machine: str) -> Optional[float]:
+        """When this device last read it: a time, 0.0 = never read there, None = read there but not recorded
+        (both devices read it before dates were kept per device: the shared date can't be told apart)."""
+        if machine in self.last_played_by:
+            return self.last_played_by[machine]
+        if self.playtime.get(machine, 0) <= 0:
+            return 0.0
+        if not any(s > 0 for m, s in self.playtime.items() if m != machine):
+            return self.last_played or None   # (only this device ever read it: the shared date is its own)
+        return None
 
     def paths_for(self, machine: str) -> MachinePaths:
         return self.paths.get(machine) or MachinePaths()
@@ -238,6 +250,15 @@ class Game:
                 v = float(s)
                 if v == v and v != float("inf"):              # (not NaN / infinity)
                     rest["playtime"][m] = max(0.0, round(v, 3))
+            except (TypeError, ValueError):
+                pass
+        by = d.get("last_played_by") if isinstance(d.get("last_played_by"), dict) else {}
+        rest["last_played_by"] = {}
+        for m, t in by.items():
+            try:
+                v = float(t)
+                if 0.0 <= v < 1e11:                           # (also catches NaN / infinity)
+                    rest["last_played_by"][m] = v
             except (TypeError, ValueError):
                 pass
         names = rest.get("names")
@@ -566,6 +587,7 @@ class Library:
             raise KeyError(game_id)
         game.playtime[machine] = round(game.playtime.get(machine, 0) + max(0.0, float(seconds)), 3)
         game.last_played = when if when is not None else time.time()
+        game.last_played_by[machine] = game.last_played
         self.save(game)
         return game
 

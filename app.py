@@ -11,6 +11,7 @@ All interface text lives in i18n.py.
 """
 from __future__ import annotations
 
+import ctypes
 import html
 import dataclasses
 import math
@@ -380,15 +381,41 @@ class LibraryGrid(QListWidget):
         self._making_still = True
         try:
             for r in region:
+                # each piece reaches GRID_TOP_SHIFT higher: Qt picks which covers to draw by where IT thinks they
+                # are (that much higher than where we draw them), so a thin strip near a cover's bottom edge came
+                # back as bare backdrop - the dark rectangles under the lights while a folder was hovered (its
+                # region splits the light squares into such strips). Redrawing a little more is harmless.
+                r = r.adjusted(0, -(GRID_TOP_SHIFT + 2), 0, 0).intersected(self.viewport().rect())
                 self.viewport().render(self._still, r.topLeft(), QRegion(r))
         finally:
             delegate._skip_light = False
             self._making_still = False
 
+    def _still_size(self) -> QSize:
+        vp = self.viewport()
+        dpr = vp.devicePixelRatioF()
+        # (math.floor(x + 0.5), not round(): Python rounds 802.5 to 802, so at 125 % it never matched and was
+        # remade every frame)
+        return QSize(max(1, math.floor(vp.width() * dpr + 0.5)), max(1, math.floor(vp.height() * dpr + 0.5)))
+
+    def prepare_still(self) -> bool:
+        """Bring the still picture up to date. Called BEFORE a lights-only frame is asked for, never while
+        painting: render() inside paintEvent loses that frame's drawing (the lights froze, and under the
+        easter egg's dark cover each lost frame darkened their squares again until they were black)."""
+        if self.bare or not self.isVisible():
+            return False
+        if self._still is None or self._still.size() != self._still_size():
+            self._still, self._still_dirty = self._make_still(), None
+        elif self._still_dirty is not None and not self._still_dirty.isEmpty():
+            self._patch_still(self._still_dirty)  # (only what changed since: a hover, a cover loading...)
+            self._still_dirty = None
+        return True
+
     def _make_still(self) -> Optional[QPixmap]:
         vp = self.viewport()
         dpr = vp.devicePixelRatioF()
-        pm = QPixmap(max(1, round(vp.width() * dpr)), max(1, round(vp.height() * dpr)))
+        size = self._still_size()
+        pm = QPixmap(size.width(), size.height())
         pm.setDevicePixelRatio(dpr)
         delegate = self.itemDelegate()
         delegate._skip_light = True
@@ -402,12 +429,10 @@ class LibraryGrid(QListWidget):
 
     def paintEvent(self, ev) -> None:
         frame, self.light_frame = self.light_frame, None
-        if frame is not None and not getattr(self, "_making_still", False) and not self.bare                 and ev.region().subtracted(frame["region"]).isEmpty():
-            if self._still is None or self._still.size() != self.viewport().size() * self.viewport().devicePixelRatioF():
-                self._still, self._still_dirty = self._make_still(), None
-            elif self._still_dirty is not None and not self._still_dirty.isEmpty():
-                self._patch_still(self._still_dirty)  # (only what changed since: a hover, a cover loading...)
-                self._still_dirty = None
+        if frame is not None and not getattr(self, "_making_still", False) and not self.bare \
+                and self._still is not None and self._still.size() == self._still_size() \
+                and (self._still_dirty is None or self._still_dirty.isEmpty()) \
+                and ev.region().subtracted(frame["region"]).isEmpty():
             p = QPainter(self.viewport())
             p.setRenderHint(QPainter.Antialiasing)
             k = self._still.devicePixelRatio()
@@ -740,7 +765,13 @@ NO_RESULTS_Y = 0.44                  # ... at this height of the library (the op
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 LIGHT_FADE_S = 0.22                  # a light changing colour cross-fades this long (owner: 0.45 felt slow)
-BAR_XFADE_S = 0.2                    # the bottom bar's one cross-fade, old look -> new look (BarFader)
+BAR_XFADE_S = 0.2                    # the Read button's cross-fade, old look -> new look (BarFader)
+BAR_OUT_S, BAR_IN_S = 0.15, 0.2      # every other piece of the bar that changed: fades out, then in (BarFader)
+ICON_DIM = 0.4                      # the bar's icon buttons when greyed (trash) or off (bookmarks): one dimness
+BAR_WAKE_S = 0.22                    # nothing selected <-> selected: the whole bar blends as one, over this long
+ROLL_GAP = 5                         # px between the old and the new number as the time rolls up after a session
+COUNT_UP_SETTLE_S = 0.25           # after the bar's cross-fade: the old total sits still this long, then rolls up
+COUNT_UP_WAIT_S = 15                # after a session: how long the count-up waits for the re-read (Google Drive busy)
 SYNC_SHOW_AFTER_S = 0.3              # a sync around a session shows "Syncing" only if it takes longer than this
 PREFETCH_QUIET_MS = 500              # covers are prepared in the background once nothing has changed this long
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
@@ -952,10 +983,11 @@ _BACK_KEYS = ("cancel", "no", "later")          # "don't do it" buttons: always 
 
 
 def message(parent, text: str, title: str = "", buttons=(("ok", "OK"),), icon=None, dismiss: str = "",
-            rich: bool = False) -> str:
+            rich: bool = False, done_when: Optional[Callable[[], bool]] = None) -> str:
     """A message with our own (translated) buttons. Returns the chosen key; closing the window counts
     as the last button. (Our own dialog rather than QMessageBox, which measures its text before our
-    font is applied and then cuts it off instead of wrapping it.)"""
+    font is applied and then cuts it off instead of wrapping it.) done_when: checked a few times a second -
+    once it's true the message closes by itself and returns "done" (e.g. the game it's about was closed)."""
     d = QDialog(parent)
     d.setWindowTitle(title or tr("app.name"))
     lay = QVBoxLayout(d)
@@ -975,20 +1007,44 @@ def message(parent, text: str, title: str = "", buttons=(("ok", "OK"),), icon=No
     # buttons are listed most important first; shown Cancel far left, the main action far right
     backs = [b for b in buttons if b[0] in _BACK_KEYS]
     shown = backs + [b for b in reversed(buttons) if b[0] not in _BACK_KEYS]
+    # Enter = the safe "don't" button when there is one (Cancel / Later / Keep Open...), else the first listed. Set
+    # outright: left to Qt, Enter went to whichever button had the focus (the leftmost) - the same in effect, but
+    # by accident (found 2026-10-17)
+    enter = backs[0][0] if backs else buttons[0][0]
+    default_button = None
     for key, label in shown:
         b = QPushButton(label)
+        b.setAutoDefault(False)                    # (focus mustn't move Enter elsewhere)
         b.clicked.connect(lambda _=False, k=key: (chosen.update(key=k), d.accept()))
-        if key == buttons[0][0]:
-            b.setDefault(True)                     # Enter = the first one listed
+        if key == enter:
+            b.setDefault(True)
+            default_button = b
         row.addWidget(b)
     lay.addLayout(row)
     d.setFixedSize(d.sizeHint())              # sized to the wrapped text
+    if default_button is not None:
+        default_button.setFocus()
+    if done_when is not None:
+        watch = QTimer(d)
+        watch.setInterval(400)
+
+        def check() -> None:
+            try:
+                over = done_when()
+            except Exception:                 # (a failed check just doesn't close it)
+                over = False
+            if over and d.isVisible():
+                chosen.update(key="done")
+                d.accept()
+        watch.timeout.connect(check)
+        watch.start()
     d.exec()
     return chosen["key"]
 
 
-def ask_yes_no(parent, text: str, yes: str, no: str) -> bool:
-    return message(parent, text, buttons=[("yes", yes), ("no", no)]) == "yes"
+def ask_yes_no(parent, text: str, yes: str, no: str, title: str = "") -> bool:
+    """yes / no: no far left - and on Enter, and closing the window (see message)."""
+    return message(parent, text, title, buttons=[("yes", yes), ("no", no)], dismiss="no") == "yes"
 
 
 def heading_message(parent, heading: str, body: str, buttons, dismiss: str = "") -> str:
@@ -1382,6 +1438,13 @@ def ease(t: float) -> float:
     return t * t * (3 - 2 * t)          # smoothstep: gentle start and finish
 
 
+def ease_cross(t: float) -> float:
+    """For cross-fades (two looks on top of each other): smootherstep - as gentle at both ends as ease(), but through
+    the middle quicker, where old and new show half and half (two labels overlapping read muddy)."""
+    t = max(0.0, min(1.0, t))
+    return t * t * t * (t * (6 * t - 15) + 10)
+
+
 _CJK = "　-〿぀-ヿ㐀-鿿豈-﫿＀-￯"     # Japanese characters
 _JOINERS = "†‡・/\\-–—_~～×:：&+"          # a title may break after these ("CROSS†" / "CHANNEL")
 _J = re.escape(_JOINERS)
@@ -1562,17 +1625,24 @@ class FadingStatusBar(QStatusBar):
     """The status line at the very bottom ("Now Reading...", "Library updated..."): messages fade in, fade out
     when they're cleared, and one replacing another fades out first, then the new one in (never both at once,
     nothing slides). showMessage / clearMessage / currentMessage work as usual; only the drawing is ours."""
-    IN_S, OUT_S, SWAP_S = 0.2, 0.3, 0.15    # fade in / fade out when cleared / fade out when replaced
+    # fade in / fade out when cleared / fade out when replaced (in and replaced: the bottom bar's own timing)
+    IN_S, OUT_S, SWAP_S = BAR_IN_S, 0.3, BAR_OUT_S
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._disp, self._alpha = "", 0.0       # what's on screen and how visible
         self._last_tick = time.monotonic()
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer = VsyncClock(self)          # (one step per screen refresh: even on the owner's 143 Hz screen)
         self._timer.timeout.connect(self._tick)
         self.messageChanged.connect(self._changed)
+
+    _hold_until = 0.0                           # a new message waits until then before fading in
+
+    def show_with_bar(self, text: str, timeout: int = 0) -> None:
+        """A message that belongs with a change of the bottom bar (a session's end: Synced, the stats): it fades in
+        together with the bar's pieces - after their fade-out, over the same time (owner: it came back early)."""
+        self._hold_until = time.monotonic() + BAR_OUT_S
+        self.showMessage(text, timeout)
 
     def _changed(self, _text: str) -> None:
         self._last_tick = time.monotonic()
@@ -1586,6 +1656,8 @@ class FadingStatusBar(QStatusBar):
         if self._disp != target:
             if self._disp and self._alpha > 0:  # the old one goes first
                 self._alpha = max(0.0, self._alpha - dt / (self.SWAP_S if target else self.OUT_S))
+            elif now < self._hold_until and target:
+                self._disp, self._alpha = "", 0.0   # (waiting for the bar)
             else:
                 self._disp, self._alpha = target, 0.0
         elif self._disp and self._alpha < 1:
@@ -1639,7 +1711,7 @@ class FadingStatusBar(QStatusBar):
 # Our own, everywhere (instead of Windows' tooltips): shown sooner (TIP_WAKE_MS), fading in and out, following the
 # mouse smoothly at 60 fps while it stays on the thing, only over the thing itself (a widget can narrow its own
 # spot with tip_at), and kept inside the window: below the pointer, or above it when there's no room below.
-TIP_WAKE_MS = 350                   # how long the mouse rests before a popup comes (Windows' own: ~700)
+TIP_WAKE_MS = 200                   # how long the mouse rests before a popup comes (Windows' own: ~700; 350 felt slow)
 TIP_IN_S, TIP_OUT_S = 0.12, 0.1
 TIP_FOLLOW = 18                     # how quickly it catches up with the mouse (per second)
 TIP_OFFSET = QPoint(14, 20)         # from the pointer (below-right), or above it when there's no room below
@@ -1654,6 +1726,87 @@ class TipTiming(QProxyStyle):
         if hint == QStyle.SH_ToolTip_FallAsleepDelay:
             return 1500                   # moving straight on to the next thing: its popup comes at once
         return super().styleHint(hint, option, widget, returnData)
+
+
+class _VsyncHub(QObject):
+    """The one background thread behind every VsyncClock: it waits for Windows' next screen composition (DwmFlush:
+    once per refresh, whatever the screen's rate) and then ticks every running clock, all in the same frame. It
+    sleeps while no clock runs. (No composition to wait for: every 16 ms.)"""
+    _relay = Signal()
+    _one: Optional["_VsyncHub"] = None
+
+    @classmethod
+    def get(cls) -> "_VsyncHub":
+        if cls._one is None:
+            cls._one = _VsyncHub()
+        return cls._one
+
+    def __init__(self):
+        super().__init__()
+        self.clocks: list = []
+        self._want = threading.Event()
+        self._pending = threading.Event()        # one tick at a time: a busy window never gets a backlog
+        self._relay.connect(self._deliver, Qt.QueuedConnection)
+        threading.Thread(target=self._loop, daemon=True, name="vsync").start()
+
+    def add(self, clock: "VsyncClock") -> None:
+        if clock not in self.clocks:
+            self.clocks.append(clock)
+        self._want.set()
+
+    def remove(self, clock: "VsyncClock") -> None:
+        if clock in self.clocks:
+            self.clocks.remove(clock)
+        if not self.clocks:
+            self._want.clear()
+
+    def _loop(self) -> None:
+        try:
+            flush = ctypes.windll.dwmapi.DwmFlush
+        except (AttributeError, OSError):
+            flush = None
+        while True:
+            self._want.wait()
+            if flush is None or flush() != 0:
+                time.sleep(0.016)
+            if self._want.is_set() and not self._pending.is_set():
+                self._pending.set()
+                try:
+                    self._relay.emit()
+                except RuntimeError:                 # (closing down)
+                    return
+
+    def _deliver(self) -> None:
+        self._pending.clear()
+        for clock in list(self.clocks):
+            if not shiboken6.isValid(clock):         # (its owner was deleted while it ran)
+                self.remove(clock)
+            elif clock in self.clocks:               # (an earlier clock's tick may have stopped this one)
+                clock.timeout.emit()
+
+
+class VsyncClock(QObject):
+    """A timer that ticks once per frame the screen really shows (see _VsyncHub). 16 ms timers make 62.5 steps a
+    second, which on a 120 / 144 / 165 / 240 Hz screen land unevenly (the owner's 143 Hz: 2 or 3 refreshes apart,
+    so movement juddered although every step was on time). Every animation is paced by the real time passed, so it
+    moves at the same speed at any rate - just in more, smaller steps on a faster screen. Used like a QTimer."""
+    timeout = Signal()
+
+    def start(self) -> None:
+        _VsyncHub.get().add(self)
+
+    def stop(self) -> None:
+        if _VsyncHub._one is not None:
+            _VsyncHub._one.remove(self)
+
+    def isActive(self) -> bool:
+        return _VsyncHub._one is not None and self in _VsyncHub._one.clocks
+
+    def setInterval(self, _ms: int) -> None:      # (as a QTimer: the screen sets the pace here)
+        pass
+
+    def setTimerType(self, _kind) -> None:
+        pass
 
 
 class SmoothTip(QWidget):
@@ -1681,9 +1834,7 @@ class SmoothTip(QWidget):
         self._pos = QPointF()
         self._alpha, self._leaving = 0.0, False
         self._last = time.monotonic()
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer = VsyncClock(self)           # (follows the mouse once per screen refresh, whatever the rate)
         self._timer.timeout.connect(self._tick)
 
     def show_for(self, owner: QWidget, text: str, zone: QRect) -> None:
@@ -1789,48 +1940,126 @@ def install_smooth_tips(app: QApplication) -> None:
         app.installEventFilter(_TIP_MANAGER)
 
 
+def bring_to_front(w: QWidget) -> None:
+    """Put this window on top of every other window on the screen once - over a game or another program - without
+    keeping it there: lifted to "always on top" and straight back, so other windows can cover it again afterwards.
+    Then asks for the focus (Windows may refuse that to a program in the background: it flashes in the taskbar)."""
+    if not w.isVisible() or sys.platform != "win32":
+        return
+    try:
+        from ctypes import wintypes
+        set_pos = ctypes.windll.user32.SetWindowPos
+        # (handles are 64-bit: without these types -1 / -2 arrive cut to 32 bits and Windows ignores them)
+        set_pos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                            wintypes.UINT]
+        hwnd = wintypes.HWND(int(w.winId()))
+        flags = 0x0001 | 0x0002 | 0x0010 | 0x0040        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+        set_pos(hwnd, wintypes.HWND(-1), 0, 0, 0, 0, flags)   # HWND_TOPMOST: above everything...
+        set_pos(hwnd, wintypes.HWND(-2), 0, 0, 0, 0, flags)   # HWND_NOTOPMOST: ...and back to normal, still in front
+    except (OSError, AttributeError):
+        pass
+    w.raise_()
+    w.activateWindow()
+
+
+class PopupsToFront(QObject):
+    """App-wide (owner, 2026-10-17): every pop-up comes to the front of the screen when it opens - e.g. "Force Close"
+    while the game's window is on top - and can be covered by other windows afterwards as usual."""
+
+    def eventFilter(self, obj, ev) -> bool:
+        if ev.type() == QEvent.Show and isinstance(obj, QDialog) and obj.isWindow():
+            QTimer.singleShot(0, lambda d=obj: shiboken6.isValid(d) and bring_to_front(d))   # (once it's on screen)
+        return False
+
+
+_POPUPS_TO_FRONT: Optional[PopupsToFront] = None
+
+
+def install_popups_to_front(app: QApplication) -> None:
+    global _POPUPS_TO_FRONT
+    if _POPUPS_TO_FRONT is None:
+        _POPUPS_TO_FRONT = PopupsToFront(app)
+        app.installEventFilter(_POPUPS_TO_FRONT)
+
+
+@dataclasses.dataclass
+class _PieceFade:
+    rect: QRect                 # where (bar coordinates)
+    old: QPixmap                # the bar as it looked when this piece's fade began
+    bare: QPixmap               # what shows between out and in (the bar without the piece)
+    t0: float
+    cross: bool                 # True: cross-fade (the Read button); False: out, then in
+    out_s: float = BAR_OUT_S
+    in_s: float = BAR_IN_S
+    xfade_s: float = BAR_XFADE_S
+    delay: float = 0.0          # (cross-fades only) the old look holds this long first
+
+    def done(self, now: float) -> bool:
+        return now - self.t0 >= (self.delay + self.xfade_s if self.cross else self.out_s + self.in_s)
+
+    def keeps_going(self, now: float) -> bool:
+        """Changed again while fading: keep this fade's clock if the new look can still arrive under it unseen
+        (fading out, or not yet half way in) - restarting is what made pieces flicker as a session ended (the bar
+        is updated several times in a row then: light, then stats, then the re-read...)."""
+        return not self.cross and now - self.t0 < self.out_s + self.in_s / 2
+
+
 class BarFader(QWidget):
-    """The bottom bar's one cross-fade (owner: no blink, no pieces on their own timers, nothing sliding): when what
-    the bar shows changes, a picture of how it looked just before lies on top and fades away while the new look is
-    already there underneath - old and new blend as one image. Driven by the window's animation clock
-    (MainWindow._tick -> step); clicks pass through it."""
+    """The bottom bar's changes, drawn over the bar on the window's clock (MainWindow._tick -> step); clicks pass
+    through. Owner, 2026-10-17: the Read button CROSS-FADES (its old picture fades away over the new one); every other
+    piece FADES OUT, THEN IN (the old picture fades into the bar without it, then that fades away from over the new
+    look). Each piece has its own fade, started only when what IT shows changes - the rest stay perfectly still."""
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._pm: Optional[QPixmap] = None
-        self._t0 = 0.0
-        self.alpha = 0.0
+        self.pieces: dict[str, _PieceFade] = {}
         self.hide()
 
     @property
     def active(self) -> bool:
-        return self._pm is not None
+        return bool(self.pieces)
 
-    def start(self, pm: QPixmap) -> None:
-        self._pm, self._t0, self.alpha = pm, time.monotonic(), 1.0
+    def fade(self, key: str, piece: _PieceFade) -> None:
+        now = time.monotonic()
+        was = self.pieces.get(key)
+        if was is not None and not was.done(now) and was.keeps_going(now):
+            was.rect = was.rect | piece.rect     # (the new look arrives under the fade already under way)
+            was.bare = piece.bare
+            return
+        self.pieces[key] = piece
         self.setGeometry(self.parentWidget().rect())
         self.show()
         self.raise_()
         self.update()
 
     def step(self) -> None:
-        if self._pm is None:
-            return
-        t = (time.monotonic() - self._t0) / BAR_XFADE_S
-        if t >= 1.0:
-            self._pm, self.alpha = None, 0.0
+        now = time.monotonic()
+        for key in [k for k, f in self.pieces.items() if f.done(now)]:
+            del self.pieces[key]
+        if not self.pieces:
             self.hide()
             return
-        self.alpha = 1.0 - ease(t)
         self.update()
 
     def paintEvent(self, ev) -> None:
-        if self._pm is None:
-            return
+        now = time.monotonic()
         p = QPainter(self)
-        p.setOpacity(self.alpha)
-        p.drawPixmap(0, 0, self._pm)
+        for f in self.pieces.values():
+            t = now - f.t0
+            p.save()
+            p.setClipRect(f.rect)
+            if f.cross:
+                p.setOpacity(1.0 - ease_cross((t - f.delay) / f.xfade_s))
+                p.drawPixmap(0, 0, f.old)
+            elif t < f.out_s:                    # out: the old piece fades into the bar without it
+                p.drawPixmap(0, 0, f.bare)
+                p.setOpacity(1.0 - ease(t / f.out_s))
+                p.drawPixmap(0, 0, f.old)
+            else:                                # in: the bar without it fades away from over the new piece
+                p.setOpacity(1.0 - ease(min(1.0, (t - f.out_s) / f.in_s)))
+                p.drawPixmap(0, 0, f.bare)
+            p.restore()
         p.end()
 
 
@@ -1976,7 +2205,7 @@ class StatsLine(QWidget):
     same style as the cover hover (owner's pick of four layouts). Groups that don't fit are left off the end (the
     date first). Pointing at the time shows it per device; pointing at the day shows the date itself.
     Changes land at once (the bar's one cross-fade, BarFader, blends old and new); after a reading session the
-    time counts up from the old total while the clock's hand sweeps once round."""
+    numbers that changed roll up from the old total while the clock's hand sweeps once round."""
     LEAD = 16                               # after the sync status
     COUNT_S = 0.8                           # count-up after a session
 
@@ -1986,19 +2215,35 @@ class StatsLine(QWidget):
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.seconds, self.last = 0.0, 0.0
         self.per_device: list[tuple[str, float]] = []
+        self.per_last: list[tuple[str, Optional[float]]] = []   # last read per device (the day's hover box)
         self._spans: list = []                  # (x from, x to, tooltip) per drawn group
         self._key = None                        # whose values these are (game / folder id)
         self._count: Optional[tuple] = None     # (from seconds, since) while counting up
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer = VsyncClock(self)          # (the roll moves once per screen refresh: no stutter at 143 Hz)
         self._timer.timeout.connect(self._tick)
 
-    def set_values(self, seconds: float, last: float, per_device: list[tuple[str, float]], key=None) -> None:
+    _switch: Optional[tuple] = None             # (the old groups as they fitted, since): values changing on screen
+
+    @property
+    def switching(self) -> bool:
+        return self._switch is not None and time.monotonic() - self._switch[1] < BAR_OUT_S + BAR_IN_S
+
+    def set_values(self, seconds: float, last: float, per_device: list[tuple[str, float]], key=None,
+                   per_last: Optional[list[tuple[str, Optional[float]]]] = None) -> None:
+        """per_last: (device, when) - a time, 0 = never read there, None = not recorded (Game.last_played_on).
+        On screen, new values fade in place: the numbers and words fade out, then in; the icons stay (gliding if
+        they move) - owner, 2026-10-17: no need for the icons to fade when switching between games."""
+        shown = self.isVisible() and self._key is not None
+        if shown and (seconds, last, key) != (self.seconds, self.last, self._key) \
+                and (i18n.playtime(seconds), i18n.ago(last) if last else "") != \
+                (i18n.playtime(self.seconds), i18n.ago(self.last) if self.last else ""):
+            self._switch = (self._fitting(self._groups(self.seconds, self.last)), time.monotonic())
+            self._timer.start()
         if key != self._key:
             self._count = None                  # (a count-up belongs to the game it started on)
             self._key = key
         self.seconds, self.last, self.per_device = seconds, last, per_device
+        self.per_last = per_last or []
         self.updateGeometry()
         self.update()
 
@@ -2006,19 +2251,61 @@ class StatsLine(QWidget):
         """The whole line goes while a game runs and comes back after."""
         self.setVisible(on)
 
-    def count_up(self, from_seconds: float) -> None:
-        """Time read rolls up from from_seconds to the current total (after a reading session)."""
+    def count_up(self, from_seconds: float, delay: float = 0.0) -> None:
+        """Time read rolls up from from_seconds to the current total (after a reading session). delay: the old total
+        stays put that long first (the bar settles before it rolls)."""
         if 0 <= from_seconds < self.seconds:
-            self._count = (from_seconds, time.monotonic())
+            self._count = (from_seconds, time.monotonic() + delay)
+            self._switch = None                 # (the roll shows the change instead)
             self._timer.start()
             self.update()
 
     def _tick(self) -> None:
         if self._count and time.monotonic() - self._count[1] >= self.COUNT_S:
             self._count = None
-        if not self._count:
+        if self._switch is not None and not self.switching:
+            self._switch = None
+        if not self._count and self._switch is None:
             self._timer.stop()
         self.update()
+
+    def _placed(self, fitting: list, x: float) -> list:
+        """(x, run, its group's icon or None) for every run of these groups, laid out from x."""
+        out = []
+        for runs, _tip in fitting:
+            icon = runs[0][1] if runs and runs[0][0] == "i" else None
+            for r in runs:
+                out.append((x, r, icon))
+                x += runs_width([r])
+            x += STAT_GROUP_GAP
+        return out
+
+    def _paint_switch(self, p: QPainter, base: float, mid: float, new: list) -> None:
+        """Values changing on screen: old words / numbers fade out, then the new ones in; an icon in both stays
+        fully drawn, gliding from its old place to its new one (only an icon that comes or goes fades)."""
+        t = time.monotonic() - self._switch[1]
+        # (the name and the status words' timing: the three change together - owner)
+        out_a = 1.0 - ease(min(1.0, t / BAR_OUT_S))
+        in_a = ease(max(0.0, min(1.0, (t - BAR_OUT_S) / BAR_IN_S)))
+        glide = ease(min(1.0, t / BAR_OUT_S))    # (in place before the new values appear: never over them)
+        x0 = float(self.LEAD)
+        was, now = self._placed(self._switch[0], x0), self._placed(new, x0)
+        icons_was = {r[1]: x for x, r, _ in was if r[0] == "i"}
+        icons_now = {r[1]: x for x, r, _ in now if r[0] == "i"}
+        for x, r, icon in was:
+            if r[0] == "t" or (r[0] == "i" and r[1] not in icons_now):
+                # (fading words travel with their group's gliding icon: it never slides over them)
+                shift = (icons_now[icon] - icons_was[icon]) * glide if icon in icons_now else 0.0
+                p.setOpacity(out_a)
+                draw_runs(p, x + shift, base, [r], mid)
+        for x, r, _ in now:
+            if r[0] == "i" and r[1] in icons_was:
+                p.setOpacity(1.0)
+                draw_runs(p, icons_was[r[1]] + (x - icons_was[r[1]]) * glide, base, [r], mid)
+            elif r[0] != "g":
+                p.setOpacity(in_a)
+                draw_runs(p, x, base, [r], mid)
+        p.setOpacity(1.0)
 
     def _fonts(self) -> tuple[QFont, QFont]:
         num = ui_font()                         # the sync line's size (the style sheet's 10 pt)
@@ -2031,14 +2318,19 @@ class StatsLine(QWidget):
         num, unit = self._fonts()
         text, muted = COLORS["text"], COLORS["muted"]
         icon = round(digit_middle(num) * 2 * 1.4)
-        tip = "<br>".join(f'{html.escape(n)}&nbsp;&nbsp;&nbsp;<b>{html.escape(i18n.playtime(s))}</b>'
-                          for n, s in self.per_device if s)
+        # every device listed, like the day's box: one that never read it says so (owner)
+        tip = "<br>".join(f'{html.escape(n)}&nbsp;&nbsp;&nbsp;'
+                          f'<b>{html.escape(i18n.playtime(s) if s else tr("stats.never_played"))}</b>'
+                          for n, s in self.per_device)
         clock = ("i", "clock", text, icon, sweep) if sweep else ("i", "clock", text, icon)
         groups = [([clock, ("g", 5)] + time_runs(seconds, num, unit, text, muted), tip) if seconds
-                  else ([("t", tr("card.never"), num, text)], "")]
+                  else ([("t", tr("card.never"), num, text)], tip)]
         if last:
-            groups.append(([("i", "calendar", text, icon), ("g", 5), ("t", i18n.ago(last), num, text)],
-                           i18n.date(last)))
+            def when(t: Optional[float]) -> str:
+                return i18n.date(t) if t else tr("stats.never_played" if t == 0 else "stats.not_recorded")
+            day_tip = "<br>".join(f'{html.escape(n)}&nbsp;&nbsp;&nbsp;<b>{html.escape(when(t))}</b>'
+                                  for n, t in self.per_last) or i18n.date(last)
+            groups.append(([("i", "calendar", text, icon), ("g", 5), ("t", i18n.ago(last), num, text)], day_tip))
         return groups
 
     def _fitting(self, groups: list) -> list:
@@ -2064,21 +2356,65 @@ class StatsLine(QWidget):
         num, _ = self._fonts()
         fm = QFontMetricsF(num)
         now = time.monotonic()
-        shown, last, sweep = self.seconds, self.last, 0.0
+        k, sweep, old = 1.0, 0.0, None
         if self._count:
-            t = min(1.0, (now - self._count[1]) / self.COUNT_S)
+            t = max(0.0, min(1.0, (now - self._count[1]) / self.COUNT_S))   # (< 0: still waiting to start)
             k = 1 - (1 - t) ** 3                # quick start, gentle stop
-            shown = self._count[0] + (self.seconds - self._count[0]) * k
             sweep = 360 * k
+            old = self._groups(self._count[0], self.last)[0][0]   # (0: "Not Started" rolls away)
         # same baseline as the sync status beside it (a label of the same font, centred the same way)
         base = (self.height() - fm.height()) / 2 + fm.ascent()
+        mid = base - digit_middle(num)
         x = float(self.LEAD)
         self._spans = []
-        for runs, tip in self._fitting(self._groups(shown, last, sweep)):
-            end = draw_runs(p, x, base, runs, base - digit_middle(num))
+        fitting = self._fitting(self._groups(self.seconds, self.last, sweep))
+        if self.switching:
+            self._paint_switch(p, base, mid, fitting)
+            for runs, tip in fitting:                # (hover boxes: where the new values are)
+                self._spans.append((x, x + runs_width(runs), tip))
+                x += runs_width(runs) + STAT_GROUP_GAP
+            p.end()
+            return
+        for i, (runs, tip) in enumerate(fitting):
+            if i == 0 and old is not None and k < 1:
+                # each number travels its own height plus a gap: old and new never touch (owner: 12 -> 13 looked
+                # glued together)
+                end = self._roll(p, x, base, mid, old, runs, k, 2 * digit_middle(num) + ROLL_GAP)
+            else:
+                end = draw_runs(p, x, base, runs, mid)
             self._spans.append((x, end, tip))
             x = end + STAT_GROUP_GAP
         p.end()
+
+    @staticmethod
+    def _roll(p: QPainter, x: float, base: float, mid: float, old: list, new: list, k: float, rise: float) -> float:
+        """After a session the time rolls up (owner: a short session changed nothing visible when it counted): each
+        number that changed slides up and fades out while the new one rises in from below; the rest stays still."""
+        def same_shape(a: list, b: list) -> bool:
+            return len(a) == len(b) and all(r[0] == s[0] and (r[0] != "t" or (r[2] == s[2] and r[3] == s[3]))
+                                             for r, s in zip(a, b))
+
+        def swap(x: float, was: list, now: list) -> float:
+            """was rolls up and out, now rolls in; the space glides from was's width to now's (whatever follows
+            moves along smoothly instead of being overlapped)."""
+            p.setOpacity(1 - k)
+            draw_runs(p, x, base - rise * k, was, mid - rise * k)
+            p.setOpacity(k)
+            draw_runs(p, x, base + rise * (1 - k), now, mid + rise * (1 - k))
+            p.setOpacity(1.0)
+            return x + runs_width(was) + (runs_width(now) - runs_width(was)) * k
+
+        p.save()                                     # (the line's own height clips it, like an odometer)
+        if new and old and new[0][0] == "i" and old[0][0] == "i":
+            x = draw_runs(p, x, base, new[:2], mid)  # the clock (+ its gap) stays put; its hand sweeps
+            new, old = new[2:], old[2:]
+        if not same_shape(old, new):                 # e.g. 59m -> 1h 00m, Not Started -> 5m: all of it rolls
+            x = swap(x, old, new)
+        else:
+            for r, s in zip(new, old):
+                x = swap(x, [s], [r]) if r[0] == "t" and r[1] != s[1] else draw_runs(p, x, base, [r], mid)
+        p.restore()
+        return x
 
     def tip_at(self, pos: QPoint) -> tuple[str, QRect]:
         """Over the time: per device; over the day: the date - only right over them (TipManager)."""
@@ -2891,7 +3227,7 @@ class ThemedCombo(QComboBox):
         self._t0 = 0.0
         self._down = True
         self._last = 0.0
-        self._slide_timer = QTimer(self)
+        self._slide_timer = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._slide_timer.setTimerType(Qt.PreciseTimer)
         self._slide_timer.setInterval(0)                                # paced by time, like the other animations
         self._slide_timer.timeout.connect(self._slide)
@@ -2899,6 +3235,21 @@ class ThemedCombo(QComboBox):
 
     def _box(self) -> QWidget:
         return self.view().parentWidget()          # Qt's frame round the list: the pop-up window itself
+
+    blank = False                                  # the box without its words (the status drop-down while reading)
+
+    def paintEvent(self, ev) -> None:
+        if not self.blank:
+            super().paintEvent(ev)
+            return
+        from PySide6.QtWidgets import QStyleOptionComboBox, QStylePainter
+        p = QStylePainter(self)                    # (as QComboBox draws itself, with no text)
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        opt.currentText, opt.currentIcon = "", QIcon()
+        p.drawComplexControl(QStyle.CC_ComboBox, opt)
+        p.drawControl(QStyle.CE_ComboBoxLabel, opt)
+        p.end()
 
     # -- the arrow points the way the list will open (up when there isn't room for it below on the screen)
     def _opens_up(self) -> bool:
@@ -3007,7 +3358,7 @@ class DragGhost(QWidget):
         self._t0 = self._last_frame = self._t = time.monotonic()
         self._land_opacity = (1.0, 1.0)
         self._done: Optional[Callable] = None
-        self._timer = QTimer(self)
+        self._timer = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._timer.setTimerType(Qt.PreciseTimer)
         self._timer.setInterval(0)                           # frames paced by time (Windows timers tick in 15.6 ms steps)
         self._timer.timeout.connect(self._step)
@@ -3150,7 +3501,7 @@ class PulseButton(QPushButton):
         self._t = time.monotonic()
         self._bg: Optional[QColor] = None
         self._fg: Optional[QColor] = None
-        self._timer = QTimer(self)
+        self._timer = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._timer.setTimerType(Qt.PreciseTimer)                   # even frames (see EasterEgg._rumble)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
@@ -3162,6 +3513,7 @@ class PulseButton(QPushButton):
         self.updateGeometry()
 
     slot_labels: tuple = ()             # every label it can show (Read / Stop / Open): its space fits the longest
+    blank = False                       # the button without its label (the bar's fade: the word goes, the box stays)
 
     def sizeHint(self) -> QSize:
         natural = super().sizeHint()
@@ -3185,9 +3537,6 @@ class PulseButton(QPushButton):
         if not self.isEnabled():
             return QColor(COLORS["play_disabled"]), QColor(COLORS["play_disabled_text"])
         return QColor(COLORS["play_hover" if self._hover else "play"]), QColor(COLORS["play_text"])
-
-    def _natural_width(self) -> int:
-        return super().sizeHint().width()
 
     def setText(self, text: str) -> None:
         if text == self.text():
@@ -3259,11 +3608,9 @@ class PulseButton(QPushButton):
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
         l, t, r, b = self.MARGINS
-        # the visible button, as wide as its label needs, centred in the space kept for the longest label: a new
-        # label grows / shrinks it equally both ways and nothing beside it moves (the bar's cross-fade lines up)
-        n = self._natural_width()
-        x = math.floor((self.width() - n) / 2)
-        box = QRectF(x + l, t, n - l - r, self.height() - t - b)
+        # the visible button fills the space kept for its longest label (owner, 2026-10-17: Read / Stop differed by a
+        # few px - it keeps one size and only grows if a label needs more room)
+        box = QRectF(l, t, self.width() - l - r, self.height() - t - b)
         # only the button itself grows; its label stays exactly where it is (scaled text shimmers)
         c = box.center()
         grown = QRectF(c.x() - box.width() * self._scale / 2, c.y() - box.height() * self._scale / 2,
@@ -3271,7 +3618,7 @@ class PulseButton(QPushButton):
         p.setPen(Qt.NoPen)
         p.setBrush(self._bg)
         p.drawRoundedRect(grown, self.RADIUS * self._scale, self.RADIUS * self._scale)
-        if self.text():
+        if self.text() and not self.blank:
             p.setPen(self._fg)
             p.setFont(self.font())
             p.drawText(box, Qt.AlignCenter, self.text())
@@ -3298,7 +3645,7 @@ class TrashButton(QPushButton):
         self._scale = 1.0
         self._wiggle_from = -1.0                                # when the hover wiggle started (-1 = none)
         self._t = time.monotonic()
-        self._timer = QTimer(self)
+        self._timer = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._timer.setTimerType(Qt.PreciseTimer)                   # even frames (see EasterEgg._rumble)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
@@ -3368,7 +3715,7 @@ class TrashButton(QPushButton):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.setRenderHint(QPainter.Antialiasing)
         if not self._live():
-            p.setOpacity(0.3)
+            p.setOpacity(ICON_DIM)                              # greyed: as dim as the bookmark button when off
         else:                                                   # brightens as it grows (no sudden jump)
             rest = self._rest_opacity()
             p.setOpacity(rest + (1 - rest) * max(0.0, min(1.0, (self._scale - 1.0) / (self.HOVER_SCALE - 1.0))))
@@ -3401,7 +3748,7 @@ class BookmarkButton(TrashButton):
         self.update()
 
     def _rest_opacity(self) -> float:
-        return 0.85 if self.on else 0.4                 # dimmer while bookmarks are hidden
+        return 0.85 if self.on else ICON_DIM            # dimmer while bookmarks are hidden
 
     def set_on(self, on: bool) -> None:
         self.on = on
@@ -3536,7 +3883,7 @@ class AnkiBox(BoxZone, QPushButton):
         self._hover = False
         self._scale = 1.0
         self._since = 0.0
-        self._timer = QTimer(self)
+        self._timer = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._timer.setTimerType(Qt.PreciseTimer)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._step)
@@ -3564,11 +3911,14 @@ class AnkiBox(BoxZone, QPushButton):
         self._timer.start()
 
     def _step(self) -> None:
+        now = time.monotonic()
+        dt, self._last_step = min(0.1, now - getattr(self, "_last_step", now)), now
         if self._hover:
-            t = time.monotonic() - self._since
+            t = now - self._since
             self._scale = 1 + self.PULSE * (1 - math.cos(2 * math.pi * t / self.PERIOD)) / 2
         else:
-            self._scale += (1.0 - self._scale) * 0.25          # settle back
+            # settle back: a quarter of the way per 1/60 s, at any screen rate
+            self._scale += (1.0 - self._scale) * (1 - 0.75 ** (dt * 60))
             if abs(self._scale - 1.0) < 0.001:
                 self._scale = 1.0
                 self._timer.stop()
@@ -3683,14 +4033,14 @@ class EasterEgg(QWidget):
         self._place()
         # hovering the rocking "Easter Egg" box makes every cover in the library rock with it
         self._rocker = next(b for b in self.boxes if isinstance(b, WobbleBox) and b.rock)
-        self._rumble = QTimer(self)
+        self._rumble = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._rumble.setTimerType(Qt.PreciseTimer)   # (a normal timer ticks unevenly on Windows: 16 / 31 ms)
         self._rumble.setInterval(16)
         self._rumble.timeout.connect(self._rumble_step)
         self._rumble.start()
         window.installEventFilter(self)          # follow the window's size
         self._t = time.monotonic()
-        self._fade = QTimer(self)
+        self._fade = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._fade.setInterval(16)
         self._fade.timeout.connect(self._step)
         self.show()
@@ -3716,9 +4066,13 @@ class EasterEgg(QWidget):
         amp = b.ROCK_DEG * k
         if bool(amp) != bool(w.rumble):
             launcher.hold_warm_up(bool(amp))     # (its first look at all programs stalls the frames)
-        if amp or w.rumble:
-            w.rumble, w.rumble_t = amp, time.monotonic()
-            grid.viewport().update()
+            if not amp:
+                grid.viewport().update()         # (settled: drawn upright once more)
+        # the window's own animation clock draws the rocking (MainWindow._tick): one redraw per frame, evenly
+        # spaced - this timer redrawing as well gave two unevenly spaced paints per frame
+        w.rumble = amp
+        if amp:
+            w._update_anim()
 
     def _open_anki(self) -> None:
         try:
@@ -4882,7 +5236,8 @@ class SettingsDialog(FitsScreen, QDialog):
         if owner and owner.lower() != this_computer().lower():
             n, other = SLOT_NUMBER[slot], SLOT_NUMBER[other_slot(slot)]
             choice = message(self, tr("settings.device_taken", n=n, computer=owner, other=other),
-                             buttons=[("other", tr("settings.device_n", n=other)),
+                             tr("settings.device_taken_title"),
+                             buttons=[("other", tr("settings.device_use", n=other)),
                                       ("keep", tr("settings.device_taken_keep", n=n)),
                                       ("cancel", tr("settings.cancel"))])
             if choice == "cancel":
@@ -5530,7 +5885,8 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
                 return
             other = self._shared_save_folder(mine.save_dir)
             if other and not ask_yes_no(self, tr("error.save_shared", title=other.title),
-                                        tr("error.use_anyway"), tr("game.cancel")):
+                                        tr("error.use_anyway"), tr("game.cancel"),
+                                        title=tr("error.save_shared_title")):
                 return
         reg = self.registry.text().strip()
         if reg:
@@ -5794,7 +6150,7 @@ class RestoreDialog(QDialog):
         b = it.data(Qt.UserRole)
         if not ask_yes_no(self, tr("restore.confirm", title=self.game.title,
                                    date=i18n.datetime_str(b.when.timestamp())),
-                          tr("restore.restore"), tr("game.cancel")):
+                          tr("restore.restore"), tr("game.cancel"), title=tr("restore.title")):
             return
         try:
             self.engine.restore(self.game.game_id, b.name, self.save_dir, self.game.registry_key)
@@ -5974,8 +6330,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.grid.setContextMenuPolicy(Qt.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self._context_menu)
         self.grid.itemDoubleClicked.connect(lambda _: self.activate_selected())
-        self.grid.currentItemChanged.connect(lambda *_: self._update_details())
-        self.grid.itemSelectionChanged.connect(self._update_details)
+        self.grid.currentItemChanged.connect(lambda *_: self._refilling or self._update_details())
+        self.grid.itemSelectionChanged.connect(lambda: self._refilling or self._update_details())
         self.grid.viewport().installEventFilter(self)
         self.grid.viewport().setAcceptDrops(True)
         root.addWidget(self.grid, 1)
@@ -6001,11 +6357,9 @@ class MainWindow(TaskOwner, QMainWindow):
         self.play_btn.clicked.connect(self._play_button)
         # its label (Read / Stop / Open) grows or shrinks the visible button on both sides around a fixed centre
         def keep_centre(b=self.play_btn, lay=dl) -> None:
-            # its space fits the longest label; Read's visible left edge stays where it always was (25 px)
+            # one size, fitting the longest label; its visible left edge stays where it always was (25 px)
             b.slot_labels = (tr("bar.play"), tr("bar.stop"), tr("bar.open"))
-            slot = b.sizeHint().width()
-            read = b.width_for(tr("bar.play")) + b._natural_width() - b.width_for(b.text())
-            left = max(0, 22 - math.floor((slot - read) / 2))
+            left = 25 - b.MARGINS[0]
             m = lay.contentsMargins()
             if m.left() != left:
                 lay.setContentsMargins(left, m.top(), m.right(), m.bottom())
@@ -6091,7 +6445,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self.grid.addAction(enter)
 
         # animation: hover easing + breathing lights
-        self.anim = QTimer(self)
+        self.anim = VsyncClock(self)   # (once per screen refresh, at any rate)
         self.anim.setInterval(16)
         self.anim.setTimerType(Qt.PreciseTimer)        # (a normal timer ticks unevenly on Windows: 16 / 31 ms)
         self.anim.timeout.connect(self._tick)
@@ -6395,6 +6749,8 @@ class MainWindow(TaskOwner, QMainWindow):
         return out
 
     _quiet_rebuild = False                   # (the re-read after a session: the grid may stay as it is)
+    _refilling = False                       # (the grid is being emptied and refilled: the bar waits - _rebuild)
+    _play_status_key = ""                    # the session's last status message (see _play_status)
 
     def _apply_library(self, data: dict, keep_files: bool = False) -> None:
         if not keep_files:
@@ -6450,8 +6806,7 @@ class MainWindow(TaskOwner, QMainWindow):
                 self._ask_now.add(gid)
                 filled.append(g.title)
             if filled:
-                sep = "、" if i18n.language() == "ja" else ", "
-                self.statusBar().showMessage(tr("status.save_filled", games=sep.join(filled)), 10000)
+                self.statusBar().showMessage(tr("status.save_filled", games=i18n.games_list(filled)), 10000)
                 self._own_change()
                 self._update_details()
                 self._check_sync()
@@ -6552,9 +6907,8 @@ class MainWindow(TaskOwner, QMainWindow):
                 self._live_sig = self.library.change_signature()
             except OSError:
                 pass
-        sep = "、" if i18n.language() == "ja" else ", "
-        notes = ([tr("status.startup_uploaded", games=sep.join(uploaded))] if uploaded else []) + \
-                ([tr("status.auto_downloaded", games=sep.join(downloaded))] if downloaded else [])
+        notes = ([tr("status.startup_uploaded", games=i18n.games_list(uploaded))] if uploaded else []) + \
+                ([tr("status.auto_downloaded", games=i18n.games_list(downloaded))] if downloaded else [])
         if notes:
             self.statusBar().showMessage("  ".join(notes), 10000)
         self._lights_changed()
@@ -6607,7 +6961,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self._conflicts_snoozed |= {g.game_id for g in self.syncer.games}   # closed without choosing: not again
         self.syncer = None
         by_title = {g.title: g for g in self.games.values()}
-        self.statusBar().showMessage("  ".join(f"{t}: {tr(self.solo_key(k, by_title.get(t)), title=t)}" for t, k in results), 10000)
+        self.statusBar().showMessage("  ".join(f"{t}: {i18n.line(self.solo_key(k, by_title.get(t)), title=t)}" for t, k in results), 10000)
         self.refresh()
 
     def folder_name(self, fid: str) -> str:
@@ -6678,18 +7032,25 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         self._grid_look = look
         scroll = self.grid.verticalScrollBar().value()       # keep your place (a refresh mustn't jump to the top)
-        self.grid.clear()
-        for kind, obj in entries:
-            it = QListWidgetItem()
-            iid = obj.game_id if kind == "game" else FOLDER_PREFIX + obj
-            it.setData(GAME_ID_ROLE, iid)
-            it.setData(Qt.DisplayRole, obj.title if kind == "game" else self.folder_name(obj))
-            self.grid.addItem(it)
-            if iid == current:
-                self.grid.setCurrentItem(it)
-                it.setSelected(True)
-        if current is None:
-            self.grid.clearSelection()          # nothing was selected: keep it that way
+        # while the grid is emptied and refilled the selection passes through other games and nothing: the bar
+        # must not follow it (it faded the name / light / stats out and back in for the same game - the flicker
+        # a few seconds after a session, when the upload made the library reload); it's updated once, after
+        self._refilling = True
+        try:
+            self.grid.clear()
+            for kind, obj in entries:
+                it = QListWidgetItem()
+                iid = obj.game_id if kind == "game" else FOLDER_PREFIX + obj
+                it.setData(GAME_ID_ROLE, iid)
+                it.setData(Qt.DisplayRole, obj.title if kind == "game" else self.folder_name(obj))
+                self.grid.addItem(it)
+                if iid == current:
+                    self.grid.setCurrentItem(it)
+                    it.setSelected(True)
+            if current is None:
+                self.grid.clearSelection()          # nothing was selected: keep it that way
+        finally:
+            self._refilling = False
         if select is None:
             self.grid.doItemsLayout()
             self.grid.verticalScrollBar().setValue(scroll)
@@ -6953,7 +7314,8 @@ class MainWindow(TaskOwner, QMainWindow):
         if worker is not self.worker or self.play_phase != "playing":
             return                                  # it closed (or a new game was started since)
         g = self.games.get(self.playing_id)
-        force = ask_yes_no(self, tr("stop.body", title=g.title if g else ""), tr("stop.force"), tr("stop.keep"))
+        force = ask_yes_no(self, tr("stop.body", title=g.title if g else ""), tr("stop.force"), tr("stop.keep"),
+                           title=tr("stop.title"))
         if worker is not self.worker or self.play_phase != "playing":
             return                                  # it closed while the question was open
         if force:
@@ -6972,10 +7334,11 @@ class MainWindow(TaskOwner, QMainWindow):
 
     def quiet(self, gid: str) -> bool:
         """No playtime / reading status while the game is running, or before it has any save data
-        (the "Save at least once!" state): only the message matters then. (While the button shows Stop: so the
-        stats and the drop-down go and come back in the same moment as the button, light and words change.)"""
-        if gid == self.playing_id:
-            return self._session_look(gid)[0] == "bar.stop"
+        (the "Save at least once!" state): only the message matters then. Follows the LIGHT, not the button (owner,
+        2026-10-17): hidden while it says Starting / Now Reading / Syncing, back with Synced - the button turns back
+        to Read the moment the game closes, while the light still says Now Reading until the saves have uploaded."""
+        if gid == self.playing_id:                  # (the session runs until its saves have synced)
+            return self._session_look(gid)[1] in ("starting", "playing", "syncing")
         return self.sync_states.get(gid) == "detect"
 
     def folder_colours(self, fid: str) -> list[str]:
@@ -7147,25 +7510,159 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         s = self.d_status.currentData() or ""
         if s != g.status:
+            self._fade_status_words(max(0, self.d_status.findData(g.status)))
             self._set_status(g.game_id, s)
 
+    def _fade_status_words(self, old_index: int) -> None:
+        """A status picked from the drop-down: its words fade like a game switch's (out, then the new ones in). The
+        box already shows the new words, so the old look is drawn for a moment with the old ones put back."""
+        d = self.d_status
+        if not self.details.isVisible() or old_index == d.currentIndex():
+            return
+        new_index = d.currentIndex()
+        fading = self._fader.isVisible()
+        self._fader.hide()
+        d.blockSignals(True)
+        try:
+            d.setCurrentIndex(old_index)
+            old = self.details.grab()
+            d.setCurrentIndex(new_index)
+        finally:
+            d.blockSignals(False)
+            if fading:
+                self._fader.show()
+        self._fader.fade("status", _PieceFade(self._status_text_rect(), old, self._bar_without_status_words(),
+                                              time.monotonic(), cross=False))
+        self._update_anim()
+
     # ------------------------------------------------------------------ bottom bar / top status
-    def _bar_sig(self) -> tuple:
-        """What the bottom bar shows (to know whether a call changed it)."""
-        st = self.d_stats
-        return (self.d_title.text(), self.play_btn.text(), self.d_sync._shown, st.isVisible(), st.seconds, st.last,
-                st._key, self.d_status.isVisible(), self.d_status.currentIndex(),
-                bool(self.d_status.graphicsEffect()), self.edit_btn.text(), self.saves_btn.isVisible())
+    def _bar_pieces(self) -> dict:
+        """The bar's pieces -> what each shows (a piece fades when that changes; the button cross-fades)."""
+        def btn(b):
+            return b.isVisible(), b.isEnabled(), b.text()
+        st, ds = self.d_stats, self.d_status
+        return {
+            "button": (self.play_btn, (self.play_btn.text(), self.play_btn.isEnabled())),
+            "title": (self.d_title, self.d_title.text()),
+            "sync": (self.d_sync, self.d_sync._shown),
+            "stats": (st, (st.isVisible(), st.seconds, st.last, st._key)),
+            "status": (ds, (self._status_box_shown(), ds.currentIndex(), ds.blank)),
+            "saves": (self.saves_btn, btn(self.saves_btn)),
+            "edit": (self.edit_btn, btn(self.edit_btn)),
+            "bookmark": (self.bookmark_btn, btn(self.bookmark_btn)),
+            "trash": (self.trash_btn, btn(self.trash_btn)),
+        }
+
+    def _status_box_shown(self) -> bool:
+        return self.d_status.isVisible()
+
+    def _in_bar(self, w: QWidget) -> QRect:
+        return QRect(w.mapTo(self.details, QPoint(0, 0)), w.size()) if w.isVisible() else QRect()
+
+    def _status_text_rect(self) -> QRect:
+        """Inside the status drop-down: just its words (the box itself stays put while they change)."""
+        from PySide6.QtWidgets import QStyleOptionComboBox
+        d = self.d_status
+        opt = QStyleOptionComboBox()
+        d.initStyleOption(opt)
+        r = d.style().subControlRect(QStyle.CC_ComboBox, opt, QStyle.SC_ComboBoxEditField, d)
+        return r.translated(d.mapTo(self.details, QPoint(0, 0)))
 
     def _update_details(self) -> None:
-        """Bring the bar up to date; when what it shows changes, the old look cross-fades into the new (BarFader)."""
-        fade = self.details.isVisible() and not self._resizing and not getattr(self, "_renaming", None)             and hasattr(self, "_fader")
-        before = self._bar_sig() if fade else None
-        pm = self.details.grab() if fade else None   # (~1 ms; includes a cross-fade still under way)
+        """Bring the bar up to date; each piece whose content changed is blended by BarFader: the Read button
+        cross-fades, every other piece fades out, then in (the status drop-down: only its words)."""
+        fade = self.details.isVisible() and not self._resizing and not getattr(self, "_renaming", None) \
+            and hasattr(self, "_fader")
+        if not fade:
+            self._update_details_now()
+            return
+        before = {k: (self._in_bar(w), sig) for k, (w, sig) in self._bar_pieces().items()}
+        box_before = self._status_box_shown()
+        old = self.details.grab()                     # (~1 ms; as it looks now, fades under way included)
         self._update_details_now()
-        if fade and self._bar_sig() != before:
-            self._fader.start(pm)
+        after = self._bar_pieces()
+        changed = [k for k, (w, sig) in after.items() if sig != before[k][1]]
+        if not changed:
+            return
+        self.details.layout().activate()              # (new sizes / places now, not at the next event)
+        dpr = old.devicePixelRatio()
+        bare = None
+        now = time.monotonic()
+        if (before["title"][1] == "") != (after["title"][1] == ""):
+            # nothing selected <-> a game / folder: the whole bar comes to life (or goes quiet) as ONE - every
+            # piece blended at the same moment over the same time (owner: the pieces' own timings made it arrive
+            # in steps). Switching between games keeps each piece's own fade.
+            self._fader.pieces.clear()               # (the picture already shows any fade under way)
+            for k, (w, _sig) in after.items():
+                rect = before[k][0] | self._in_bar(w)
+                if rect.isValid():
+                    self._fader.fade(k, _PieceFade(rect, old, old, now, cross=True, xfade_s=BAR_WAKE_S))
             self._update_anim()
+            return
+        greys, swapped = [], False                   # swapped: some piece fades out and in
+        for k in changed:
+            w = after[k][0]
+            if k == "button":                         # (cross-fades; timed with the greyed ones below)
+                greys.append((k, before[k][0] | self._in_bar(w)))
+                continue
+            if k == "stats" and before[k][1][0] and after[k][1][0]:
+                continue                              # (on screen before and after: StatsLine fades its own values,
+                                                      # icons staying put)
+            if bare is None:                          # the bar with nothing on it (its own background)
+                bare = QPixmap(old.size())
+                bare.setDevicePixelRatio(dpr)
+                bare.fill(Qt.transparent)
+                self.details.render(bare, QPoint(), QRegion(), QWidget.RenderFlag.DrawWindowBackground)
+            rect = before[k][0] | self._in_bar(w)
+            if k == "status" and box_before and self._status_box_shown():
+                continue                              # only its words changed (another game): plain, no fade (owner)
+            if k in ("saves", "edit", "bookmark", "trash") and before[k][1][::2] == after[k][1][::2]:
+                # only greyed / ungreyed: blended smoothly (fading out and back in read as a flicker) - timed below
+                greys.append((k, rect))
+            elif rect.isValid():
+                # (one pace for the whole bar - a quicker one for the name felt flashy, owner 2026-10-17)
+                self._fader.fade(k, _PieceFade(rect, old, bare, now, cross=False))
+                swapped = True
+        for k, rect in greys:
+            # the Read button's cross-fade and greyed / ungreyed buttons: with other pieces fading out and in (a game
+            # starting / closing: light, stats), the old look holds through their fade-out and blends into the new
+            # during their fade-in - everything leaves and arrives together (owner: the trash, then Read / Stop,
+            # came early). Alone (just the button changed), at once: a press never feels late.
+            if swapped and k == "button":
+                # Read <-> Stop with the rest of the bar: its WORD fades out with the others and the new one in with
+                # them; the button itself stays. Two words never show at once (a cross-fade's muddy middle), and
+                # the whole bar leaves and arrives together (owner, 2026-10-17)
+                self._fader.fade(k, _PieceFade(rect, old, self._bar_without_button_label(), now, cross=False))
+                continue
+            sync = dict(delay=BAR_OUT_S, xfade_s=BAR_IN_S) if swapped else {}
+            self._fader.fade(k, _PieceFade(rect, old, old, now, cross=True, **sync))
+        self._update_anim()
+
+    def _bar_without_button_label(self) -> QPixmap:
+        """The bar as it is now, with the Read button drawn without its word."""
+        b = self.play_btn
+        fading = self._fader.isVisible()
+        self._fader.hide()
+        b.blank = True
+        try:
+            return self.details.grab()
+        finally:
+            b.blank = False
+            if fading:
+                self._fader.show()
+
+    def _bar_without_status_words(self) -> QPixmap:
+        """The bar as it is now, with the status drop-down drawn as an empty box."""
+        d = self.d_status
+        fading, was = self._fader.isVisible(), d.blank
+        self._fader.hide()
+        d.blank = True
+        try:
+            return self.details.grab()
+        finally:
+            d.blank = was
+            if fading:
+                self._fader.show()
 
     def _update_details_now(self) -> None:
         self.d_title.clickable = self._rename_target() is not None
@@ -7222,7 +7719,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self.d_sync.setToolTip(tr(tip) if tip in i18n.S else "")
         # leave the drop-down alone while its list is open (a background refresh mustn't redraw or close it)
         if not self.d_status.view().isVisible():
-            self._show_status(not quiet)
+            self._show_status(True)                 # (owner: it keeps showing the status while reading too)
             want = max(0, self.d_status.findData(g.status))
             if self.d_status.currentIndex() != want:
                 self.d_status.blockSignals(True)
@@ -7316,15 +7813,15 @@ class MainWindow(TaskOwner, QMainWindow):
         """The reading-status drop-down is hidden while a game runs and back after, keeping its place so nothing in
         the bar moves (the bar's one cross-fade, BarFader, blends it out / in). Hidden = an opacity effect at 0,
         attached only then: Qt draws text under one a little softer."""
+        # owner, 2026-10-17: the box itself stays (looking as always); only its words go, and it ignores the mouse
         d = self.d_status
-        d.setEnabled(on)
         d.show()
-        if on:
-            d.setGraphicsEffect(None)
-        elif d.graphicsEffect() is None:
-            fx = QGraphicsOpacityEffect(d)
-            fx.setOpacity(0.0)
-            d.setGraphicsEffect(fx)
+        if d.blank == (not on):
+            return
+        d.blank = not on
+        d.setAttribute(Qt.WA_TransparentForMouseEvents, not on)
+        d.setFocusPolicy(Qt.StrongFocus if on else Qt.NoFocus)
+        d.update()
 
     def _show_stats(self, want: bool, seconds: float, last: float, games: list) -> None:
         """Time read + last read after the sync status (what doesn't fit is left off the end: StatsLine).
@@ -7335,11 +7832,23 @@ class MainWindow(TaskOwner, QMainWindow):
         me, other = self.settings.machine_name, other_slot(self.settings.machine_name)
         per = [(tr("game.this_device"), sum(g.playtime.get(me, 0) for g in games)),
                (tr("game.other_device"), sum(g.playtime.get(other, 0) for g in games))]
-        self.d_stats.set_values(seconds, last, per, key=tuple(g.game_id for g in games))
-        if self._count_up and time.monotonic() - self._count_up[2] > 3:
+
+        def last_on(machine: str) -> Optional[float]:      # (a folder: its latest; see Game.last_played_on)
+            when = [g.last_played_on(machine) for g in games]
+            known = [t for t in when if t]
+            return max(known) if known else (None if None in when else 0.0)
+
+        per_last = [(tr("game.this_device"), last_on(me)), (tr("game.other_device"), last_on(other))]
+        self.d_stats.set_values(seconds, last, per, key=tuple(g.game_id for g in games), per_last=per_last)
+        if self._count_up and time.monotonic() - self._count_up[2] > COUNT_UP_WAIT_S:
             self._count_up = None                           # (that game wasn't shown after its session)
-        if self._count_up and len(games) == 1 and games[0].game_id == self._count_up[0]:
-            self.d_stats.count_up(self._count_up[1])        # a session just ended: the time rolls up
+        # (only once the new total has arrived: the bar is updated the moment a game closes, but the new playtime
+        # comes with the background re-read a little later - starting then found nothing to count and dropped it)
+        if self._count_up and len(games) == 1 and games[0].game_id == self._count_up[0] \
+                and seconds > self._count_up[1]:
+            # a session just ended: the time rolls up - once the bar's cross-fade has finished and it has sat still
+            # a moment (owner: starting with the fade, a short session's roll was nearly over before it could be seen)
+            self.d_stats.count_up(self._count_up[1], delay=BAR_OUT_S + BAR_IN_S + COUNT_UP_SETTLE_S)
             self._count_up = None
         self.d_stats.set_shown(True)                        # (e.g. a game just closed)
 
@@ -7557,7 +8066,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self._drag_watch.setInterval(150)
         self._drag_watch.timeout.connect(self._check_drag_button)
         self._drag_watch.start()
-        self._drag_scroll = QTimer(self)
+        self._drag_scroll = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._drag_scroll.setInterval(16)
         self._drag_scroll.timeout.connect(self._drag_autoscroll)
         self._drag_scroll.start()
@@ -7565,6 +8074,9 @@ class MainWindow(TaskOwner, QMainWindow):
     def _drag_autoscroll(self) -> None:
         """While a game is dragged near the top or bottom of the grid (or past it), the library scrolls:
         slowly at the start of the zone, faster the deeper you go, fastest well beyond the edge."""
+        now = time.monotonic()
+        dt = min(0.05, now - getattr(self, "_drag_scroll_t", now - 1 / 60))
+        self._drag_scroll_t = now
         if self._ghost is None:
             return
         gp = QCursor.pos()
@@ -7585,9 +8097,14 @@ class MainWindow(TaskOwner, QMainWindow):
         # inside the zone: depth 0..1 (gentle start); past the edge it keeps growing up to 3
         depth = min(depth, 3.0)
         speed = DRAG_SCROLL_MIN + (DRAG_SCROLL_MAX - DRAG_SCROLL_MIN) * (depth / 3.0) ** 1.6
+        # (speed is px per 1/60 s: scaled by the real time since the last step, so any screen rate scrolls alike;
+        # the fraction carries over, or slow scrolling would round to nothing at high rates)
+        self._drag_scroll_carry = getattr(self, "_drag_scroll_carry", 0.0) + direction * speed * dt * 60
+        step = int(self._drag_scroll_carry)
+        self._drag_scroll_carry -= step
         sb = self.grid.verticalScrollBar()
         before = sb.value()
-        sb.setValue(before + direction * round(speed))
+        sb.setValue(before + step)
         if sb.value() != before:
             self._move_game_drag(gp)                 # what's under the mouse changed
 
@@ -7867,7 +8384,7 @@ class MainWindow(TaskOwner, QMainWindow):
         self._own_change()
         self._select_item(iid)
         if switched:
-            self.statusBar().showMessage(tr("status.now_custom"), 8000)
+            self.statusBar().showMessage(i18n.line("status.now_custom"), 8000)
 
     def _game_drag_event(self, obj, ev) -> bool:
         t = ev.type()
@@ -8001,7 +8518,7 @@ class MainWindow(TaskOwner, QMainWindow):
                   or self.sb_alpha > 0 or self._sb_target() > 0   # keep ticking until it has faded out
                   or self._ghost is not None or self.drag_dim > 0
                   or self._landing is not None or bool(self.slides) or self._search_moving()
-                  or (hasattr(self, "_fader") and self._fader.active)
+                  or (hasattr(self, "_fader") and self._fader.active) or bool(self.rumble)
                   or self.bookmark_alpha != (1.0 if self.settings.show_bookmarks else 0.0))
         if needed and not self.anim.isActive():
             self._last_tick = time.monotonic()
@@ -8106,13 +8623,18 @@ class MainWindow(TaskOwner, QMainWindow):
                     else max(target, self.no_results - d)
             region = QRegion(view)
             changed = True
+        if self.rumble:                                   # the easter egg's rocking covers (its strength: EasterEgg)
+            self.rumble_t = now
+            region = QRegion(view)
+            changed = True
         # the check of all running programs (launcher.warm_up) waits while covers move: it keeps Python busy
         launcher.hold_warm_up(bool(self.slides) or self._search_moving() or self._ghost is not None
                               or self._landing is not None, "grid")
         if not region.isEmpty():
             # (not while a folder opens / closes: the animation covers the grid, and each of these little
             # updates would make it redraw out of step)
-            if lights_only and not self.slides and not self._search_moving() and lights:
+            if lights_only and not self.slides and not self._search_moving() and lights \
+                    and self.grid.prepare_still():
                 self.grid.light_frame = {"region": region, "lights": lights}
             self.grid.viewport().update(region)
         if self.settings.pulse:
@@ -8252,7 +8774,7 @@ class MainWindow(TaskOwner, QMainWindow):
     @guarded
     def remove_folder(self, fid: str) -> None:
         if ask_yes_no(self, tr("folder.remove_confirm", name=self.folder_name(fid)),
-                      tr("menu.remove_folder"), tr("game.cancel")):
+                      tr("menu.remove_folder"), tr("game.cancel"), title=tr("menu.remove_folder")):
             self.library.delete_folder(fid)
             if self.current_folder == fid:
                 self.current_folder = None
@@ -8354,11 +8876,21 @@ class MainWindow(TaskOwner, QMainWindow):
         self._run(lambda: suggest_save(self.settings, exe, g.title, other), go_on, failed)
 
     def _play_status(self, key: str) -> None:
+        self._play_status_key = key
         if key == "status.launching":
             # the bottom bar already says "Starting the Game..."; keep the status line clear while playing
             self.statusBar().clearMessage()
+        elif key in ("status.checking", "status.closed_syncing"):
+            # the quick checks / sync around a session: only shown if still going after SYNC_SHOW_AFTER_S, like
+            # the light (a quick one flashed on the status line for a moment)
+            worker = self.worker
+
+            def still() -> None:
+                if self.worker is worker and worker is not None and self._play_status_key == key:
+                    self.statusBar().showMessage(i18n.line(key))
+            QTimer.singleShot(round(SYNC_SHOW_AFTER_S * 1000), still)
         else:
-            self.statusBar().showMessage(tr(key))
+            self.statusBar().showMessage(i18n.line(key))
 
     def _on_phase(self, phase: str) -> None:
         if phase == "syncing" and self.playing_id:  # (timed from when the sync itself begins)
@@ -8392,7 +8924,12 @@ class MainWindow(TaskOwner, QMainWindow):
             return "bar.stop", "playing"
         if phase == "syncing" and w and time.monotonic() - w[1] >= SYNC_SHOW_AFTER_S:
             return "bar.play", "syncing"
-        return "bar.play", ("playing" if w and w[2] else self.sync_states.get(gid, "checking"))
+        if w and w[2]:
+            # the game has closed, its quick sync not shown (yet): the light still says Now Reading, so the button
+            # still says Stop - they change together, in one update (Stop -> Read came ~0.1 s before the light did,
+            # so it couldn't fade with it). A press meanwhile does nothing (the session is finishing).
+            return "bar.stop", "playing"
+        return "bar.play", self.sync_states.get(gid, "checking")
 
     def _sync_wait_over(self) -> None:
         if self.worker is not None or (self._waiting and time.monotonic() - self._waiting[1] >= SYNC_SHOW_AFTER_S):
@@ -8451,17 +8988,18 @@ class MainWindow(TaskOwner, QMainWindow):
         if r.message:
             r = dataclasses.replace(r, message=self.solo_key(r.message, game))
         if not r.launched:
-            self.statusBar().showMessage(tr(r.message))
+            self.statusBar().showMessage(i18n.line(r.message))   # (short: the pop-up explains)
             self.refresh()
             if r.message != "play.cancelled":          # the owner chose that: no "Can't Start" box
-                self._launch_problem(r, worker.without)
+                self._launch_problem(r, worker.without, gid)
             return
-        msg = tr(r.message) if r.message else ""
-        self.statusBar().showMessage(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)), 15000)
+        msg = i18n.line(r.message) if r.message else ""
+        bar = self.statusBar()                      # (fades in together with the bottom bar's new look)
+        bar.show_with_bar(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)), 15000)
         if game and r.seconds > 0:
             self._count_up = (game.game_id, max(0.0, game.total_playtime - r.seconds), time.monotonic())
         if r.new_title:
-            self.statusBar().showMessage(tr("status.title_updated", title=r.new_title), 15000)
+            bar.show_with_bar(i18n.line("status.title_updated", title=r.new_title), 15000)
         self._update_details()                      # the bar at once (Stop -> Read); the new playtime etc. follow
         self._update_sync_label()                   # when the library has been re-read:
         self._lights_changed()
@@ -8474,21 +9012,42 @@ class MainWindow(TaskOwner, QMainWindow):
         if game and self.settings.vndb and not game.artwork and game.artwork_from != "removed" and r.window_title:
             self._auto_cover(game.game_id, r.new_title or game.title)
 
-    def _launch_problem(self, r: PlayResult, already_without: tuple[str, ...]) -> None:
+    def _launch_problem(self, r: PlayResult, already_without: tuple[str, ...], gid: Optional[str] = None) -> None:
         buttons = []
+        done_when, game_dir = None, None
         if r.message == "play.luna_running":
             buttons.append(("retry", tr("play.retry")))
         if r.retry_without == "watch":
             buttons.append(("watch", tr("play.watch")))
+            g = self.games.get(gid) if gid else None
+            exe = g.paths_for(self.settings.machine_name).exe if g else ""
+            if exe:
+                # (owner, 2026-10-17) Force Close too; and if the game is closed while this is open, it goes away
+                # by itself and the game starts through Ikemen Reader - Read was pressed for that
+                game_dir = Path(exe).resolve().parent
+                buttons.append(("force", tr("stop.force")))
+                done_when = lambda d=game_dir: not launcher.already_running(d)
         if r.retry_without == "luna":
             buttons.append(("without_luna", tr("play.retry_without_luna")))
         elif r.retry_without == "le":
             buttons.append(("without_le", tr("play.retry_without_le")))
         if r.message in ("play.luna_missing", "play.le_missing"):
             buttons.append(("settings", tr("play.go_settings")))
-        buttons.append(("cancel", tr("game.cancel")))
-        choice = message(self, tr(r.message), tr("play.title"), buttons)
-        if choice == "retry":
+        # nothing to choose: just OK (a lone Cancel read oddly); otherwise Cancel beside the choices
+        buttons.append(("cancel", tr("game.cancel")) if buttons else ("ok", tr("play.ok")))
+        # (already running: it isn't refused - it can wait for the game - so not "Can't Start the Game")
+        title = tr("play.title_running" if r.message == "play.already_running" else "play.title")
+        choice = message(self, tr(r.message), title, buttons, done_when=done_when)
+        if choice == "force":
+            try:
+                launcher.force_close_running(game_dir)
+            except Exception as e:                      # (nothing to end, or not ours to end: say so)
+                report_failure(self, e)
+                return
+            self._start_when_closed(game_dir, gid, tuple(already_without))
+        elif choice == "done":                          # closed while the message was open
+            self.play_selected(tuple(already_without), gid=gid)
+        elif choice == "retry":
             self.play_selected(already_without)
         elif choice == "watch":
             self.play_selected(tuple(already_without), watch=True)
@@ -8499,6 +9058,14 @@ class MainWindow(TaskOwner, QMainWindow):
         elif choice == "settings":
             self.open_settings()
 
+    def _start_when_closed(self, game_dir: Path, gid: Optional[str], without: tuple, waited: float = 0.0) -> None:
+        """After Force Close: start the game once its programs have really ended (a moment, usually). If it
+        somehow keeps running, Read finds it again and asks as before."""
+        if launcher.already_running(game_dir) and waited < 5.0:
+            QTimer.singleShot(200, lambda: self._start_when_closed(game_dir, gid, without, waited + 0.2))
+            return
+        self.play_selected(without, gid=gid)
+
     @guarded
     def _confirm_detection(self, game: Game, r: PlayResult) -> None:
         exe = game.paths_for(self.settings.machine_name).exe
@@ -8507,7 +9074,7 @@ class MainWindow(TaskOwner, QMainWindow):
         if d.exec() and d.save_dir:
             res = finish_first_play(game, self.settings, self.library, self.engine, d.save_dir,
                                     d.registry_key, self._conflict_choice)
-            self.statusBar().showMessage(tr(res.message), 10000)
+            self.statusBar().showMessage(i18n.line(res.message), 10000)
 
     def _auto_cover(self, gid: str, title: str) -> None:
         """After a first play: if VNDB has an exact title match with a safe cover, use it."""
@@ -8935,6 +9502,12 @@ def main() -> None:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("IkemenReader.App")
         except (AttributeError, OSError):
             pass
+    # Ikemen Reader ignores Windows' zoom (Display > Scale): it looks exactly as at 100 % on every screen and zoom,
+    # and doesn't change when the zoom does (owner, 2026-10-17). Both before the QApplication: Qt's own scaling off,
+    # and text sized at 100 %'s 96 dpi (otherwise points become more pixels at 125 / 150 %). Not passed on to games or
+    # Luna (a Qt program too): see outside.own_setting.
+    outside.own_setting("QT_ENABLE_HIGHDPI_SCALING", "0")
+    outside.own_setting("QT_FONT_DPI", "96")
     app = QApplication(sys.argv)
     app.setApplicationName("Ikemen Reader")
     app.setEffectEnabled(Qt.UI_AnimateCombo, False)   # drop-downs slide open by themselves (ThemedCombo)
@@ -8958,6 +9531,7 @@ def main() -> None:
     app.setWindowIcon(app_icon())
     apply_palette()
     install_smooth_tips(app)            # (hover popups: sooner, fading, following the mouse, inside the window)
+    install_popups_to_front(app)        # (pop-ups come to the front of the screen when they open)
     app.setStyleSheet(build_style())
     if settings is not None:
         i18n.set_language(settings.language)

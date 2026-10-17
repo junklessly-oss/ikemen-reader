@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 203 tests (2026-10-17), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 216 tests (2026-10-17), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -142,7 +142,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   copy needs ~2 s to hand over; a fresh start is Anki itself: 186 MB collection + 11 add-ons incl. AnkiMorphs.)
   Hovering "Easter Egg ^_^" rocks every library cover, each OUT OF STEP (phase + 0.9-1.1x speed from crc32 of
   its id). MainWindow.rumble = amplitude (deg) + rumble_t (one clock per frame); EasterEgg._rumble_step
-  (PreciseTimer) scales it by the box's growth so it eases in/out. CardDelegate.paint while rumbling: each tile
+  (PreciseTimer) only sets the amplitude (scaled by the box's growth so it eases in/out); MainWindow._tick moves
+  rumble_t and redraws (2026-10-17: both timers redrawing gave uneven frames, 3-7 hitches of 26-76 ms per 4 s -> 0). CardDelegate.paint while rumbling: each tile
   drawn upright once into CardDelegate._tiles (lights skipped via _skip_light), then only rotated; lights drawn
   live on top; covers fully out of the viewport aren't drawn while rocking (their corners swung into view). ~7.8 ms/frame vs ~5 ms still (1280x800, 40 covers; was 11 ms drawing tiles rotated).
   warm_up (psutil's first look, holds the GIL ~10 ms per step) is paused while the covers rock
@@ -527,7 +528,22 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   (LEAD 16 px): "[clock] 12h 05m   [calendar] 3 Days Ago", same look as the cover hover (numbers bright, units
   small muted, icons in the text colour, level with the sync text). Groups that don't fit the width are left off
   the end (date first); d_sync keeps its full width (policy Maximum). Tooltips: time -> per device (This Device /
-  Other Device), date -> full date. Folders: total time + latest read. Bar title = ElidedLabel ("..." + tooltip).
+  Other Device; both always listed, 0 = Never Played, also over "Not Started"), date -> last read per device (owner, 2026-10-17): Game.last_played_by {device: time} (END field,
+  set by record_session; 1.0.4 and older drop it when they save a game) + Game.last_played_on(m): a time / 0 = Never
+  Played / None = Not Recorded (both devices read it before per-device dates: the shared last_played can't be told
+  apart; one device only -> it's that device's). Folders: latest per device.
+  After a session the time ROLLS UP (owner, 2026-10-17: counting showed nothing after a short session - minutes
+  only): StatsLine._roll - changed numbers slide up / fade out, new ones rise in, the clock stays (hand sweeps), a
+  shape change (45m -> 1h 10m, Not Started -> 5m) rolls the whole time and the space glides between widths.
+  SmoothTip follows the mouse on a VsyncClock (thread waiting on DwmFlush = once per real screen refresh; the PC's
+  screen is 143 Hz, where 16 ms timers = 62.5 steps/s landing 2 or 3 refreshes apart = judder). The rest of the app's
+  animation still runs on 16 ms timers (could move to VsyncClock too if the owner notices judder elsewhere).
+  Hover pop-up wait TIP_WAKE_MS 200 (350 felt slow; later ones are instant for 1.5 s anyway - Qt's fall-asleep delay).
+  The roll starts only after the bar's cross-fade + COUNT_UP_SETTLE_S 0.25 (count_up(delay); the old total sits still
+  meanwhile): starting with the fade, a short session's roll was mostly over before it could be seen (owner).
+  Count-up after a session waits (COUNT_UP_WAIT_S 15) until the bar's total is the new one: the bar updates the
+  moment the game closes, the new playtime arrives with the background re-read (it used to start on the old total and
+  drop itself). Folders: total time + latest read. Bar title = ElidedLabel ("..." + tooltip).
 - Cover hover (owner's pick): one level line "[clock] 12h 05m   [calendar] 3 Days Ago", icons + date in the number
   style (white, medium), units smaller/softer; icons centred on the digits (digit_middle). Reading status left out
   (the bookmark shows it); with Hide Statistics the status text shows as before. Narrow covers drop the date first.
@@ -655,6 +671,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   whose box is the whole grid; ~6 ms here, ~9 ms on the owner's PC). Now lights-only frames (MainWindow._tick sets
   grid.light_frame) copy the covers from LibraryGrid._still (the grid rendered with delegate._skip_light) and draw
   only the lights: pixel-identical, 2.6 vs 6.1 ms. Any other paint drops the picture; it's remade when next needed.
+  The picture is made / patched in _tick (LibraryGrid.prepare_still) BEFORE the lights-only frame is asked for, never
+  inside paintEvent: render() there lost the frame (lights froze; under the easter egg's dark cover each lost frame
+  darkened their squares until they were black - fixed 2026-10-17). Its size check uses _still_size (Qt-style
+  rounding; Python's round(802.5) = 802 remade it every frame at 125 %).
   (Tried and dropped: painting each light square separately - identical but slower, 8.2 ms.)
 - Deselecting: the light's words cleared at once with the rest of the bar (SyncStatus.set_status).
 - Next log: the grid still redrew FULLY at launch / close (20-33 ms each; and each one dropped the still picture, so the
@@ -684,10 +704,92 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   window is being resized or a name is being renamed. (Count-up after a session and the cover lights' own colour
   fade stay as they are.)
 - The Read button keeps a FIXED space for its longest label (slot_labels Read / Stop / Open, re-measured on language /
-  font changes); the visible button is drawn centred in it, so it grows / shrinks around its centre and nothing beside
-  it moves (the cross-fade lines up: no doubled title). Read's visible left edge stays 25 px from the window.
+  font changes) and the visible button FILLS it (owner, 2026-10-17: Read vs Stop differing by a few px was noise):
+  one size for every label, bigger only if a label needs more room. Visible left edge 25 px from the window.
+
+## Bar fades + pop-ups to the front (2026-10-17, owner; replaces "The bottom bar's ONE cross-fade" above)
+- ONLY the Read button cross-fades (BAR_XFADE_S 0.2). Every other bar piece (MainWindow._bar_pieces: name, sync
+  light + words, stats, status drop-down, Open Save Folder, Edit, bookmark, trash) whose CONTENT changed (a signature
+  per piece, not pixels: breathing / wiggles never trigger) fades out (BAR_OUT_S 0.15) into the bare bar, then in
+  (BAR_IN_S 0.2). BarFader keeps one _PieceFade per piece with its own clock; a piece changed again mid-fade keeps
+  its clock while fading out / < half in (restarting everything on each of the several updates as a session ends
+  was the flicker). Status drop-down: the box never fades - only its words (text rect; "bare" = the bar grabbed with
+  ThemedCombo.blank on = the empty box itself; a colour sampled from one pixel picked up the custom theme's border:
+  an orange square). It keeps showing the status while reading (no fade around sessions; owner). Switching games:
+  its words change PLAINLY, no fade (owner, later). ONE pace for the whole bar, BAR_OUT_S / BAR_IN_S (0.15 / 0.2): a
+  quicker one for the name (0.09 / 0.12, tried) felt "fast and flashy" - owner. Buttons that only grey / ungrey (trash at launch)
+  cross-fade instead of out-then-in (that read as a flicker); when other pieces fade out + in in the same update (a
+  game closing) that blend waits BAR_OUT_S and runs BAR_IN_S (_PieceFade.delay) so trash, light, stats and the
+  status line come back together (replay: all at the same frame). The Read button with other pieces changing (a
+  game starting / closing): its WORD fades out and in with them, the button box stays (PulseButton.blank; "bare" =
+  _bar_without_button_label) - owner tried and chose this over a cross-fade (two words overlapping mid-way; a
+  leading cross-fade, BUTTON_LEAD, came before it) and over a roll (the time's roll comes later: two rolls at
+  different moments). Button alone: cross-fade, at once. Cross-fades use ease_cross (smootherstep: quicker through the half-and-half middle). After the
+  game closes, while the light still says Now Reading (quick sync not shown), the button stays Stop
+  (_session_look) so both change in ONE update (it used to flip ~0.1 s early and couldn't fade with the light).
+- _patch_still extends each patched piece GRID_TOP_SHIFT upward: QListView picks covers to draw by ITS item rects
+  (GRID_TOP_SHIFT higher than ours), so a thin strip at a cover's foot rendered as bare backdrop - dark rectangles
+  under every light while a FOLDER was hovered (its region split the light squares into strips). Same trap for
+  any small render/update region near covers' bottoms.
+- Bar flicker after sessions (found 2026-10-17): a FULL reload (_rebuild clearing + refilling the grid, e.g. the live
+  poll seeing the upload) passed the selection through other games and none, each updating the bar -> fades for the
+  same game. currentItemChanged / itemSelectionChanged are ignored while _refilling; _after_rebuild updates once.
+- Nothing selected <-> a game / folder (owner): the WHOLE bar blends as one - every piece cross-fades from the same
+  moment over BAR_WAKE_S 0.22 (the pieces' own timings made it arrive in steps). Switching games: per-piece as above.
+- Picking a status from the drop-down fades its words (MainWindow._fade_status_words: old look drawn with the old
+  index put back for a moment), the bar's pace. StatsLine's on-screen value fade uses the bar's pace too.
+- Greyed trash and the bookmark button when off share one dimness: ICON_DIM 0.4 (trash was 0.3).
+- Status line at a session's end: show_with_bar() holds an empty line's fade-in until BAR_OUT_S, swap timings = the
+  bar's (IN_S = BAR_IN_S, SWAP_S = BAR_OUT_S), so it comes back with the light + stats. "Checking saves..." / "Game
+  closed. Syncing saves..." only show if still going after SYNC_SHOW_AFTER_S (_play_status), like the light.
+- ENTER in every pop-up (message()) = the safe "don't" button (_BACK_KEYS: Cancel / Later / Keep Open / no...) when
+  there is one, else the first listed - set outright (setAutoDefault False + focus). Before, Qt gave Enter to the
+  focused leftmost button: the same in effect, by accident; tests checked the dialog before it was shown and
+  wrongly "saw" the main action as default (found 2026-10-17; tests now show the dialog).
+- "Game Already Running" (owner, 2026-10-17): Cancel | Force Close | Wait for It to Close. The pop-up checks every
+  0.4 s (message(done_when=...)) and closes itself once the game has been closed outside; the game then starts
+  through Ikemen Reader (Read was pressed for that; owner asked for my view - "back to neutral" would be a one-line
+  change in _launch_problem). Force Close: launcher.force_close_running(game folder), then _start_when_closed.
+  Verified with the stand-in game (both paths: pop-up gone, outside copy ended, session playing).
+- IGNORES WINDOWS ZOOM (owner, 2026-10-17: "I just want it to ignore zoom"): main() sets QT_ENABLE_HIGHDPI_SCALING=0
+  + QT_FONT_DPI=96 before the QApplication -> exactly the 100 % look at any zoom, and zoom changes while open do
+  nothing. QT_FONT_DPI is honoured on Windows (checked: 10 pt = 27 px with 144, 17 px with 96). Set through
+  outside.own_setting so games / Luna (Qt too) never inherit them (outside.environment drops _OURS, from source
+  too). Before this, at 150 % on 1920x1080 only 1.4 rows fit and at 175 % the window was wider than the screen
+  (likely the laptop's "grid too big"). Not yet seen at a real non-100 % zoom: needs the owner's laptop / a zoom
+  switch.
+- Status line texts (owner, 2026-10-17: the "already running" text ran off the window): everything written to the
+  strip goes through i18n.line(key) = the short "<key>:line" version when there is one (≤ 60 chars, EN + JA; pop-ups
+  keep the full text); title lists via i18n.games_list (1-2 names, more = "N games"). Test: PopupTextPass.
+- Pop-up text pass 2 (2026-10-17, owner: "weird or nonsensical text"; EN + JA): launch
+  problems with nothing to choose show OK, not a lone Cancel; "already running" titled Game Already Running (not
+  Can't Start the Game); close-while-running button "Close Anyway" / それでも閉じる (answers "Close anyway?"); device
+  taken: "Use Device N" + title; titles for Force Close / shared folder / restore / remove folder pop-ups; clearer
+  stop.body / play.already_running / add.existing. Owner-chosen wording untouched. Test: PopupTextPass (incl. every
+  key has EN + JA with the same {placeholders}).
+- Test with a stand-in game, NEVER Notepad or another real program (a test's taskkill / cleanup can close the
+  owner's own windows): scratchpad fakegame\IkemenFakeNovel.exe built with the Framework csc.exe (WinForms window). Stats on screen before and after: StatsLine fades its own values (_switch / _paint_switch: words +
+  numbers out then in, icons stay, gliding if they move, the old words travelling with their icon); BarFader only
+  fades the whole line when it appears / goes. The count-up waits BAR_OUT_S + BAR_IN_S + COUNT_UP_SETTLE_S.
+- ALL animation clocks are VsyncClock (owner: equally smooth at every common refresh rate): one shared thread
+  (_VsyncHub, DwmFlush) ticks every running clock once per screen refresh, in the same frame. Every animation is
+  paced by real time (the two per-tick ones fixed: AnkiBox settle, drag edge-scroll now px per 1/60 s with carry).
+  Cost: idle with breathing lights at 143 Hz ~24 % of one core vs ~14 % at 62.5 (measured, 40 covers).
+- Stats + status drop-down follow the LIGHT (quiet()): hidden while it says Starting / Now Reading / Syncing, back with
+  Synced (the button is Read again before the upload ends).
+- Status line (FadingStatusBar), hover pop-ups and the time roll step on VsyncClock (once per screen refresh).
+  Roll: numbers travel digit height + ROLL_GAP 5 px.
+- Pop-ups to the front: PopupsToFront (app event filter): every QDialog that opens is put above all windows once
+  (bring_to_front: SetWindowPos TOPMOST then NOTOPMOST, with wintypes.HWND argtypes - without them -1/-2 are cut to 32
+  bits and ignored) and can be covered again afterwards. Verified over Notepad.
 
 ## Ideas for later (owner interested, not scheduled)
+- PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows
+  power status / battery saver) and pick a level: Full (screen rate) / Balanced (cap 60, lights 30) / Light (lights
+  <= 30, rest 60 if possible), with hysteresis; optional Display setting Automatic / Always Full / Battery Saver;
+  log the chosen level. Lights share MainWindow._tick with hover / drags - split carefully. Buildable + testable on
+  the PC (1 core affinity + injected frame cost, mocked power status, forced clock rates); quick final check on the
+  laptop. Estimate given: 1-2 hours.
 - Gradient options in the colour selector (Custom Theme): a colour role could be a gradient (two or more stops,
   direction) instead of one flat colour (owner's idea, 2026-10-15). Assessed 2026-10-16, skipped for now: 33 roles,
   86 style-sheet uses (QSS takes qlineargradient: easy), 55 painted uses (gradient per shape), 19 colour-maths spots
