@@ -767,7 +767,8 @@ PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 LIGHT_FADE_S = 0.22                  # a light changing colour cross-fades this long (owner: 0.45 felt slow)
 BAR_XFADE_S = 0.2                    # the Read button's cross-fade, old look -> new look (BarFader)
 BAR_OUT_S, BAR_IN_S = 0.15, 0.2      # every other piece of the bar that changed: fades out, then in (BarFader)
-ICON_DIM = 0.4                      # the bar's icon buttons when greyed (trash) or off (bookmarks): one dimness
+INSTANT_CLOSE_S = 5                  # a game that closes within this long of appearing "closed right after starting"
+ICON_DIM = 0.4                     # the bar's icon buttons when greyed (trash) or off (bookmarks): one dimness
 BAR_WAKE_S = 0.22                    # nothing selected <-> selected: the whole bar blends as one, over this long
 ROLL_GAP = 5                         # px between the old and the new number as the time rolls up after a session
 COUNT_UP_SETTLE_S = 0.25           # after the bar's cross-fade: the old total sits still this long, then rolls up
@@ -1671,19 +1672,64 @@ class FadingStatusBar(QStatusBar):
         opt = QStyleOption()
         opt.initFrom(self)
         self.style().drawPrimitive(QStyle.PE_Widget, opt, p, self)      # the band (style sheet background)
+        self._link_rect = QRectF()
         if self._disp:
             rect = self.rect().adjusted(6, 0, -6, 0)                     # (where Qt's own status bar puts it)
             p.setOpacity(ease(self._alpha))
+            action = self._action if self._action and self._action[0] == self._disp else None
+            link_w = QFontMetricsF(self._link_font()).horizontalAdvance(action[1]) + self.LINK_GAP if action else 0
             runs = self._runs(self._disp)
-            if runs and runs_width(runs) <= rect.width():
-                fm = QFontMetricsF(self.font())
-                base = rect.top() + (rect.height() - fm.height()) / 2 + fm.ascent()
-                draw_runs(p, rect.left(), base, runs, base - digit_middle(self.font()))
+            fm = QFontMetricsF(self.font())
+            base = rect.top() + (rect.height() - fm.height()) / 2 + fm.ascent()
+            if runs and runs_width(runs) <= rect.width() - link_w:
+                end = draw_runs(p, rect.left(), base, runs, base - digit_middle(self.font()))
             else:
                 p.setPen(self.palette().color(self.foregroundRole()))
-                p.drawText(rect, Qt.AlignLeading | Qt.AlignVCenter | Qt.TextSingleLine,
-                           self.fontMetrics().elidedText(self._disp, Qt.ElideRight, rect.width()))
+                shown = self.fontMetrics().elidedText(self._disp, Qt.ElideRight, int(rect.width() - link_w))
+                p.drawText(QPointF(rect.left(), base), shown)
+                end = rect.left() + fm.horizontalAdvance(shown)
+            if action:                                   # e.g. Undo: bright like the stats' date, underlined
+                lf = self._link_font()
+                x = end + self.LINK_GAP
+                p.setFont(lf)
+                p.setPen(QColor(COLORS["text"]))
+                p.drawText(QPointF(x, base), action[1])
+                lfm = QFontMetricsF(lf)
+                self._link_rect = QRectF(x - 3, rect.top(), lfm.horizontalAdvance(action[1]) + 6, rect.height())
         p.end()
+
+    # a clickable word after a message (Undo): show_action
+    LINK_GAP = 10
+    _action: Optional[tuple] = None             # (the message it belongs to, its word, what a click does)
+    _link_rect = QRectF()
+
+    def _link_font(self) -> QFont:
+        f = QFont(self.font())
+        f.setUnderline(True)
+        return f
+
+    def show_action(self, text: str, word: str, on_click: Callable[[], None], timeout: int = 10000) -> None:
+        """A message with a clickable word after it (Remove From Library -> "Removed X. Undo"). The word goes with
+        the message (cleared, timed out or replaced: gone)."""
+        self._action = (text, word, on_click)
+        self.setMouseTracking(True)
+        self.showMessage(text, timeout)
+
+    def mouseMoveEvent(self, ev) -> None:
+        over = self._link_rect.contains(ev.position()) and self._disp == self.currentMessage()
+        self.setCursor(Qt.PointingHandCursor if over else Qt.ArrowCursor)
+        super().mouseMoveEvent(ev)
+
+    def mousePressEvent(self, ev) -> None:
+        a = self._action
+        if (ev.button() == Qt.LeftButton and a and a[0] == self.currentMessage() == self._disp
+                and self._link_rect.contains(ev.position())):
+            self._action = None
+            self.setCursor(Qt.ArrowCursor)
+            self.clearMessage()
+            a[2]()
+            return
+        super().mousePressEvent(ev)
 
     _TIME = re.compile(r"(\d+)(時間|分|秒|[hms])(?![A-Za-z])")
 
@@ -5868,8 +5914,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
     @guarded
     def _remove(self):
         if confirm_remove(self, self.game.title):
-            self.library.remove(self.game.game_id)
-            self.removed = True
+            self.removed = self.library.remove(self.game.game_id)   # (what went: the library offers Undo)
             self.accept()
 
     def _save(self):
@@ -8760,6 +8805,11 @@ class MainWindow(TaskOwner, QMainWindow):
         before = mine(g)
         d = GameDialog(self.library, self.settings, g, parent=self)
         if d.exec():
+            if d.removed:                                   # the Edit window's Remove From Library
+                self.clear_selection()
+                self.refresh()
+                self._offer_undo(g.title, d.removed)
+                return
             if mine(self.library.get(g.game_id)) != before:     # save folder set up / changed here: ask right away
                 self._ask_now.add(g.game_id)
             self.refresh()
@@ -8995,7 +9045,12 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         msg = i18n.line(r.message) if r.message else ""
         bar = self.statusBar()                      # (fades in together with the bottom bar's new look)
-        bar.show_with_bar(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)), 15000)
+        if r.seconds < INSTANT_CLOSE_S:
+            # closed again straight away (something missing, a crash...): say so, rather than report a 3-second
+            # "session" as if all was well (owner, 2026-10-17)
+            bar.show_with_bar(tr("status.closed_at_once"), 15000)
+        else:
+            bar.show_with_bar(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)), 15000)
         if game and r.seconds > 0:
             self._count_up = (game.game_id, max(0.0, game.total_playtime - r.seconds), time.monotonic())
         if r.new_title:
@@ -9015,6 +9070,8 @@ class MainWindow(TaskOwner, QMainWindow):
     def _launch_problem(self, r: PlayResult, already_without: tuple[str, ...], gid: Optional[str] = None) -> None:
         buttons = []
         done_when, game_dir = None, None
+        if r.retry_without == "close_luna":           # Luna open, certainly idle: it can be closed for you
+            buttons.append(("close_luna", tr("play.close_luna")))
         if r.message == "play.luna_running":
             buttons.append(("retry", tr("play.retry")))
         if r.retry_without == "watch":
@@ -9036,17 +9093,27 @@ class MainWindow(TaskOwner, QMainWindow):
         # nothing to choose: just OK (a lone Cancel read oddly); otherwise Cancel beside the choices
         buttons.append(("cancel", tr("game.cancel")) if buttons else ("ok", tr("play.ok")))
         # (already running: it isn't refused - it can wait for the game - so not "Can't Start the Game")
-        title = tr("play.title_running" if r.message == "play.already_running" else "play.title")
+        running = r.message in ("play.already_running", "play.already_running_luna")
+        title = tr("play.title_running" if running else "play.title")
         choice = message(self, tr(r.message), title, buttons, done_when=done_when)
+        without = tuple(already_without)
+        if r.message == "play.already_running_luna":
+            # (the pop-up said Luna closes too: once the game has closed, Luna is closed - if it's still certainly
+            # free of other games - and the game starts through it)
+            start = lambda: self._close_luna_then_read(gid, without, only_if_idle=True)
+        else:
+            start = lambda: self.play_selected(without, gid=gid)
         if choice == "force":
             try:
                 launcher.force_close_running(game_dir)
             except Exception as e:                      # (nothing to end, or not ours to end: say so)
                 report_failure(self, e)
                 return
-            self._start_when_closed(game_dir, gid, tuple(already_without))
+            self._start_when_closed(game_dir, start)
         elif choice == "done":                          # closed while the message was open
-            self.play_selected(tuple(already_without), gid=gid)
+            start()
+        elif choice == "close_luna":
+            self._close_luna_then_read(gid, tuple(already_without))
         elif choice == "retry":
             self.play_selected(already_without)
         elif choice == "watch":
@@ -9058,13 +9125,33 @@ class MainWindow(TaskOwner, QMainWindow):
         elif choice == "settings":
             self.open_settings()
 
-    def _start_when_closed(self, game_dir: Path, gid: Optional[str], without: tuple, waited: float = 0.0) -> None:
-        """After Force Close: start the game once its programs have really ended (a moment, usually). If it
-        somehow keeps running, Read finds it again and asks as before."""
+    def _close_luna_then_read(self, gid: Optional[str], without: tuple, only_if_idle: bool = False) -> None:
+        """Close Luna (asked like its own X; in the background - it may take a few seconds), then start the game
+        through Luna as usual. If Luna doesn't close, say so - nothing else happens. only_if_idle: checked again
+        first (something may have changed since the pop-up); busy or not sure -> Read as usual (its own message)."""
+        luna_exe = self.settings.luna_path
+        self.statusBar().showMessage(tr("status.closing_luna"))
+
+        def work() -> str:
+            if only_if_idle and not luna.idle(luna_exe):
+                return "busy"
+            return "closed" if luna.close(luna_exe) else "open"
+
+        def done(how) -> None:
+            if how == "open":
+                self.statusBar().showMessage(tr("status.luna_still_open"), 10000)
+                return
+            self.statusBar().clearMessage()
+            self.play_selected(without, gid=gid)       # (busy: Read says why, as before)
+        self._run(work, done, lambda _e: done("open"))
+
+    def _start_when_closed(self, game_dir: Path, then: Callable[[], None], waited: float = 0.0) -> None:
+        """After Force Close: go on (start the game) once its programs have really ended (a moment, usually). If
+        it somehow keeps running, Read finds it again and asks as before."""
         if launcher.already_running(game_dir) and waited < 5.0:
-            QTimer.singleShot(200, lambda: self._start_when_closed(game_dir, gid, without, waited + 0.2))
+            QTimer.singleShot(200, lambda: self._start_when_closed(game_dir, then, waited + 0.2))
             return
-        self.play_selected(without, gid=gid)
+        then()
 
     @guarded
     def _confirm_detection(self, game: Game, r: PlayResult) -> None:
@@ -9152,10 +9239,26 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         if confirm_remove(self, g.title):
             before = self._positions()
-            self.library.remove(gid)
+            removed = self.library.remove(gid)
             self.clear_selection()
             self.refresh()
             self._slide_from(before)                     # the others close the gap
+            self._offer_undo(g.title, removed)
+
+    def _offer_undo(self, title: str, removed: dict) -> None:
+        """'Removed X. Undo' on the status line for 10 s (owner, 2026-10-17): one click puts the game back - file,
+        cover, folder - where it was."""
+        def undo() -> None:
+            try:
+                g = self.library.restore_removed(removed)
+            except OSError as e:
+                report_failure(self, e)
+                return
+            self.refresh()
+            if g is not None:
+                self._select(g.game_id)
+                self.statusBar().showMessage(tr("status.restored", title=g.title), 6000)
+        self.statusBar().show_action(tr("status.removed", title=title), tr("status.undo"), undo, 10000)
 
     @guarded
     def _set_status(self, gid: str, status: str) -> None:

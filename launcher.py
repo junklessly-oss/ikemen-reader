@@ -643,17 +643,27 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
         g.use_luna = False
     if "le" in without:
         g.use_le = False
+    exe_path = Path(mine.exe).resolve()
+    game_dir = exe_path.parent
+    # the game itself already open (maybe through Luna) comes first: "Luna is already open" would be the wrong
+    # answer then - closing Luna wouldn't close the game (owner, 2026-10-17)
+    if not watch and already_running(game_dir):
+        lp = settings.luna_path
+        if g.use_luna and lp and luna.kind(lp) == "translator" and luna.busy_only_with(lp, str(game_dir)):
+            # open through Luna, and Luna busy with nothing else: closing the game closes Luna too (the pop-up says
+            # so), then it starts here through Luna - one pop-up, not two in a row
+            return PlayResult(False, "play.already_running_luna", retry_without="watch")
+        return PlayResult(False, "play.already_running", retry_without="watch")
     problem, plan = launch_plan(g, settings)
     if problem and not watch:
+        if problem == "play.luna_running" and luna.idle(settings.luna_path):
+            # Luna is open and certainly not busy with a game: it can be closed for you (Close Luna)
+            return PlayResult(False, problem, retry_without="close_luna")
         return PlayResult(False, problem, retry_without="luna" if "luna" in problem else "le")
     if mine.save_dir:
         unsafe = save_folder_problem(mine.save_dir, engine.cloud_root)
         if unsafe:
             return PlayResult(False, unsafe)
-    exe_path = Path(mine.exe).resolve()
-    game_dir = exe_path.parent
-    if not watch and already_running(game_dir):
-        return PlayResult(False, "play.already_running", retry_without="watch")
 
     detecting = not mine.save_dir
     if not detecting and not watch:          # watching: the running game has the saves loaded already

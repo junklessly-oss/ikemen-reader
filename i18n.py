@@ -20,9 +20,10 @@ S: dict[str, tuple[str, str]] = {
     "top.syncing":              ("Syncing", "同期中"),
     "top.attention_one":        ("Error", "エラー"),
     "top.attention_many":       ("Error", "エラー"),
-    "top.attention_tip_mixed":  ("Some games' saves don't match the copy in the cloud. Click to go to the game (click again for the next one).",
-                                 "一部のゲームのセーブがクラウドのコピーと一致しません。クリックするとそのゲームに移動します（もう一度クリックすると次のゲームに移動します）。"),
-    "top.attention_tip":        ("Saves changed on both devices. Click to go to the game (click again for the next one).", "両方の端末でセーブが変更されています。クリックするとそのゲームに移動します（もう一度クリックすると次のゲームに移動します）。"),
+    "top.attention_tip_mixed":   ("Some games' saves don't match the cloud copy. Click to go to each one in turn.",
+                                 "一部のゲームのセーブがクラウドのコピーと一致しません。クリックすると、該当するゲームに順に移動します。"),
+    "top.attention_tip":         ("Saves changed on both devices. Click to go to each game in turn.",
+                                 "両方の端末でセーブが変更されています。クリックすると、該当するゲームに順に移動します。"),
     "top.hide_stats":           ("Hide Statistics", "統計を非表示"),
     "top.show_stats":           ("Show Statistics", "統計を表示"),
     "top.stats_tip":            ("Show or hide time read and last read on the covers and the bottom bar.",
@@ -60,8 +61,8 @@ S: dict[str, tuple[str, str]] = {
     "bar.play":                 ("Read", "読む"),
     "bar.playing":              ("Now Reading", "読書中"),
     "bar.stop":                 ("Stop", "終了"),
-    "bar.tip_stop":             ("Close the game (it may ask to confirm in its own window).",
-                                 "ゲームを終了します（ゲーム側で確認が表示される場合があります）。"),
+    "bar.tip_stop":              ("Closes the game. It may ask you to confirm in its own window.",
+                                 "ゲームを終了します。ゲームの画面で確認が表示される場合があります。"),
     "stop.title":               ("Game Still Open", "ゲームがまだ開いています"),
     "stop.body":                ("{title} is still open. It may be waiting for an answer in its own window "
                                  "(such as \"Quit the game?\"). Force it to close? Anything you haven't saved in the game "
@@ -91,18 +92,18 @@ S: dict[str, tuple[str, str]] = {
     # (_first: this device has never synced the game, but already has files of its own - often made by the game
     #  itself when installed or first opened; the cloud has the other device's saves. See MainWindow.variant_key)
     "sync.state.conflict_first": ("First Sync: Choose Which Saves to Keep", "初回同期：どちらのセーブを残すか選んでください"),
-    "sync.tip.conflict_first":  ("This device hasn't synced this game before, but it already has save files of its own (some games "
-                                 "create them when installed or first opened). Choose which to keep when asked, with right-click "
+    "sync.tip.conflict_first":   ("This device already has its own save files for this game (some games make them when installed or "
+                                 "first opened), and they don't match the cloud. Choose which to keep when asked, with right-click "
                                  "Sync Now, or when you press Read.",
-                                 "この端末ではまだこのゲームを同期したことがありませんが、すでにセーブファイルがあります（インストール時や"
-                                 "初回起動時にファイルを作るゲームもあります）。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を"
-                                 "押したときに、どちらを残すか選べます。"),
+                                 "この端末にはすでにこのゲームのセーブファイルがあり（インストール時や初回起動時にファイルを作るゲームもあります）"
+                                 "、クラウドのセーブと一致しません。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を押したときに、どち"
+                                 "らを残すか選べます。"),
     "sync.state.conflict_solo": ("This Device's Saves Don't Match the Cloud Copy", "この端末のセーブがクラウドのコピーと一致しません"),
     # full explanations, shown when hovering the status line
     "sync.tip.push":            ("This device has newer saves. They upload automatically.",
                                  "この端末のセーブの方が新しいです。自動でアップロードされます。"),
-    "sync.tip.pull":            ("Newer saves are in the cloud. They download automatically (if the game is open outside Ikemen Reader, once it's closed).",
-                                 "クラウドに新しいセーブがあります。自動でダウンロードされます（イケメンリーダー以外から開いているゲームは、閉じたあと）。"),
+    "sync.tip.pull":             ("Newer saves are in the cloud. They download automatically when the game isn't running.",
+                                 "クラウドに新しいセーブがあります。ゲームが起動していないときに、自動でダウンロードされます。"),
     "sync.tip.conflict":        ("The saves have changed on both devices. Choose which to keep when asked, with right-click Sync Now, or when you press Read.",
                                  "両方の端末でセーブが変更されています。尋ねられたとき、右クリックの「今すぐ同期」、または「読む」を押したときに、どちらを残すか選べます。"),
     "sync.tip.conflict_solo":   ("This device's saves don't match the copy in the cloud. The game isn't set up on the other device, "
@@ -116,14 +117,14 @@ S: dict[str, tuple[str, str]] = {
     "sync.state.empty":         ("No Saves Yet", "セーブはまだありません"),
     "sync.state.unset":         ("Not Set Up on This Device Yet", "この端末ではまだ設定されていません"),
     "sync.state.detect":        ("Save at Least Once", "一度はセーブしてください"),
-    "sync.tip.detect":          ('Ikemen Reader finds the save location automatically while you play. Just save at least once.',
-                                 'セーブの場所はプレイ中に自動で見つけます。一度はセーブしてください。'),
+    "sync.tip.detect":           ("Save at least once while reading, and the save location is found automatically.",
+                                 "読んでいる間に一度セーブすると、セーブの場所が自動で見つかります。"),
     "sync.state.checking":      ("Checking Saves...", "セーブを確認中…"),
     "sync.state.playing":       ('Now Reading...',
                                  '読書中…'),
     "sync.state.starting":      ("Starting the Game...", "ゲームを起動中…"),
-    "sync.tip.playing":         ("Saves will upload when the game closes.",
-                                 "ゲームを終了するとセーブがアップロードされます。"),
+    "sync.tip.playing":          ("Saves upload when you close the game.",
+                                 "ゲームを閉じると、セーブがアップロードされます。"),
 
     # messages from the sync engine / launcher (status bar)
     "sync.pulled":              ('Downloaded newer saves from the cloud.',
@@ -143,6 +144,10 @@ S: dict[str, tuple[str, str]] = {
     "status.closed_syncing":    ("Game closed. Syncing saves...", "ゲームを終了しました。セーブを同期中…"),
     "status.detecting":         ("Game closed. Looking for its save files...", "ゲームを終了しました。セーブファイルを探しています…"),
     "status.played_for":        ("{msg}  Read for {time}.", "{msg}　読書時間：{time}"),
+    "status.removed":           ('Removed "{title}".', "「{title}」を削除しました。"),
+    "status.undo":              ("Undo", "元に戻す"),
+    "status.restored":          ('"{title}" is back in the library.', "「{title}」をライブラリに戻しました。"),
+    "status.closed_at_once":    ("The game closed right after starting.", "ゲームは起動直後に終了しました。"),
     "status.auto_downloaded":   ("Downloaded newer saves for: {games}", "新しいセーブをダウンロードしました：{games}"),
     "status.save_filled":       ("Save folder set up from the other device's for: {games}",
                                  "もう一方の端末に合わせてセーブフォルダーを設定しました：{games}"),
@@ -158,8 +163,8 @@ S: dict[str, tuple[str, str]] = {
                                  "「Lunaで起動」がオンですが、この端末ではLunaが設定されていません。設定で場所を指定してください。"),
     "play.luna_unknown_game":   ("Luna doesn't know this game yet. Drag the game's .exe into Luna once, then try again.",
                                  "Lunaにこのゲームがまだ登録されていません。一度ゲームの .exe をLunaにドラッグしてから、もう一度お試しください。"),
-    "play.luna_running":        ('Luna is already open. Please close it first so Ikemen Reader can start the game through it.',
-                                 'Lunaがすでに起動しています。イケメンリーダーからLuna経由でゲームを起動できるよう、先にLunaを閉じてください。'),
+    "play.luna_running":         ("Luna is already open. Close it first, so the game can start through it.",
+                                 "Lunaがすでに起動しています。ゲームをLuna経由で起動できるよう、先にLunaを閉じてください。"),
     "play.le_missing":          ('"Launch With Locale Emulator" is on, but Locale Emulator isn\'t set up on This Device. Set LEProc.exe in Settings.',
                                  "「Locale Emulatorで起動」がオンですが、この端末ではLocale Emulatorが設定されていません。設定で LEProc.exe を指定してください。"),
     "play.needs_admin":         ('This game needs administrator rights. Close Ikemen Reader, right-click its icon, choose "Run as administrator", then try again.',
@@ -189,11 +194,11 @@ S: dict[str, tuple[str, str]] = {
     "conflict.ask_later":       ("Later", "後で"),
     "menu.sync_now":            ("Sync Now", "今すぐ同期"),
     "play.suggest_title":       ("Save Folder", "セーブフォルダー"),
-    "play.suggest_body":        ("{title} has no save folder on This Device yet. It probably saves here:\n\n{path}\n\n{why}\n\n"
-                                 "Use this folder? Its saves will then sync from this session on.",
-                                 "{title} には、この端末のセーブフォルダーがまだ設定されていません。おそらく次の場所に保存されます：\n\n{path}\n\n{why}\n\n"
-                                 "このフォルダーを使いますか？今回からセーブが同期されます。"),
-    "play.suggest_other":       ("It's the same place the other device uses, so its saves can come across before the game starts.",
+    "play.suggest_body":         ("{title} has no save folder on This Device yet. It probably saves here:\n\n{path}\n\n{why}\n\nUse this "
+                                 "folder? Its saves sync from this session on.",
+                                 "{title} には、この端末のセーブフォルダーがまだ設定されていません。おそらく次の場所に保存されます：\n\n{"
+                                 "path}\n\n{why}\n\nこのフォルダーを使いますか？今回から、セーブが同期されます。"),
+    "play.suggest_other":        ("It's the same place as on the other device, so its saves come across before the game starts.",
                                  "もう一方の端末と同じ場所なので、ゲームの起動前にそのセーブを取り込めます。"),
     "play.suggest_found":       ("An existing save folder for this game was found there.",
                                  "このゲームの既存のセーブフォルダーが見つかりました。"),
@@ -201,16 +206,16 @@ S: dict[str, tuple[str, str]] = {
     "play.suggest_skip":        ("Find It While Reading", "読みながら探す"),
     "play.never_started":       ("The game didn't start. If Luna shows an error, please check it there.",
                                  'ゲームが起動しませんでした。Lunaにエラーが表示されている場合は、そちらを確認してください。'),
-    "play.not_launched_conflict":("The game wasn't started because the saves differ between the two devices. Please choose which ones to keep first.",
-                                 '両方の端末のセーブが異なるため、ゲームを起動しませんでした。先にどちらを残すか選んでください。'),
-    "play.not_launched_conflict_first": ("The game wasn't started because this device already has save files that don't "
-                                 "match the saves in the cloud. Please choose which ones to keep first.",
-                                 "この端末にはすでにクラウドのセーブと一致しないセーブファイルがあるため、ゲームを起動しませんでした。"
-                                 "先にどちらを残すか選んでください。"),
-    "play.not_launched_conflict_solo": ("The game wasn't started because this device's saves don't match the copy in the "
-                                 "cloud. Please choose which ones to keep first.",
-                                 "この端末のセーブがクラウドのコピーと一致しないため、ゲームを起動しませんでした。先にどちらを"
-                                 "残すか選んでください。"),
+    "play.not_launched_conflict": ("The saves differ between the two devices, so the game wasn't started. Choose which to keep first.",
+                                 "両方の端末のセーブが異なるため、ゲームを起動しませんでした。先にどちらを残すか選んでください。"),
+    "play.not_launched_conflict_first": ("This device already has save files that don't match the cloud, so the game wasn't started. Choose "
+                                 "which to keep first.",
+                                 "この端末にクラウドと一致しないセーブファイルがあるため、ゲームを起動しませんでした。先にどちらを残すか選んでくだ"
+                                 "さい。"),
+    "play.not_launched_conflict_solo": ("This device's saves don't match the cloud copy, so the game wasn't started. Choose which to keep "
+                                 "first.",
+                                 "この端末のセーブがクラウドのコピーと一致しないため、ゲームを起動しませんでした。先にどちらを残すか選んでください"
+                                 "。"),
     "play.detected":            ("Found where the game saves.", "セーブの場所が見つかりました。"),
     "play.detect_none":         ("Couldn't find where the game saves. Did you save at least once?",
                                  "セーブの場所が見つかりませんでした。一度はセーブしましたか？"),
@@ -220,6 +225,10 @@ S: dict[str, tuple[str, str]] = {
     "play.retry_without_luna":  ("Read Without Luna", "Lunaなしで読む"),
     "play.retry_without_le":    ("Read Without Locale Emulator", "Locale Emulatorなしで読む"),
     "play.retry":               ("Try Again", "もう一度試す"),
+    "play.close_luna":          ("Close Luna", "Lunaを閉じる"),
+    "status.closing_luna":      ("Closing Luna...", "Lunaを閉じています…"),
+    "status.luna_still_open":   ("Luna didn't close. Please close it yourself, then press Read.",
+                                 "Lunaが閉じませんでした。手動で閉じてから「読む」を押してください。"),
     "play.go_settings":         ("Open Settings", "設定を開く"),
 
     # ------------------------------------------------------------------ folders
@@ -335,18 +344,24 @@ S: dict[str, tuple[str, str]] = {
                                  "予期しない問題が発生しましたが、何も失われていません。詳細は次の場所に保存されました：\n{path}"),
     "error.use_anyway":         ("Use Anyway", "このまま使う"),
     "error.save_shared_title":  ("Save Folder Already in Use", "このセーブフォルダーは使用中です"),
-    "sync.failed":              ("Couldn't sync the saves because a file is in use or can't be written. Nothing was lost, and Ikemen Reader will try again next time.",
-                                 'ファイルが使用中か書き込めないため、セーブを同期できませんでした。何も失われていません。次回もう一度同期します。'),
-    "play.already_running":     ("This game is already running outside Ikemen Reader. If its saves were synced now, the running "
-                                 "game could overwrite them later.\n\n"
-                                 "Close the game and it will start here by itself, or choose Force Close (anything not saved "
-                                 "in the game will be lost). To keep playing it as it is, choose Wait for It to Close: the "
-                                 "saves sync once it closes.",
-                                 "このゲームはイケメンリーダーの外ですでに起動しています。今セーブを同期すると、起動中のゲームがあとで"
-                                 "上書きしてしまう恐れがあります。\n\n"
-                                 "ゲームを閉じると、ここから自動で起動します。「強制終了」を選ぶこともできます（ゲーム内でセーブして"
-                                 "いない内容は失われます）。このまま続けて遊ぶ場合は「終了まで待つ」を選んでください。ゲームの終了後に"
-                                 "セーブが同期されます。"),
+    "sync.failed":               ("Couldn't sync the saves because a file is in use or can't be written. Nothing was lost, and the next "
+                                 "sync tries again.",
+                                 "ファイルが使用中か書き込めないため、セーブを同期できませんでした。何も失われていません。次の同期でもう一度試しま"
+                                 "す。"),
+    "play.already_running":     ("This game is already running outside Ikemen Reader. When you close it, it starts here.\n\n"
+                                 "Force Close ends it right away (anything you haven't saved in the game will be lost). "
+                                 "Wait for It to Close keeps it running, and the saves sync when you close it.",
+                                 "このゲームはイケメンリーダーの外ですでに起動しています。ゲームを閉じると、ここで起動します。\n\n"
+                                 "「強制終了」を選ぶと、すぐに終了します（ゲーム内でセーブしていない内容は失われます）。"
+                                 "「終了まで待つ」を選ぶと、そのまま遊べて、閉じたときにセーブが同期されます。"),
+    "play.already_running_luna": ("This game is already running through Luna. When you close it, Luna closes too, and the "
+                                 "game starts here.\n\n"
+                                 "Force Close ends it right away (anything you haven't saved in the game will be lost). "
+                                 "Wait for It to Close keeps it running, and the saves sync when you close it.",
+                                 "このゲームはLuna経由ですでに起動しています。ゲームを閉じると、Lunaも閉じて、ここでゲームが"
+                                 "始まります。\n\n"
+                                 "「強制終了」を選ぶと、すぐに終了します（ゲーム内でセーブしていない内容は失われます）。"
+                                 "「終了まで待つ」を選ぶと、そのまま遊べて、閉じたときにセーブが同期されます。"),
     "play.watch":               ('Wait for It to Close',
                                  '終了まで待つ'),
     "close.syncing":            ('Your saves are syncing right now. Please wait a moment, then close Ikemen Reader.',
@@ -417,16 +432,18 @@ S: dict[str, tuple[str, str]] = {
     "detect.browse":            ("Somewhere Else", "別の場所"),
     "detect.use":               ("Use This", "これを使う"),
     "detect.later":             ("Ask Me Next Time", "次回また確認する"),
-    "detect.none_body":         ("Ikemen Reader couldn't tell where <b>{title}</b> saves. If you didn't save during that session, it will look again next time. You can also choose the folder yourself.",
-                                 '<b>{title}</b> のセーブの場所を特定できませんでした。今回セーブしていなかった場合は、次のプレイ時にもう一度探します。自分でフォルダーを選ぶこともできます。'),
+    "detect.none_body":          ("Couldn't tell where <b>{title}</b> saves. If you didn't save this time, it looks again the next time "
+                                 "you read. You can also choose the folder yourself.",
+                                 "<b>{title}</b> のセーブの場所を特定できませんでした。今回セーブしていなかった場合は、次に読むとき"
+                                 "にもう一度探します。自分でフォルダーを選ぶこともできます。"),
     "detect.registry_only":     ("Registry Only (No Save Folder)", "レジストリのみ（セーブフォルダーなし）"),
 
     # ------------------------------------------------------------------ restore dialog
     "restore.title":            ("Restore an Earlier Save", "以前のセーブを復元"),
     "restore.body":             ("Choose a backup of <b>{title}</b>'s saves to restore. Your current saves are backed up first, so you can undo this the same way.",
                                  '<b>{title}</b> のセーブを、どのバックアップから復元するか選んでください。現在のセーブは先にバックアップされるので、同じ方法で元に戻せます。'),
-    "restore.none":             ('No backups yet. Ikemen Reader makes one automatically whenever saves are about to be replaced.',
-                                 'バックアップはまだありません。セーブが置き換えられる前に、自動で作成されます。'),
+    "restore.none":              ("No backups yet. One is made automatically whenever saves are about to be replaced.",
+                                 "バックアップはまだありません。セーブが置き換えられる前に、自動で作成されます。"),
     "restore.reason.local-before-pull":   ("Before Downloading Newer Saves", "新しいセーブをダウンロードする前"),
     "restore.reason.cloud-before-push":   ("Cloud Copy Before Uploading", "アップロード前のクラウドのセーブ"),
     "restore.reason.local-before-restore": ("Before a Restore", "復元する前"),
@@ -607,16 +624,17 @@ S: dict[str, tuple[str, str]] = {
     "update.downloading":       ("Downloading Ikemen Reader {version}... {done} / {total} MB",
                                  "イケメンリーダー {version} をダウンロード中… {done} / {total} MB"),
     "update.ready_title":       ("Update Ready", "アップデートの準備ができました"),
-    "update.ready":             ("Ikemen Reader {version} has been downloaded. Restart now to start using it, "
-                                 "or it will be installed the next time you close Ikemen Reader.",
-                                 "イケメンリーダー {version} をダウンロードしました。今すぐ再起動すると使い始められます。"
-                                 "再起動しない場合は、次にイケメンリーダーを閉じたときにインストールされます。"),
+    "update.ready":              ("Ikemen Reader {version} is ready. Restart now to use it, or it installs the next time you close "
+                                 "Ikemen Reader.",
+                                 "イケメンリーダー {version} の準備ができました。今すぐ再起動すると使えます。再起動しない場合は、次にイ"
+                                 "ケメンリーダーを閉じたときにインストールされます。"),
     "update.restart":           ("Restart Now", "今すぐ再起動"),
-    "update.failed":            ("The update couldn't be downloaded right now. Ikemen Reader will try again next time.",
-                                 "アップデートをダウンロードできませんでした。次回もう一度試します。"),
-    "update.damaged":           ("The downloaded update was damaged, so it wasn't installed. Ikemen Reader will try "
-                                 "again next time.",
-                                 "ダウンロードしたアップデートが破損していたため、インストールしませんでした。次回もう一度試します。"),
+    "update.failed":             ("Couldn't download the update right now. It tries again the next time you open Ikemen Reader.",
+                                 "アップデートをダウンロードできませんでした。次にイケメンリーダーを起動したときに、もう一度試します。"),
+    "update.damaged":            ("The downloaded update was damaged, so it wasn't installed. It tries again the next time you open "
+                                 "Ikemen Reader.",
+                                 "ダウンロードしたアップデートが破損していたため、インストールしませんでした。次にイケメンリーダーを起動したときに"
+                                 "、もう一度試します。"),
     "update.wait_game":         ("The update will be installed when you close Ikemen Reader (not while a game is "
                                  "running or saves are syncing).",
                                  "アップデートはイケメンリーダーを閉じたときにインストールされます（ゲームの実行中や"
@@ -642,8 +660,10 @@ S: dict[str, tuple[str, str]] = {
     # ------------------------------------------------------------------ misc
     "close.title":              ("Game Still Running", "ゲームが起動中です"),
     "close.continue":           ("Close Anyway", "それでも閉じる"),
-    "close.body":               ("{title} is still running. If you close Ikemen Reader now, this session's reading time won't be recorded, and your saves will upload the next time Ikemen Reader opens.\n\nClose anyway?",
-                                 '{title} はまだ起動中です。今イケメンリーダーを閉じると、今回の読書時間は記録されず、セーブは次にイケメンリーダーを起動したときにアップロードされます。\n\nそれでも閉じますか？'),
+    "close.body":                ("{title} is still running. If you close Ikemen Reader now, this session's reading time isn't "
+                                 "recorded, and the saves upload the next time you open it.\n\nClose anyway?",
+                                 "{title} はまだ起動中です。今イケメンリーダーを閉じると、今回の読書時間は記録されず、セーブは次に起動した"
+                                 "ときにアップロードされます。\n\nそれでも閉じますか？"),
     "file.programs":            ("Programs (*.exe *.lnk)", "プログラム (*.exe *.lnk)"),
     "file.pick_exe":            ("Choose the Game's .exe", "ゲームの .exe を選択"),
     "file.pick_saves":          ("Choose the Save Folder", "セーブフォルダーを選択"),
@@ -674,6 +694,8 @@ S: dict[str, tuple[str, str]] = {
     "play.never_started:line":   ("The game didn't start.", "ゲームが起動しませんでした。"),
     "play.already_running:line": ("The game is already running outside Ikemen Reader.",
                                   "ゲームはイケメンリーダーの外ですでに起動しています。"),
+    "play.already_running_luna:line": ("The game is already running through Luna.",
+                                  "ゲームはLuna経由ですでに起動しています。"),
     "play.not_launched_conflict:line": ("Not started: choose which saves to keep first.",
                                   "起動しませんでした：先に残すセーブを選んでください。"),
     "play.not_launched_conflict_first:line": ("Not started: choose which saves to keep first.",

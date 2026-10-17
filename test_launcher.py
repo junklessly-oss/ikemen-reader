@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import launcher
 import outside
 from launcher import play, run, run_game
 from library import Library, LocalSettings, MachinePaths, load_local_settings
@@ -225,6 +226,84 @@ class RunGameTests(unittest.TestCase):
         info = run([runtime, exe], self.folder.dir, poll=0.1, grace=0.3, on_found=lambda: seen.append(1))
         self.assertTrue(info.started)
         self.assertEqual(seen, [1])
+
+
+class CloseLunaForYou(unittest.TestCase):
+    """2026-10-17: "Close Luna" is offered only when Luna is open and CERTAINLY idle (owner: 95-100 % or not at all);
+    a game already running comes first (closing Luna wouldn't close it)."""
+    LUNA = r"C:\Tools\Luna\LunaTranslator.exe"
+
+    def test_busy_only_with_this_game(self):
+        """Luna's one job is this game -> the 'closes Luna too' pop-up; anything else -> the usual one."""
+        luna_p = {"pid": 10, "ppid": 1, "exe": self.LUNA}
+        game = {"pid": 12, "ppid": 10, "exe": r"D:\Games\Novel\novel.exe"}
+        other = {"pid": 13, "ppid": 10, "exe": r"D:\Games\Other\other.exe"}
+        self.assertTrue(self._idle([luna_p, game], windows={10, 12}, game_dir=r"D:\Games\Novel"))
+        self.assertFalse(self._idle([luna_p, game, other], windows={10, 12, 13}, game_dir=r"D:\Games\Novel"))
+        hooked = {"pid": 14, "ppid": 1, "exe": r"D:\Games\Novel\novel.exe"}
+        self.assertTrue(self._idle([luna_p, hooked], windows={14}, game_dir=r"D:\Games\Novel",
+                                   maps={14: [r"C:\Tools\Luna\files\LunaHook\LunaHook64.dll"]}))
+        from library import Game, LocalSettings, MachinePaths
+        g = Game("g", "G", paths={"PC": MachinePaths(exe=sys.executable)}, use_luna=True)
+        s = LocalSettings("PC", tempfile.gettempdir(), luna_path=self.LUNA)
+        for only_this, key in ((True, "play.already_running_luna"), (False, "play.already_running")):
+            with mock.patch.object(launcher, "already_running", return_value=True), \
+                    mock.patch.object(launcher.luna, "kind", return_value="translator"), \
+                    mock.patch.object(launcher.luna, "busy_only_with", return_value=only_this):
+                r = launcher.play(g, s, mock.Mock(), mock.Mock(cloud_root=Path(tempfile.gettempdir())),
+                                  status=lambda k: None)
+            self.assertEqual((r.message, r.retry_without), (key, "watch"))
+
+    def _idle(self, procs, windows=(), maps=None, game_dir=None):
+        import luna
+        maps = maps or {}
+
+        class P:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def memory_maps(self, grouped=True):
+                got = maps.get(self.pid, [])
+                if isinstance(got, Exception):
+                    raise got
+                return [mock.Mock(path=x) for x in got]
+        with mock.patch("launcher._scan", return_value=procs), \
+                mock.patch.object(luna, "_windowed_pids", return_value=set(windows)), \
+                mock.patch.object(luna.psutil, "Process", P), mock.patch.object(luna.sys, "platform", "win32"):
+            return luna.busy_only_with(self.LUNA, game_dir) if game_dir else luna.idle(self.LUNA)
+
+    def test_only_when_certain(self):
+        import psutil
+        luna_p = {"pid": 10, "ppid": 1, "exe": self.LUNA}
+        helper = {"pid": 11, "ppid": 10, "exe": r"C:\Tools\Luna\files\helper.exe"}
+        game = {"pid": 12, "ppid": 10, "exe": r"D:\Games\Novel\novel.exe"}
+        other = {"pid": 13, "ppid": 1, "exe": r"D:\Games\Other\other.exe"}
+        self.assertFalse(self._idle([other]))                                        # Luna not open
+        self.assertTrue(self._idle([luna_p, helper, other], windows={10, 13}))       # open, nothing going on
+        self.assertFalse(self._idle([luna_p, game], windows={10, 12}))               # it started a game
+        self.assertFalse(self._idle([luna_p, other], windows={13},                   # its hook inside a game
+                                    maps={13: [r"C:\Tools\Luna\files\LunaHook\LunaHook64.dll"]}))
+        self.assertFalse(self._idle([luna_p, other], windows={13},                   # can't look inside: not sure
+                                    maps={13: psutil.AccessDenied(13)}))
+
+    def test_a_running_game_comes_before_luna(self):
+        from library import Game, LocalSettings, MachinePaths
+        g = Game("g", "G", paths={"PC": MachinePaths(exe=sys.executable)}, use_luna=True)
+        s = LocalSettings("PC", tempfile.gettempdir())
+        with mock.patch.object(launcher, "already_running", return_value=True), \
+                mock.patch.object(launcher, "launch_plan", return_value=("play.luna_running", {})):
+            r = launcher.play(g, s, mock.Mock(), mock.Mock(cloud_root=Path(tempfile.gettempdir())), status=lambda k: None)
+        self.assertEqual(r.message, "play.already_running")
+        with mock.patch.object(launcher, "already_running", return_value=False), \
+                mock.patch.object(launcher, "launch_plan", return_value=("play.luna_running", {})), \
+                mock.patch.object(launcher.luna, "idle", return_value=True):
+            r = launcher.play(g, s, mock.Mock(), mock.Mock(cloud_root=Path(tempfile.gettempdir())), status=lambda k: None)
+        self.assertEqual((r.message, r.retry_without), ("play.luna_running", "close_luna"))
+        with mock.patch.object(launcher, "already_running", return_value=False), \
+                mock.patch.object(launcher, "launch_plan", return_value=("play.luna_running", {})), \
+                mock.patch.object(launcher.luna, "idle", return_value=False):
+            r = launcher.play(g, s, mock.Mock(), mock.Mock(cloud_root=Path(tempfile.gettempdir())), status=lambda k: None)
+        self.assertNotEqual(r.retry_without, "close_luna")                           # not sure: no button
 
 
 class OutsideProgramTests(unittest.TestCase):

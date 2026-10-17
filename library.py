@@ -420,14 +420,53 @@ class Library:
         self.save(game)
         return game
 
-    def remove(self, game_id: str) -> None:
-        """Forget a game. Its saves (local and in the cloud) are left alone."""
+    def remove(self, game_id: str) -> dict:
+        """Forget a game. Its saves (local and in the cloud) are left alone. Returns what was removed (the game file,
+        its cover, its folder if that emptied) for restore_removed - Undo."""
         game = self.get(game_id)
+        removed: dict = {"id": game_id}
+        try:
+            removed["game"] = self._file(game_id).read_text("utf-8")
+        except OSError:
+            pass
+        if game and game.artwork:
+            try:
+                removed["art"] = (game.artwork, (self.art_dir / game.artwork).read_bytes())
+            except OSError:
+                pass
+        if game and game.folder:
+            removed["folder"] = (game.folder, self._folders_raw().get(game.folder))
         self._file(game_id).unlink(missing_ok=True)
         if game and game.artwork:
             (self.art_dir / game.artwork).unlink(missing_ok=True)
         if game and game.folder:
             self._drop_folder_if_empty(game.folder)
+        return removed
+
+    def restore_removed(self, removed: dict) -> Optional[Game]:
+        """Undo remove(): the game file, its cover and (if it went with it) its folder come back as they were.
+        None if there's nothing to bring back or the game is already back (e.g. added again meanwhile)."""
+        text = removed.get("game")
+        gid = removed.get("id", "")
+        if not text or not gid or self._file(gid).exists():
+            return None
+        art = removed.get("art")
+        if art:
+            self.art_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.art_dir / (art[0] + ".vnsync.tmp")
+            tmp.write_bytes(art[1])
+            os.replace(tmp, self.art_dir / art[0])
+        folder = removed.get("folder")
+        if folder and folder[1] is not None:
+            fid, entry = folder
+            raw = self._folders_raw()
+            if fid not in raw:                       # (it emptied and went: back with its name, sort and order)
+                raw[fid] = entry
+                _atomic_write(self.folders_file, json.dumps(
+                    {k: {kk: vv for kk, vv in v.items() if vv or kk == "name"} for k, v in raw.items()},
+                    indent=2, ensure_ascii=False))
+        _atomic_write(self._file(gid), text)
+        return self.get(gid)
 
     # -- folders (like app folders on a phone: a game is in at most one; empty folders disappear)
     def _folders_raw(self) -> dict[str, dict]:

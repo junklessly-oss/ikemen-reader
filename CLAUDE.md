@@ -758,6 +758,33 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   too). Before this, at 150 % on 1920x1080 only 1.4 rows fit and at 175 % the window was wider than the screen
   (likely the laptop's "grid too big"). Not yet seen at a real non-100 % zoom: needs the owner's laptop / a zoom
   switch.
+- Close Luna for you (owner, 2026-10-17; "only on 95-100 % certainty"): launcher.play checks "game already running"
+  BEFORE the Luna checks (with the game open through Luna, "Luna is already open" was the wrong answer). Luna open:
+  the message gets Close Luna only if luna.idle(): nothing Luna started outside its folder is running (parent ids,
+  launcher._scan - psutil's first look took 3 s), no windowed program has ANY file from Luna's folder loaded (its
+  hook LunaHook32/64.dll; renamed hooks still caught), and every windowed program could be looked into (one that
+  can't, e.g. run as admin -> not sure -> no button). ~270 ms. Close = luna.close (asked like its X, waits <= 6 s,
+  in the background), then Read again; if it stays open: status line says so. Verified with stand-ins (fake Luna
+  folder + a windowed program with a DLL from it loaded); tests: test_launcher.CloseLunaForYou.
+- TEXT STYLE (owner, 2026-10-17; follow it for every new text, EN + JA): the program speaking to the user IN THE
+  MOMENT - what's true now, what to do, what happens when you do it ("When you close it, Luna closes too, and the game
+  starts here." - a comma where a speaker would breathe). No narrating the program's plans ("Ikemen Reader will...",
+  "then..."), no needless asides; warnings stay explicit; things that truly happen later stay future. Not radical:
+  20 tips / messages reworded in the first pass (stylepass), owner-chosen wording untouched. Japanese in its own
+  natural register (〜します / 〜してください), not a word-for-word mirror.
+- Game already running THROUGH LUNA (owner, 2026-10-17): if Luna's only job is this game (luna.busy_only_with(lp,
+  game folder): idle() but allowing this game's programs), the Game Already Running pop-up says so -
+  play.already_running_luna "When you close it, Luna closes too, and the game starts here." - and after the game
+  closes (or Force Close), Luna is checked again (idle), closed, and the game starts through it: one pop-up, not two.
+  Verified with stand-ins (fake Luna folder + fake game loading a DLL from it: fakegame\IkemenFakeHookedNovel.exe).
+- Undo for Remove From Library (owner, 2026-10-17): Library.remove returns what went (game file text, cover bytes,
+  the folder entry if it emptied); restore_removed puts them back (None if the game is already back). Status line
+  'Removed "X".' + "Undo" (FadingStatusBar.show_action: a clickable word after the message, COLORS["text"] like the
+  stats' date, underlined, goes with the message) for 10 s, from the trash / menu and the Edit window's button.
+  Test: UndoRemove.
+- A game that closes within INSTANT_CLOSE_S (5 s) of appearing: the status line says "The game closed right after
+  starting." / 「ゲームは起動直後に終了しました。」 instead of "Read for 3s" (owner, 2026-10-17; playtime still recorded).
+  Verified with the stand-in game (EN + JA, and a 7 s session still says Read for 7s).
 - Status line texts (owner, 2026-10-17: the "already running" text ran off the window): everything written to the
   strip goes through i18n.line(key) = the short "<key>:line" version when there is one (≤ 60 chars, EN + JA; pop-ups
   keep the full text); title lists via i18n.games_list (1-2 names, more = "N games"). Test: PopupTextPass.
@@ -796,6 +823,12 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   (lighter / alpha / contrast warning / blended backdrop / logo recolour: no single answer), gradient editor, and
   Ikemen Sync only accepts #RRGGBB (store gradients in a new field old versions ignore). Recommended scope if
   revived: SURFACES only (library background, bars, buttons, placeholder covers) = ~1/3 of the work.
+  Re-checked 2026-10-17 (owner asked which are easy; kept as a note): ALREADY = covers without art (top/bottom
+  colours). SUPER EASY = top + bottom bars ("band": style sheet + only the contrast warning -> average colour, and
+  the tick icon -> first stop). EASY = buttons ("button"/"button_hover": style sheet + folder tiles, easter-egg
+  boxes, contrast warning) and text boxes / drop-downs ("input": + the drop-down list, one painted spot). NOT EASY
+  (leave): main library area (blended with the background picture), Read button (PulseButton paints it), lights,
+  bookmarks. Shared cost: a gradient option in Custom Theme (second swatch + direction) and storage in a new field.
 - macOS / Linux support: UI, sync engine, library already portable; games would run through Wine (start/track via
   wine, save paths inside the Wine prefix + translation between devices), Wine registry for registry saves,
   LE/Luna don't apply, startup/.lnk/window titles/playtime need equivalents, build per OS (Mac signing ~$99/yr).

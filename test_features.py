@@ -3381,6 +3381,72 @@ class SmoothHoverPopups(unittest.TestCase):
                 app.wait_for_tasks(5)
 
 
+class UndoRemove(unittest.TestCase):
+    """2026-10-17: removing a game says 'Removed X.' with an Undo (bright, underlined) on the status line for 10 s;
+    Undo brings back the game file, its cover and the folder it emptied."""
+
+    def test_library_puts_everything_back(self):
+        from PySide6.QtGui import QImage, QColor
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Library(Path(tmp) / "cloud")
+            g = lib.add_game("Alpha", "PC", exe=r"C:\a\a.exe")
+            img = QImage(30, 40, QImage.Format_RGB32)
+            img.fill(QColor("red"))
+            img.save(str(Path(tmp) / "c.png"))
+            lib.set_artwork(g.game_id, str(Path(tmp) / "c.png"))
+            lib.record_session(g.game_id, "PC", 3600)
+            fid = lib.create_folder("Only One")
+            lib.set_folder(g.game_id, fid)
+            before = lib.get(g.game_id)
+            removed = lib.remove(g.game_id)
+            self.assertIsNone(lib.get(g.game_id))
+            self.assertNotIn(fid, lib.list_folders())                  # (emptied: gone with it)
+            back = lib.restore_removed(removed)
+            self.assertEqual(back, before)                              # playtime, folder, cover name...
+            self.assertTrue((lib.art_dir / back.artwork).is_file())
+            self.assertEqual(lib.list_folders().get(fid), "Only One")
+            self.assertIsNone(lib.restore_removed(removed))             # (already back: nothing twice)
+
+    def test_status_line_offers_undo(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtCore import QPointF
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            g = Library(cloud).add_game("Alpha", "PC", exe=r"C:\a\a.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.resize(1200, 800)
+                w.show()
+                w.refresh()
+                with mock.patch.object(app, "confirm_remove", return_value=True):
+                    w.remove_game(g.game_id)
+                self.assertNotIn(g.game_id, w.games)
+                bar = w.statusBar()
+                self.assertEqual(bar.currentMessage(), 'Removed "Alpha".')
+                end = time.monotonic() + 0.8
+                while time.monotonic() < end:
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+                bar.repaint()
+                self.assertFalse(bar._link_rect.isEmpty())                  # "Undo" drawn after the message
+                click = bar._link_rect.center()
+                bar._action[2]()                                             # (what clicking it does)
+                self.assertIn(g.game_id, w.games)
+                self.assertEqual(w.selected_id(), g.game_id)
+                self.assertGreater(click.x(), 0)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
 class PopupTextPass(unittest.TestCase):
     """2026-10-17 pass over every pop-up: risky questions default to the safe answer, a launch problem with nothing to
     choose says OK (not a lone Cancel), titles fit their messages."""
