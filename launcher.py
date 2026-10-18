@@ -48,12 +48,58 @@ def _inside(path: str, folder: Path) -> bool:
     return n == f or n.startswith(f + os.sep)
 
 
+_NT_BUF: list = [None]          # the buffer NtQuerySystemInformation fills (kept: it's asked many times a second)
+
+
+def _snapshot_nt() -> Optional[list[tuple[int, int]]]:
+    """(pid, parent pid) of every running program in ONE call to Windows (NtQuerySystemInformation), read back with
+    struct: Python is let go during the call and held only for a quick read of the result. (Toolhelp needs one call per
+    program - ~320 - and each one waits to get Python back: with the window busy, one look took up to a second.)"""
+    import ctypes
+    import struct
+    if ctypes.sizeof(ctypes.c_void_p) != 8:
+        return None                                        # (the offsets below are the 64-bit layout)
+    ntdll = ctypes.windll.ntdll
+    query = ntdll.NtQuerySystemInformation
+    query.restype = ctypes.c_long
+    query.argtypes = [ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
+    size = 1 << 20
+    for _ in range(6):
+        buf = _NT_BUF[0]
+        if buf is None or len(buf) < size:
+            buf = _NT_BUF[0] = ctypes.create_string_buffer(size)
+        need = ctypes.c_ulong(0)
+        status = query(5, buf, len(buf), ctypes.byref(need))     # SystemProcessInformation
+        if status == 0:
+            break
+        if status & 0xFFFFFFFF != 0xC0000004:                     # (not "buffer too small": give up)
+            return None
+        size = max(size * 2, need.value + (1 << 16))
+    else:
+        return None
+    raw = buf.raw
+    out, at = [], 0
+    while True:
+        nxt = struct.unpack_from("<I", raw, at)[0]
+        pid, ppid = struct.unpack_from("<QQ", raw, at + 0x50)    # UniqueProcessId, InheritedFromUniqueProcessId
+        out.append((pid, ppid))
+        if not nxt:
+            return out
+        at += nxt
+
+
 def _snapshot() -> Optional[list[tuple[int, int]]]:
-    """(pid, parent pid) of every running program, straight from Windows (Toolhelp snapshot) through ctypes - which
-    lets go of Python while Windows works, so the window keeps drawing (psutil's own table held Python ~7 ms each
-    time, and the launch / close watch asks several times a second: the sync light's fade stuttered)."""
+    """(pid, parent pid) of every running program, straight from Windows through ctypes - which lets go of Python while
+    Windows works, so the window keeps drawing (psutil's own table held Python ~7 ms each time, and the launch / close
+    watch asks several times a second: the sync light's fade stuttered). One call (_snapshot_nt), else Toolhelp."""
     if sys.platform != "win32":
         return None
+    try:
+        quick = _snapshot_nt()
+        if quick:
+            return quick
+    except Exception:  # noqa: BLE001 - Toolhelp instead
+        pass
     try:
         import ctypes
         from ctypes import wintypes
@@ -483,6 +529,12 @@ def _wait_for_an_exit(pids, seconds: float, clock: Optional["_ExactClock"] = Non
             return
 
 
+# how often programs are looked at in a launch's first 3 seconds. A launcher may hand over through a helper that
+# lives only ~0.1 s (born after one look and gone before the next, it broke the chain from the launcher to the game:
+# the session "ended" at once). A look is cheap now (asked through Windows directly, letting go of Python).
+STARTUP_POLL = 0.03
+
+
 @dataclass
 class RunInfo:
     seconds: float
@@ -562,11 +614,12 @@ def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll:
                 _ask_to_close(list(found))
             # while it runs: react the moment one of its processes ends (check often in the first
             # seconds: a launcher may hand over to the game very quickly)
-            _wait_for_an_exit(list(found), min(poll, 0.1) if now - start < 3 else poll, clock)
+            _wait_for_an_exit(list(found), min(poll, STARTUP_POLL) if now - start < 3 else poll, clock)
         elif first_seen is not None:
-            time.sleep(0.25)             # it just closed: look for a hand-over to another process quickly
+            # it just closed: look for a hand-over to another process quickly (very quickly while starting)
+            time.sleep(STARTUP_POLL if now - start < 3 else 0.25)
         else:
-            time.sleep(min(poll, 0.1) if now - start < 3 else poll)   # waiting for it to appear
+            time.sleep(min(poll, STARTUP_POLL) if now - start < 3 else poll)   # waiting for it to appear
     title = session_title(titles)           # (a title that kept changing: only the part that stayed the same)
     if track_root and cmd:
         active += (first_seen or start) - start        # time before the first check counts too

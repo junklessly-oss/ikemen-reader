@@ -7810,7 +7810,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.sync_states.setdefault(gid, "checking")
         skip = {self.playing_id} if self.worker is not None and self.playing_id else set()
         self.checker = StatusChecker(self.engine, list(self.games.values()), self.settings.machine_name, skip)
-        self.checker.done.connect(self._sync_checked)
+        checker = self.checker
+        # (results of a check made for another engine - the settings changed, or Dual -> My Device, while it ran - are
+        # dropped: they described a library / mode the window no longer shows)
+        checker.done.connect(lambda *res: self._sync_checked(*res) if checker.engine is self.engine else None)
         self.checker.finished.connect(self._update_sync_label)  # isRunning() is reliably False by then
         self.checker.start()
         self._update_details()
@@ -7881,7 +7884,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._conflicts_snoozed |= {g.game_id for g in self.syncer.games}   # closed without choosing: not again
         self.syncer = None
         by_title = {g.title: g for g in self.games.values()}
-        self.statusBar().showMessage("  ".join(f"{t}: {i18n.line(self.solo_key(k, by_title.get(t)), title=t)}" for t, k in results), 10000)
+        colon = "：" if i18n.language() == "ja" else ": "
+        self.statusBar().showMessage("  ".join(f"{t}{colon}{i18n.line(self.solo_key(k, by_title.get(t)), title=t)}"
+                                               for t, k in results), 10000)
         self.refresh()
 
     def folder_name(self, fid: str) -> str:

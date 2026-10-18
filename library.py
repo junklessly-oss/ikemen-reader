@@ -25,6 +25,8 @@ import unicodedata
 import os
 import shutil
 import socket
+import stat as _stat
+import threading
 import time
 from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
@@ -81,6 +83,46 @@ def _atomic_write(path: Path, text: str) -> None:
                     pass
                 raise
             time.sleep(0.4)
+
+
+_TEXTS: dict[str, dict[str, tuple[int, int, str]]] = {}   # games folder -> {file name: (size, mtime_ns, text)}
+_TEXTS_LOCK = threading.Lock()
+
+
+def _read_game_files(folder: Path) -> list[str]:
+    """The text of every game file in the folder, in name order. A file is read again only when its size or modified
+    time changed: a folder listing on Windows already carries both, so nothing is asked about each file - on Google
+    Drive's G: every read went through the drive (~1 ms each, seconds while it was busy), and the window did this on
+    every drop out of a folder, rename and save."""
+    key = os.path.normcase(str(folder))
+    with _TEXTS_LOCK:
+        known = _TEXTS.get(key, {})
+    fresh: dict[str, tuple[int, int, str]] = {}
+    try:
+        with os.scandir(folder) as it:
+            entries = sorted((e for e in it if e.name.lower().endswith(".json")), key=lambda e: e.name.lower())
+    except OSError:
+        return []
+    out, now = [], time.time()
+    for e in entries:
+        try:
+            st = e.stat()
+            if not _stat.S_ISREG(st.st_mode):
+                continue
+            was = known.get(e.name)
+            # (a file changed in the last 2 s is always read again: Windows stamps times in ~15 ms steps, so two quick
+            # writes of the same length could look identical)
+            if was is not None and was[0] == st.st_size and was[1] == st.st_mtime_ns and now - st.st_mtime > 2:
+                text = was[2]
+            else:
+                text = Path(e.path).read_text("utf-8")
+        except (OSError, ValueError):
+            continue                       # (vanished meanwhile, half-written, not text: skipped like a damaged file)
+        fresh[e.name] = (st.st_size, st.st_mtime_ns, text)
+        out.append(text)
+    with _TEXTS_LOCK:
+        _TEXTS[key] = fresh
+    return out
 
 
 def _known(cls, d: dict) -> dict:
@@ -406,9 +448,9 @@ class Library:
     def list_games(self) -> list[Game]:
         games = []
         seen = set()
-        for f in sorted(self.games_dir.glob("*.json")):
+        for text in _read_game_files(self.games_dir):
             try:
-                g = Game.from_json(f.read_text("utf-8"))
+                g = Game.from_json(text)
             except Exception:  # noqa: BLE001 - unreadable, half-synced or damaged: skip just this one
                 continue
             if g.game_id in seen:
@@ -761,19 +803,29 @@ class Library:
         folders, covers and saves (names, sizes and modified times only, nothing is read). If it differs from
         last time, something changed - e.g. the other device added a game or uploaded newer saves."""
         def listing(folder: Path, deep: bool = False) -> tuple:
+            # (sizes and times straight from the folder listings: on Windows they come with it, so the drive isn't
+            # asked about each file - this runs every 4 s over every game, cover and save file)
             out = []
+            stack = [(str(folder), "")]
             try:
-                for root, dirs, files in (os.walk(folder) if deep else [(str(folder), [], os.listdir(folder))]):
-                    for name in files:
-                        if name.endswith(".vnsync.tmp") or name.endswith(".tmp"):
-                            continue
-                        try:
-                            st = os.stat(os.path.join(root, name))
-                        except OSError:
-                            continue
-                        out.append((os.path.relpath(os.path.join(root, name), folder), st.st_size, st.st_mtime_ns))
+                while stack:
+                    path, rel = stack.pop()
+                    with os.scandir(path) as it:
+                        for e in it:
+                            try:
+                                if e.is_dir(follow_symlinks=False):
+                                    if deep:
+                                        stack.append((e.path, rel + e.name + os.sep))
+                                    continue
+                                if e.name.endswith(".tmp"):
+                                    continue
+                                st = e.stat(follow_symlinks=False)
+                            except OSError:
+                                continue
+                            out.append((rel + e.name, st.st_size, st.st_mtime_ns))
             except OSError:
-                return ()
+                if not out:
+                    return ()
             return tuple(sorted(out))
         def stamp(f: Path):
             try:

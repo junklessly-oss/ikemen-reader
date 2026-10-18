@@ -3604,7 +3604,7 @@ class DiscordPresence(unittest.TestCase):
                     app.apply_theme("light")                              # the Light theme: the light picture
                     w._update_presence()
                     shown = w.presence.show.call_args.kwargs
-                    self.assertEqual((shown["image"], shown["image_text"]), ("logo_light", "1 Games in Library"))
+                    self.assertEqual((shown["image"], shown["image_text"]), ("logo_light", "1 Game in Library"))
                     app.apply_theme("custom", app.theme_colors("light"))   # custom, started from Light: same
                     w._update_presence()
                     self.assertEqual(w.presence.show.call_args.kwargs["image"], "logo_light")
@@ -3936,11 +3936,15 @@ class FewerGuesses(unittest.TestCase):
                 for _ in range(5):
                     QApplication.processEvents()
                 self.assertLessEqual(s.frameGeometry().height(), w.frameGeometry().height())
-                self.assertEqual(s.frameGeometry().top(), w.frameGeometry().top())            # lined up
-                self.assertEqual(s.frameGeometry().bottom(), w.frameGeometry().bottom())
-                self.assertLessEqual(abs(s.frameGeometry().center().x() - w.frameGeometry().center().x()), 1)
-                self.assertGreater(s.findChild(app.QScrollArea).verticalScrollBar().maximum(), 0)   # the rest scrolls
-                s.reject()
+                try:
+                    self.assertEqual(s.frameGeometry().top(), w.frameGeometry().top())            # lined up
+                    # (Windows 10: 1 px shorter on purpose - its solid border then sits on the main window's last
+                    # visible row, which an unfocused window draws almost see-through; see SettingsDialog._height_cap)
+                    self.assertEqual(s.frameGeometry().bottom(), w.frameGeometry().bottom() - (1 if app.WINDOWS_10 else 0))
+                    self.assertLessEqual(abs(s.frameGeometry().center().x() - w.frameGeometry().center().x()), 1)
+                    self.assertGreater(s.findChild(app.QScrollArea).verticalScrollBar().maximum(), 0)   # the rest scrolls
+                finally:
+                    s.reject()                # (even when failing: an open Settings window upset later tests)
             finally:
                 w.close()
                 app.wait_for_tasks(5)
@@ -4171,3 +4175,200 @@ class LiveColourDrag(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class SoloMode(unittest.TestCase):
+    """My Device (2026-10-18): a computer of its own - its own copy of the library, nothing synced - and the way back
+    to Dual Device, where everything done meanwhile joins the shared library (nothing lost on either side)."""
+
+    def _lib(self, tmp):
+        cloud = Path(tmp) / "cloud"
+        cloud.mkdir()
+        return cloud, Library(cloud)
+
+    def test_solo_copy_and_merge_back(self):
+        import library as L
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "app"
+            cloud, C = self._lib(tmp)
+            a = C.add_game("Alpha", "PC", exe=r"C:\a\a.exe")
+            b = C.add_game("Beta", "PC", exe=r"C:\b\b.exe")
+            C.set_paths(b.game_id, "Laptop", exe=r"D:\b\b.exe")
+            C.record_session(b.game_id, "Laptop", 600)
+            gone = C.add_game("Gamma", "PC", exe=r"C:\g\g.exe")
+            C.set_paths(gone.game_id, "Laptop", exe=r"D:\g\g.exe")
+            root = L.start_solo_library(str(cloud), app_dir)
+            self.assertTrue((root / "games" / f"{a.game_id}.json").is_file())
+            self.assertFalse((root / "saves").exists())                       # (the library only, never saves)
+            S = Library(root)
+            time.sleep(0.05)                                                  # (file times must move on)
+            S.record_session(b.game_id, "PC", 120)                            # read here while solo
+            S.update(b.game_id, status="finished")
+            new = S.add_game("Delta", "PC", exe=r"C:\d\d.exe")                 # added here while solo
+            S.remove_here(gone.game_id, "PC")                                  # removed here while solo
+            C.record_session(b.game_id, "Laptop", 60)                          # meanwhile on the other device
+            report = L.merge_solo(str(cloud), "PC", app_dir=app_dir)
+            self.assertEqual(report["added"], 1)
+            merged = C.get(b.game_id)
+            self.assertEqual(merged.playtime["PC"], 120)                        # this computer's time from solo...
+            self.assertEqual(merged.playtime["Laptop"], 660)                    # ...the other device's from the cloud
+            self.assertIsNotNone(C.get(new.game_id))
+            self.assertTrue(C.get(gone.game_id).removed_here("PC"))             # left this device only
+            self.assertEqual(C.get(gone.game_id).paths_for("Laptop").exe, r"D:\g\g.exe")
+
+    def test_same_game_added_on_both_is_offered_to_join(self):
+        import library as L
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "app"
+            cloud, C = self._lib(tmp)
+            L.start_solo_library(str(cloud), app_dir)
+            S = Library(L.solo_dir(app_dir))
+            mine = S.add_game("Sakura no Toki", "PC", exe=r"C:\vn\sakura.exe")
+            S.add_game("Some Other", "PC", exe=r"C:\x\BGI.exe")                  # (a name many games share: no)
+            theirs = C.add_game("サクラノ刻", "Laptop", exe=r"D:\vn\sakura.exe")
+            C.add_game("Unrelated", "Laptop", exe=r"D:\y\BGI.exe")
+            pairs = L.solo_joins(str(cloud), "PC", app_dir)
+            self.assertEqual([(m.game_id, t.game_id) for m, t in pairs], [(mine.game_id, theirs.game_id)])
+            L.merge_solo(str(cloud), "PC", {mine.game_id: theirs.game_id}, app_dir)
+            joined = C.get(theirs.game_id)
+            self.assertEqual(joined.paths_for("PC").exe, r"C:\vn\sakura.exe")
+            self.assertEqual(joined.paths_for("Laptop").exe, r"D:\vn\sakura.exe")
+            self.assertIsNone(C.get(mine.game_id))                              # one game, not two
+
+    def test_backups_keep_the_last_five(self):
+        import library as L
+        with tempfile.TemporaryDirectory() as tmp:
+            app_dir = Path(tmp) / "app"
+            cloud, C = self._lib(tmp)
+            C.add_game("Alpha", "PC", exe=r"C:\a\a.exe")
+            L.start_solo_library(str(cloud), app_dir)
+            for _ in range(7):
+                L.backup_solo_library(app_dir)
+            kept = [d for d in (app_dir / "solo backups").iterdir() if d.is_dir()]
+            self.assertEqual(len(kept), 5)
+            self.assertTrue(all((d / "games").is_dir() for d in kept))
+
+    def test_window_on_my_device(self):
+        """No sync engine, no lights, only this computer's games and time; a session never asks where a game saves
+        (nothing syncs - and choosing a folder there crashed: no engine); the time line has no stray leading gap."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            import launcher
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            here = lib.add_game("Alpha", "PC", exe=sys.executable)              # set up here, no save folder
+            lib.record_session(here.game_id, "Laptop", 3600)                     # (time on the other device too)
+            lib.record_session(here.game_id, "PC", 120)
+            lib.add_game("Elsewhere", "Laptop", exe=r"D:\e\e.exe")              # not set up on this computer
+            w = app.MainWindow(LocalSettings("PC", str(cloud), solo=True))
+            try:
+                w.resize(1200, 800)
+                w.show()
+                w.refresh()
+                self.assertIsNone(w.engine)
+                self.assertEqual(set(w.games), {here.game_id})                    # only this computer's games
+                self.assertEqual(w.games[here.game_id].total_playtime, 120)       # only this computer's time
+                self.assertEqual(app.LIGHTS_ALPHA[0], 0.0)                         # no sync lights
+                self.assertEqual(w.sync_states[here.game_id], "synced")
+
+                class Done:
+                    without = ()
+
+                    def wait(self):
+                        return True
+                w.worker, w.playing_id = Done(), here.game_id
+                with mock.patch.object(app, "DetectDialog", side_effect=AssertionError("asked where it saves")):
+                    w._play_finished(launcher.PlayResult(True, "", 754.0))
+                self.assertEqual(w.statusBar().currentMessage(), "Read for 12m.")  # (no leading gap)
+                w.restore_selected()                                              # (no engine: nothing happens)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_unknown_date_on_my_device(self):
+        """Read here before dates were kept per device, and on the other device too: this computer's date isn't
+        known -> "Unknown" (owner, 2026-10-18), sorted after dated games."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            g = lib.add_game("Alpha", "PC", exe=sys.executable)
+            raw = json.loads(lib._file(g.game_id).read_text("utf-8"))
+            raw.update(playtime={"PC": 60, "Laptop": 60}, last_played=time.time(), last_played_by={})
+            lib._file(g.game_id).write_text(json.dumps(raw), "utf-8")
+            w = app.MainWindow(LocalSettings("PC", str(cloud), solo=True))
+            try:
+                w.refresh()
+                self.assertEqual(w.games[g.game_id].last_played, -1.0)
+                self.assertEqual(app.day_text(-1.0), "Unknown")
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_guide_says_only_what_applies(self):
+        import guide
+        dots = {k: "#000" for k in ("green", "amber", "blue", "red", "grey", "lavender", "yellow")}
+        for lang in ("en", "ja"):
+            dual = guide.guide_html(lang, {"text": "#fff"}, dots, solo=False)
+            solo = guide.guide_html(lang, {"text": "#fff"}, dots, solo=True)
+            for page in (dual, solo):
+                self.assertNotIn("§", page)
+                self.assertNotIn("¤", page)
+            self.assertIn("Sync Lights" if lang == "en" else "同期ランプ", dual)
+            self.assertNotIn("Sync Lights" if lang == "en" else "同期ランプ", solo)
+
+
+class AuditFixes(unittest.TestCase):
+    """The 1.1.0 audit (2026-10-18): each test pins a bug found there."""
+
+    def test_quick_process_lookup_survives_the_playtime_clock(self):
+        # the playtime clock set kernel32's argument types for the whole program; the quick lookup then failed after
+        # the first launch of every session (silently using slow psutil: the 10-17 hitches came back)
+        import launcher
+        if not IS_WINDOWS:
+            self.skipTest("Windows only")
+        before = launcher._details_win(os.getpid())
+        launcher._ExactClock(time.time())
+        after = launcher._details_win(os.getpid())
+        self.assertIsNotNone(after)
+        self.assertEqual(before, after)
+
+    def test_a_check_that_fails_is_not_called_not_set_up(self):
+        # a save folder that can't be read just now (file in use, Drive busy) said "Not Set Up on This Device Yet"
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Library(Path(tmp) / "cloud")
+            g = lib.add_game("Alpha", "PC", exe=sys.executable, save_dir=str(Path(tmp) / "saves"))
+            engine = SyncEngine(Path(tmp) / "cloud", Path(tmp) / "state")
+            c = app.StatusChecker(engine, [g], "PC", set())
+            got = {}
+            c.done.connect(lambda states, up, down: got.update(states))
+            with mock.patch.object(engine, "status", side_effect=PermissionError("in use")):
+                c.run()
+            self.assertEqual(got[g.game_id], "failed")
+            self.assertEqual(app.STATE_LOOK["failed"][2], "sync.state.failed")
+
+    def test_luna_check_uses_the_quick_program_list(self):
+        from unittest import mock
+        import psutil
+        with mock.patch.object(psutil, "process_iter", side_effect=AssertionError("slow psutil scan")):
+            self.assertFalse(luna.running(r"C:\nowhere\LunaTranslator.exe"))
+
+    def test_one_game_is_singular_on_discord(self):
+        import i18n
+        i18n.set_language("en")
+        self.assertEqual(i18n.tr("presence.games_one"), "1 Game in Library")
