@@ -132,14 +132,14 @@ class RestoreAndStartupUpload(Base):
         # the restore itself was backed up, so it can be undone
         self.assertIn("local-before-restore", [b.reason for b in self.pc.list_backups(GAME)])
 
-    def test_push_if_safe_uploads_saves_made_outside_the_launcher(self):
+    def test_upload_only_sync_uploads_saves_made_outside_the_launcher(self):
         write(self.pc_saves, "s.dat", "v1")
         self.pc.before_launch(GAME, self.pc_saves)
         write(self.pc_saves, "s.dat", "v2")                                # played without the launcher
-        self.assertTrue(self.pc.push_if_safe(GAME, self.pc_saves))
+        self.assertEqual(self.pc.sync_if_safe(GAME, self.pc_saves, allow_pull=False), Action.PUSHED)
         self.assertEqual(read_all(self.pc.cloud_dir(GAME)), {"s.dat": "v2"})
 
-    def test_push_if_safe_never_overwrites_when_both_changed(self):
+    def test_upload_only_sync_never_overwrites_when_both_changed(self):
         write(self.pc_saves, "s.dat", "v1")
         self.pc.before_launch(GAME, self.pc_saves)
         write(self.laptop_saves, "s.dat", "x")
@@ -147,7 +147,7 @@ class RestoreAndStartupUpload(Base):
         write(self.laptop_saves, "s.dat", "laptop progress")
         self.laptop.after_exit(GAME, self.laptop_saves)
         write(self.pc_saves, "s.dat", "pc progress")
-        self.assertFalse(self.pc.push_if_safe(GAME, self.pc_saves))
+        self.assertEqual(self.pc.sync_if_safe(GAME, self.pc_saves, allow_pull=False), Action.CONFLICT)
         self.assertEqual(read_all(self.pc.cloud_dir(GAME)), {"s.dat": "laptop progress"})
 
 
@@ -530,7 +530,7 @@ class Hardening(unittest.TestCase):
 
     @unittest.skipUnless(IS_WINDOWS, "uses the Windows fake-game runtime")
     def test_launcher_that_starts_the_game_from_a_sibling_folder(self):
-        from launcher import run_game
+        from test_launcher import run_game
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "VN"
             real = FakeGameFolder(root / "game")
@@ -1772,7 +1772,6 @@ class Updates(unittest.TestCase):
             self.assertFalse((out / "dl2.zip").exists())                              # nothing damaged left behind
             new = updater.stage(out / "dl.zip", out)
             self.assertEqual((new / "Ikemen Reader.exe").read_text(), "new exe")
-            self.assertEqual(updater.staged(out), new)
 
     def test_unsafe_zip_refused(self):
         import zipfile
@@ -2051,7 +2050,7 @@ class SortingAndCustomOrder(unittest.TestCase):
                 shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
                 f = app.FOLDER_PREFIX + fid
                 for t, h in (("A", 1), ("B", 50), ("C", 2), ("D", 3), ("F1", 10)):
-                    lib.add_playtime(ids[t], "PC", h * 3600.0)
+                    lib.record_session(ids[t], "PC", h * 3600.0)
                 w.refresh()
                 w.choose_sort("hours")                                              # B 50, F1 10, D 3, C 2, A 1
                 self.assertEqual(shown(), [ids["B"], f, ids["D"], ids["C"], ids["A"]])
@@ -2545,8 +2544,8 @@ class Statistics(unittest.TestCase):
             cloud.mkdir()
             lib = Library(cloud)
             g = lib.add_game("Read", "PC", exe=r"C:\r\r.exe")
-            lib.add_playtime(g.game_id, "PC", 3600)
-            lib.add_playtime(g.game_id, "Laptop", 1800)
+            lib.record_session(g.game_id, "PC", 3600)
+            lib.record_session(g.game_id, "Laptop", 1800)
             lib.update(g.game_id, last_played=time.time() - 3 * 86400)
             w = app.MainWindow(LocalSettings("PC", str(cloud)))
             w.quiet = lambda gid: False

@@ -642,14 +642,6 @@ def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll:
     return RunInfo(exact if exact is not None else active, title)   # (the estimate only where Windows can't say)
 
 
-def run_game(exe: str, wrapper: str = "", poll: float = 1.0, grace: float = 2.0) -> float:
-    """Start the game (optionally through a wrapper like LEProc.exe) and wait for it.
-    Returns the number of seconds it was running."""
-    exe_path = Path(exe).resolve()
-    cmd = [wrapper, str(exe_path)] if wrapper else [str(exe_path)]
-    return run(cmd, exe_path.parent, poll=poll, grace=grace).seconds
-
-
 @dataclass
 class PlayResult:
     launched: bool

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -186,10 +185,6 @@ def close(luna_exe: str, wait_s: float = 6.0) -> bool:
             return True
         time.sleep(0.2)
     return False
-
-
-def launch_game(luna_exe: str, uid: str) -> subprocess.Popen:
-    return outside.popen([luna_exe, "--Exec", uid], cwd=os.path.dirname(luna_exe))
 
 
 def open_alongside(luna_exe: str) -> None:

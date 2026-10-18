@@ -167,10 +167,6 @@ def _newest(files: dict[str, Path]) -> Optional[float]:
     return max((p.stat().st_mtime for p in files.values()), default=None)
 
 
-def newest_mtime(folder: Path) -> Optional[float]:
-    return _newest(_files(folder))
-
-
 def _writable(p: Path) -> None:
     """Clear a read-only flag so the file can be replaced or removed."""
     try:
@@ -234,10 +230,6 @@ def _mirror_map(src: dict[str, Path], dst: Path, dst_files: dict[str, Path]) -> 
             except OSError:
                 break
             d = d.parent
-
-
-def _mirror(src: Path, dst: Path) -> None:
-    _mirror_map(_files(src), dst, _files(dst))
 
 
 class UnsafeSaveFolder(ValueError):
@@ -520,18 +512,6 @@ class SyncEngine:
                    on_conflict: Optional[ConflictResolver] = None, registry_key: str = "") -> SyncResult:
         with self._lock(game_id):
             return self._sync(game_id, local_dir, registry_key, on_conflict, allow_pull=False)
-
-    def push_if_safe(self, game_id: str, local_dir: str | Path, registry_key: str = "") -> bool:
-        """Upload only when this machine has newer saves and the cloud hasn't changed (used at startup
-        to catch saves made outside the launcher). Never pulls, never asks. True if it uploaded."""
-        local_dir = _check_local_dir(local_dir, self.cloud_root)
-        with self._lock(game_id):
-            local = self._local_files(game_id, local_dir, registry_key)
-            cloud = self._cloud_files(game_id)
-            if self.decide(_fingerprint_map(local), _fingerprint_map(cloud), self._load_base(game_id)) is Action.PUSHED:
-                self._push(game_id, local_dir, registry_key, local)
-                return True
-            return False
 
     def sync_if_safe(self, game_id: str, local_dir: str | Path, registry_key: str = "",
                      allow_pull: bool = True) -> Action:

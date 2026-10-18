@@ -122,7 +122,6 @@ THEME_MORE = [
     ("lights", [f"light_{k}" for k in BASE_LIGHTS]),
     ("bookmarks", [f"mark_{k}" for k in BASE_MARKS]),
 ]
-THEME_GROUPS = THEME_MAIN + THEME_MORE
 
 
 def theme_colors(theme: str, custom: Optional[dict] = None) -> dict:
@@ -756,7 +755,6 @@ def sheet_on(root: Optional[QWidget]) -> None:
 # -- sizes & timing
 COVER_W, COVER_H = 176, 248          # roughly the shape of a VN package
 CARD_PAD_X, CARD_PAD_TOP, CARD_PAD_BOTTOM = 12, 12, 18
-CARD_W, CARD_H = COVER_W + 2 * CARD_PAD_X, COVER_H + CARD_PAD_TOP + CARD_PAD_BOTTOM
 GRID_SPACING = 6
 GRID_GAP = 2 * CARD_PAD_X + GRID_SPACING     # the space between two covers, and at the left/right edges
 ROW_GAP = CARD_PAD_BOTTOM + GRID_SPACING + CARD_PAD_TOP   # the space between two rows of covers
@@ -3044,11 +3042,6 @@ class CardDelegate(QStyledItemDelegate):
         p.setOpacity(amount)
         backdrop.paint_into(p, rect.intersected(vp.rect()), origin)
         p.restore()
-
-    @staticmethod
-    def _wrap(text: str, fm: QFontMetrics, width: float, max_lines: int) -> list[str]:
-        """Wrap to max_lines, ellipsis on overflow. See wrap_title."""
-        return wrap_title(text, fm, width, max_lines)
 
     def _paint_light(self, p: QPainter, c: QPointF, state: str, gid: str = "") -> None:
         """A game's light. When its look changes - colour (blue while syncing -> green when done) or pulse
@@ -5909,11 +5902,6 @@ class TaskOwner:
         self._tasks.append(t)
         t.start()
 
-    def _wait_tasks(self, seconds: float = 3.0):
-        end = time.monotonic() + seconds
-        for t in list(getattr(self, "_tasks", [])):
-            t.wait(max(0, int((end - time.monotonic()) * 1000)))
-
 
 class CoverPickerDialog(TaskOwner, QDialog):
     """All of a VN's covers on VNDB as thumbnails; pick one."""
@@ -5996,6 +5984,7 @@ class VndbDialog(TaskOwner, QDialog):
         self.cover_file: Optional[str] = None
         self.use_title = False
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 18)        # (as every other window)
         row = QHBoxLayout()
         self.q = QLineEdit(query)
         self.q.returnPressed.connect(self.search)
@@ -6023,6 +6012,7 @@ class VndbDialog(TaskOwner, QDialog):
         self.list.currentItemChanged.connect(self._prefetch)
         lay.addWidget(self.list, 1)
         row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
         row.addStretch()
         cancel = QPushButton(tr("game.cancel"))
         cancel.clicked.connect(self.reject)
@@ -7617,8 +7607,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.covers.forget_files()
 
     def refresh(self) -> None:
-        """Re-read the library from the cloud folder, then rebuild the grid."""
-        self._apply_library(self._load_library())
+        """Re-read the library from the cloud folder, then rebuild the grid. The library's fingerprint (every save
+        file's size and time, for the live check) is read in the background: on Google Drive walking the saves took
+        the window a moment after every rename, edit, removal..."""
+        self._apply_library(self._load_library(signature=False))
+        self._own_change()
 
     def refresh_soon(self, keep_files: bool = False) -> None:
         """refresh(), with the reading done in the background: right after a session Google Drive is busy with the
@@ -7633,8 +7626,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
         self._run(lambda: self._load_library(library), done, lambda _e: self.refresh())
 
-    def _load_library(self, library: Optional[Library] = None) -> dict:
-        """Everything refresh needs from the cloud folder (only reading: safe in the background)."""
+    def _load_library(self, library: Optional[Library] = None, signature: bool = True) -> dict:
+        """Everything refresh needs from the cloud folder (only reading: safe in the background). signature=False:
+        the live check's fingerprint is left out (refresh() reads it in the background instead)."""
         library = library or self.library
         out = {"cloud": Path(library.root).is_dir()}
         here = self.settings.machine_name                  # (games removed from this device only: not shown here)
@@ -7656,7 +7650,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         except OSError:
             out["meta"] = out["order"] = None
         try:
-            out["sig"] = library.change_signature()
+            out["sig"] = library.change_signature() if signature else None
         except OSError:
             out["sig"] = None
         return out
@@ -7688,7 +7682,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.details.setVisible(bool(games))
         self._update_anim()
         self._check_sync()
-        self._live_sig = data["sig"]
+        if data["sig"] is not None:
+            self._live_sig = data["sig"]
         self._fetch_names()
         self._fill_save_folders()
 
@@ -7789,7 +7784,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     or QApplication.activeModalWidget() is not None:
                 return                              # mid-drag / a game running / a menu or window open: next time
             self._conflicts_snoozed = set()         # something new from the other device: ask again
-            self.refresh()
+            self.refresh_soon()                     # (read in the background: nothing here is waiting for it)
             self.statusBar().showMessage(tr("status.live_update"), 6000)
 
         def failed(_e) -> None:
@@ -7930,7 +7925,6 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         else:                                            # folders mixed in / first / last, by the same sort
             top = self._auto_order(top, sort, self.settings.folder_place)
         self._top_entries = top
-        self._top_ids = [self._entry_id(e) for e in top]   # the main page as arranged now
         if self.current_folder:
             entries = [("game", g) for g in self.folder_games[self.current_folder] if keep(g)]
         elif flat:

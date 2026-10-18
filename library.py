@@ -418,15 +418,6 @@ class Game:
         return Game(**rest)
 
 
-def format_playtime(seconds: int) -> str:
-    if 0 < seconds < 60:
-        return f"{int(seconds)}s"
-    h, rem = divmod(int(seconds), 3600)
-    if h == 0:
-        return f"{rem // 60}m"
-    return f"{h}h {rem // 60:02d}m"
-
-
 class Library:
     def __init__(self, cloud_root: str | Path):
         self.root = Path(cloud_root)
@@ -794,9 +785,6 @@ class Library:
         game.last_played_by[machine] = game.last_played
         self.save(game)
         return game
-
-    def add_playtime(self, game_id: str, machine: str, seconds: float) -> Game:
-        return self.record_session(game_id, machine, seconds)
 
     def change_signature(self) -> tuple:
         """A cheap fingerprint of everything shared in the cloud folder that the window shows: the game files,

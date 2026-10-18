@@ -285,7 +285,7 @@ class Attacks(unittest.TestCase):
         for bad in ("", "  ", ".", "relative/path", str(Path.home()), str(self.cloud), str(self.cloud.parent),
                     str(self.cloud / "saves" / "x"), Path.home().anchor):
             for call in (lambda: self.pc.before_launch(GAME, bad), lambda: self.pc.after_exit(GAME, bad),
-                         lambda: self.pc.status(GAME, bad), lambda: self.pc.push_if_safe(GAME, bad)):
+                         lambda: self.pc.status(GAME, bad), lambda: self.pc.sync_if_safe(GAME, bad, allow_pull=False)):
                 with self.assertRaises(UnsafeSaveFolder, msg=repr(bad)):
                     call()
 
@@ -330,7 +330,7 @@ class Attacks(unittest.TestCase):
             finally:
                 inside[0] -= 1
         self.pc._push = watched
-        threads = [threading.Thread(target=lambda: self.pc.push_if_safe(GAME, self.pc_saves)),
+        threads = [threading.Thread(target=lambda: self.pc.sync_if_safe(GAME, self.pc_saves, allow_pull=False)),
                    threading.Thread(target=lambda: self.pc.before_launch(GAME, self.pc_saves)),
                    threading.Thread(target=lambda: self.pc.after_exit(GAME, self.pc_saves))]
         for t in threads:

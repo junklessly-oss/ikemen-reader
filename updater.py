@@ -181,13 +181,6 @@ def stage(zip_path: Path, folder: Path) -> Path:
     return min(hits, key=lambda p: len(p.parts))          # the top one (Ikemen Reader\\Ikemen Reader.exe)
 
 
-def staged(folder: Path) -> Optional[Path]:
-    """A release already unpacked and waiting to be installed (folder\\new\\...\\Ikemen Reader.exe)."""
-    new = folder / "new"
-    hits = list(new.rglob(EXE)) if new.is_dir() else []
-    return min((p.parent for p in hits), key=lambda p: len(p.parts)) if hits else None
-
-
 def _ps(text: str) -> str:
     return "'" + str(text).replace("'", "''") + "'"
 

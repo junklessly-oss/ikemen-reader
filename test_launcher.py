@@ -11,7 +11,14 @@ from unittest import mock
 
 import launcher
 import outside
-from launcher import play, run, run_game
+from launcher import play, run
+
+
+def run_game(exe: str, wrapper: str = "", poll: float = 1.0, grace: float = 2.0) -> float:
+    """Start a fake game (through its runtime, like LEProc.exe would) and wait for it: seconds it ran."""
+    exe_path = Path(exe).resolve()
+    cmd = [wrapper, str(exe_path)] if wrapper else [str(exe_path)]
+    return run(cmd, exe_path.parent, poll=poll, grace=grace).seconds
 from library import Library, LocalSettings, MachinePaths, load_local_settings
 from sync_engine import SyncEngine
 
@@ -60,9 +67,9 @@ class LibraryTests(unittest.TestCase):
 
     def test_playtime_adds_up_across_machines(self):
         g = self.lib.add_game("Fake VN", "PC")
-        self.lib.add_playtime(g.game_id, "PC", 3600)
-        self.lib.add_playtime(g.game_id, "Laptop", 1800)
-        self.lib.add_playtime(g.game_id, "PC", 60)
+        self.lib.record_session(g.game_id, "PC", 3600)
+        self.lib.record_session(g.game_id, "Laptop", 1800)
+        self.lib.record_session(g.game_id, "PC", 60)
         self.assertEqual(self.lib.get(g.game_id).total_playtime, 5460)
 
     def test_artwork_is_copied_into_the_cloud_folder(self):
@@ -429,7 +436,7 @@ class EditAndCompatibilityTests(unittest.TestCase):
 
     def test_rename_keeps_id_playtime_and_other_machine_paths(self):
         g = self.lib.add_game("サクラノ刻", "PC", exe=r"D:\a.exe", save_dir=r"D:\s")
-        self.lib.add_playtime(g.game_id, "PC", 100)
+        self.lib.record_session(g.game_id, "PC", 100)
         self.lib.edit(g.game_id, "Sakura no Toki", {"Laptop": MachinePaths(r"C:\b.exe", r"C:\s")})
         g2 = self.lib.get(g.game_id)
         self.assertEqual(g2.title, "Sakura no Toki")

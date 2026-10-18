@@ -255,10 +255,6 @@ def certain_from_other_device(game_dir: str, other_exe: str, other_save: str,
     return None
 
 
-def _name_tokens(names: Iterable[str]) -> set[str]:
-    return {t for t in _tokens(*names) if t not in _GENERIC and (len(t) >= 4 or not t.isascii())}
-
-
 # words a save folder's name may add to the game's name ("SaDisticBlooD_savefiles", "Game Saves", "Game2 data")
 _SAVE_AFFIX = re.compile(r"(?:savedata|savefiles?|savegames?|saves|save|userdata|data|"
                          r"セーブデータ|セーブ|データ|\d+|ver|v)*")
@@ -315,24 +311,6 @@ def _looks_like_saves(folder: Path, limit: int = 2000) -> bool:
                         stack.append(Path(e.path))
                     elif e.is_file(follow_symlinks=False) and Path(e.name).suffix.lower() not in _NOT_SAVES:
                         return True
-        except OSError:
-            continue
-    return False
-
-
-def _has_files(folder: Path, limit: int = 2000) -> bool:
-    stack, seen = [folder], 0
-    while stack:
-        try:
-            with os.scandir(stack.pop()) as it:
-                for e in it:
-                    seen += 1
-                    if seen > limit:
-                        return False
-                    if e.is_file(follow_symlinks=False):
-                        return True
-                    if e.is_dir(follow_symlinks=False):
-                        stack.append(Path(e.path))
         except OSError:
             continue
     return False

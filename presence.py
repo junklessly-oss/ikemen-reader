@@ -79,7 +79,14 @@ class Presence:
     # -- the background thread
     def _run(self) -> None:
         import asyncio
-        asyncio.set_event_loop(asyncio.new_event_loop())   # (pypresence needs a loop of its own on this thread)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)                       # (pypresence needs a loop of its own on this thread)
+        try:
+            self._loop_until_stopped()
+        finally:
+            loop.close()
+
+    def _loop_until_stopped(self) -> None:
         while True:
             try:
                 self._wake.get(timeout=RETRY_S)

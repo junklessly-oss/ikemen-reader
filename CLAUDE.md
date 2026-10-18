@@ -22,7 +22,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   *really* exited → sync up → playtime + last played; window title → cleaned title (unless user-locked).
 - No save folder yet on this device → play without sync, then detect the save location (files/registry
   changed during the session), the owner confirms, then first sync.
-- On app start: games with "this device has newer saves" are uploaded if safe (`push_if_safe`).
+- On app start: games with "this device has newer saves" are synced if safe (`sync_if_safe`: upload when only this side changed, download when only the cloud did).
 
 ## Files
 - `app.py` — PySide6 UI (`py app.py`). Palette + sizes/timings at the top. Play runs on a QThread;
