@@ -821,7 +821,7 @@ FOLDER_PREFIX = "folder:"
 MIME_GAME = "application/x-ikemen-game"  # a game being dragged inside the grid
 FOLDER_PAD, FOLDER_GAP = 10, 8           # mosaic inside a folder tile
 # when a folder holds games in different states, its light shows the most important one
-STATE_PRIORITY = ["conflict", "syncing", "starting", "playing", "push", "pull", "checking", "detect", "unset", "empty",
+STATE_PRIORITY = ["conflict", "syncing", "starting", "playing", "push", "pull", "checking", "failed", "detect", "unset", "empty",
                   "solo", "synced"]
 
 
@@ -839,6 +839,7 @@ STATE_LOOK = {
     "unset":    ("yellow", "steady", "sync.state.unset"),    # the only one of these that needs you to do something
     "detect":   ("grey", "calm", "sync.state.detect"),
     "checking": ("grey", "busy", "sync.state.checking"),
+    "failed":   ("grey", "calm", "sync.state.failed"),       # couldn't be read just now (a file in use, Drive busy)
     "playing":  ("blue", "calm", "sync.state.playing"),
     "starting": ("blue", "busy", "sync.state.starting"),
     "syncing":  ("blue", "busy", "sync.state.checking"),
@@ -1197,7 +1198,7 @@ class StatusChecker(QThread):
                         s = sync_state(self.engine, g, self.machine)
                 states[g.game_id] = s
             except (OSError, ValueError):
-                states[g.game_id] = "unset"
+                states[g.game_id] = "failed"        # (it IS set up: "Not Set Up Yet" was the wrong answer)
         self.done.emit(states, uploaded, downloaded)
 
 
@@ -1515,7 +1516,8 @@ def wrap_title(text: str, fm: QFontMetrics, width: float, max_lines: int) -> lis
         piece = pieces[i]
         if cur and fm.horizontalAdvance("".join(cur) + piece) > width:
             carry: list[str] = []
-            if not piece.isspace() and len(cur) > 1 and not cur[-1].isspace() and                     (piece[0] in _NO_START or cur[-1][-1] in _NO_END):
+            if not piece.isspace() and len(cur) > 1 and not cur[-1].isspace() and \
+                    (piece[0] in _NO_START or cur[-1][-1] in _NO_END):
                 carry = [cur.pop()]                  # keep the pair together on the next line
             lines.append("".join(cur).rstrip())
             cur = carry
@@ -2323,7 +2325,8 @@ class ClickAway(QObject):
 
     def eventFilter(self, obj, ev) -> bool:
         # (widgets only: a press also passes through the window itself first, which isn't "elsewhere")
-        if ev.type() == QEvent.MouseButtonPress and isinstance(obj, QWidget)                 and obj is not self.widget and not self.widget.isAncestorOf(obj):
+        if ev.type() == QEvent.MouseButtonPress and isinstance(obj, QWidget) \
+                and obj is not self.widget and not self.widget.isAncestorOf(obj):
             self.done()
         return False
 
@@ -3584,7 +3587,7 @@ class ThemedCombo(QComboBox):
         p = QStylePainter(self)                    # (as QComboBox draws itself, with no text)
         opt = QStyleOptionComboBox()
         self.initStyleOption(opt)
-        text, icon = opt.currentText, opt.currentIcon
+        text = opt.currentText
         opt.currentText, opt.currentIcon = "", QIcon()
         p.drawComplexControl(QStyle.CC_ComboBox, opt)
         if words is None:
@@ -7266,7 +7269,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         elif ui_families() != fonts_before or getattr(self, "_styled_fonts", None) != ui_families():
             restyle_all()                       # a different font (or language, which changes the order)
         self._styled_fonts = ui_families()
-        if before is not None and before.machine_name == settings.machine_name and before.solo == settings.solo                 and os.path.normcase(before.cloud_root) == os.path.normcase(settings.cloud_root)                 and getattr(self, "library", None) is not None:
+        if before is not None and before.machine_name == settings.machine_name and before.solo == settings.solo \
+                and os.path.normcase(before.cloud_root) == os.path.normcase(settings.cloud_root) \
+                and getattr(self, "library", None) is not None:
             # the same cloud folder and device: nothing to set up again, and the library is re-read in the background
             # (on the window's own thread, Google Drive kept Settings' Save waiting - owner, 2026-10-18)
             self.retranslate()
@@ -7907,7 +7912,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return matches_search(g, q) and (status == "all" or g.status == status)
 
         def keep_folder(fid: str) -> bool:              # searching: a folder whose name matches shows as itself
-            return bool(q) and matches_names((self.folder_name(fid),), q) and                 (status == "all" or any(g.status == status for g in self.folder_games[fid]))
+            return bool(q) and matches_names((self.folder_name(fid),), q) and \
+                    (status == "all" or any(g.status == status for g in self.folder_games[fid]))
 
         top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
         top += [("folder", fid) for fid in self.folder_games]
@@ -9456,11 +9462,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         return 1.0 if (self._sb_hover or time.monotonic() < self._sb_until) else 0.0
 
     def _lights_moving(self) -> bool:
+        """The lights breathe: pulsing is on, or was just switched off and they're finishing their last breath."""
         if self._mode_anim is not None:
             return True                        # (fading in / out: Dual <-> My Device)
         if self.settings.solo:
             return False                       # (no lights on a solo device)
-        """The lights breathe: pulsing is on, or was just switched off and they're finishing their last breath."""
         if self.settings.pulse:
             return True
         if PULSE_OFF_AT[0] is None:
@@ -9548,7 +9554,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         mark = 1.0 if self.settings.show_bookmarks else 0.0
         if self.bookmark_alpha != mark:
             d = step * HOVER_MS / 180                     # ~0.18 s
-            self.bookmark_alpha = min(mark, self.bookmark_alpha + d) if mark > self.bookmark_alpha                 else max(mark, self.bookmark_alpha - d)
+            self.bookmark_alpha = min(mark, self.bookmark_alpha + d) if mark > self.bookmark_alpha \
+                    else max(mark, self.bookmark_alpha - d)
             self.grid.viewport().update()
             changed = True
         target = self._sb_target()
@@ -9559,12 +9566,12 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             changed = True
         # redraw only what actually moves: a lifting tile (with its shadow) and the small squares
         # around the breathing lights - never the whole grid, which would cost far more with many games
-        from PySide6.QtGui import QRegion
         region = QRegion()
         view = self.grid.viewport().rect()
         lights = []                                       # (centre, id) of the lights redrawn on their own
         breathing = self._lights_moving()                 # (pulsing, or settling after being switched off)
-        lights_only = not moving and self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0)             and self._ghost is None and self._landing is None and not self.rumble
+        lights_only = not moving and self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0) \
+                and self._ghost is None and self._landing is None and not self.rumble
         for i in self.grid.visible_range():
             it = self.grid.item(i)
             r = self.grid.visualItemRect(it)
@@ -9782,7 +9789,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def restore_selected(self) -> None:
         g = self.selected()
-        if g is None:
+        if g is None or self.engine is None:          # (My Device: no backups are made, nothing to restore)
             return
         mine = g.paths_for(self.settings.machine_name)
         if not mine.save_dir:
@@ -9928,7 +9935,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     def first_sync(self, g: Optional[Game]) -> bool:
         """This device has never synced the game (but the other device has it): a mismatch then isn't "both changed",
         this device already had files of its own (often made by the game when installed or first opened)."""
-        return g is not None and self.engine is not None and not self.only_here(g)             and not self.engine.has_synced(g.game_id)
+        return g is not None and self.engine is not None and not self.only_here(g) \
+                and not self.engine.has_synced(g.game_id)
 
     def solo_key(self, key: str, g: Optional[Game]) -> str:
         """The true wording for a save mismatch: "<key>_solo" for a game set up only on this device (the cloud copy
@@ -9987,8 +9995,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.refresh_soon(keep_files=True)          # (in the background: Google Drive is busy with the new save)
         self.raise_()
         self.activateWindow()
-        if game and not game.paths_for(self.settings.machine_name).save_dir:
-            self._confirm_detection(game, r)
+        if game and self.engine is not None and not game.paths_for(self.settings.machine_name).save_dir:
+            self._confirm_detection(game, r)        # (My Device: nothing syncs, so no save folder is needed)
             self.refresh()
         if game and self.settings.vndb and not game.artwork and game.artwork_from != "removed" and r.window_title:
             self._auto_cover(game.game_id, r.new_title or game.title)
@@ -10355,6 +10363,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 e.ignore()
                 return
             self.presence.stop()                  # (Discord: no "Reading" left behind)
+            if self.settings.solo:
+                try:
+                    backup_solo_library(self.app_dir)     # (as on any close: a solo library lives on one disk only)
+                except OSError:
+                    pass
             os._exit(0)  # the game keeps running; nothing of ours is mid-write while we only watch it
         self.presence.stop()                      # Discord shows nothing once Ikemen Reader has closed
         if self.settings.solo:
@@ -10433,7 +10446,7 @@ def _install_frame_log() -> None:
         if w is None:
             return ""
         g = w.bar_game()
-        return (f"phase={w.play_phase} button={w.play_btn._shown!r} light="
+        return (f"phase={w.play_phase} button={w.play_btn.text()!r} light="
                 f"{w.light_state(g.game_id) if g else '-'} words={w.d_sync._shown[1]!r}")
 
     # the window's own animation frames (lights, covers): how late each one comes
