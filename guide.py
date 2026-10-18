@@ -67,6 +67,9 @@ GUIDE = {
             "- Select a game and press Read (or double-click it, or press Enter).",
             "- While the game runs, the Read button says Stop: press it to close the game, like its own X button "
             "(the game may still ask to confirm). If it doesn't close, you can choose to force it closed.",
+            "- If the game is already open outside Ikemen Reader, Read offers to wait for it to close or to force it "
+            "closed. If Luna is already open and not busy with a game, Close Luna closes it for you, and the game "
+            "starts through it.",
             "- You can browse other games while reading: selecting one shows its details at the bottom. Click an "
             "empty space (or the game you're reading) to bring back Now Reading and Stop.",
             "§- Before the game starts, any newer saves from the other device are downloaded. When the game "
@@ -105,7 +108,7 @@ GUIDE = {
             "Ikemen Reader, once you close it).",
             "- {red} Saves changed on both devices. You'll be asked which to keep.",
             "- {yellow} Not set up on this device yet: set its .exe in Edit.",
-            "- {grey} No saves yet, or still being checked.",
+            "- {grey} No saves yet, still being checked, or couldn't be checked just now (it's checked again in a minute).",
             "- {lavender} Saves are in sync, but the game isn't set up on the other device yet.",
             "A folder's light is split into equal slices, one for each colour among its games, with the most "
             "important first (starting at the top and going clockwise).",
@@ -162,17 +165,17 @@ GUIDE = {
             "device only (the other device keeps it), or from both. Its save files are never deleted.",
             "¤- You'll always be asked first. On My Device, a game only leaves this computer's library (a second computer that has it keeps it). Its save files are never deleted.",
             "- Changed your mind? Click Undo on the status line at the bottom, right after removing.",
-            "- To bring back a game you removed from this device, add it again: it comes back with its playtime, "
+            "§- To bring back a game you removed from this device, add it again: it comes back with its playtime, "
             "cover and save folder.",
         ]),
         ("Making It Yours", [
             "In Settings:",
             "- Language switches the whole program at once.",
             "- Font: pick a separate font for English and for Japanese, or add your own with Add Font.",
-            "§- Accessibility: pulsing sync lights, launching on startup, automatic updates, automatic covers and "
-            "titles from VNDB, and safe covers only.",
-            "¤- Accessibility: launching on startup, automatic updates, automatic covers and titles from VNDB, and safe "
-            "covers only.",
+            "§- Accessibility: pulsing sync lights, showing your activity on Discord, launching on startup, automatic "
+            "updates, automatic covers and titles from VNDB, and safe covers only.",
+            "¤- Accessibility: showing your activity on Discord, launching on startup, automatic updates, automatic covers "
+            "and titles from VNDB, and safe covers only.",
             "- Custom Library Background: choose a picture, set its opacity and zoom, and drag it into place.",
             "- Theme: Dark, Light, or Custom, where you choose every colour yourself.",
             "- Updates: when a new version of Ikemen Reader is out, you're asked whether to update when Ikemen "
@@ -232,6 +235,8 @@ GUIDE = {
             "- ゲームを選んで「読む」を押します（ダブルクリックやEnterキーでも起動できます）。",
             "- ゲームの実行中、「読む」ボタンは「終了」になります。押すと、ゲームの×ボタンと同じようにゲームを閉じます（ゲーム側で確認が表示される場合があります）。"
             "閉じない場合は、強制終了を選べます。",
+            "- ゲームがイケメンリーダーの外ですでに開いている場合は、「読む」を押すと、終了まで待つか強制終了するかを選べます。"
+            "Lunaがすでに開いていて、ゲームを扱っていないときは、「Lunaを閉じる」でLunaを閉じ、Luna経由でゲームを起動します。",
             "- 読んでいる間も、ほかのゲームを選ぶと下部にその情報が表示されます。空いている場所（または読んでいるゲーム）をクリックすると、「読書中」と「終了」ボタンに戻ります。",
             "§- 起動前に、もう一方の端末の新しいセーブがあればダウンロードします。ゲームを終了すると、セーブをアップロードして読書時間を記録します。",
             "§- セーブを同期するためにゲームを起動する必要はありません。イケメンリーダーを開いている間は、もう一方の端末の新しいセーブが届いてから数秒でダウンロードされ、"
@@ -239,9 +244,8 @@ GUIDE = {
             "§- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
             "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"
             "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。）",
-            "§- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。セーブフォルダーをご自身で設定し、クラウドのセーブと違っていた場合は、その場ですぐに尋ねます。",
-            "§- 1台の端末でしか設定していないゲームでも起こることがあります（例：セーブファイルを手動で移動・復元したとき）。その場合は、この端末のセーブと、以前この端末からクラウドにアップロードしたコピーとの比較になり、メッセージにもそう表示されます。"
-            "置き換えられる方は先にバックアップされます。",
+            "§- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。セーブフォルダーをご自身で設定し、クラウドのセーブと違っていた場合は、その場ですぐに尋ねます。置き換えられる方は先にバックアップされます。",
+            "§- 1台の端末でしか設定していないゲームでも起こることがあります（例：セーブファイルを手動で移動・復元したとき）。その場合は、この端末のセーブと、以前この端末からクラウドにアップロードしたコピーとの比較になり、メッセージにもそう表示されます。",
             "§- ゲームを右クリックして「今すぐ同期」を選ぶと、すぐに同期できます。",
             "§- ゲームを終了したときは、アップロードだけを行います。読んでいる間にもう一方の端末が新しいセーブをアップロードしていた場合は、どちらかを上書きせずに、どちらを残すか尋ねます。",
             "§- ゲームを右クリックして「以前のセーブを復元」を選ぶと、直近10件のバックアップから戻せます。",
@@ -256,7 +260,7 @@ GUIDE = {
             "- {blue} クラウドのセーブの方が新しいです。自動でダウンロードされます（イケメンリーダー以外から開いているゲームは、閉じたあと）。",
             "- {red} 両方の端末でセーブが変更されています。どちらを残すか尋ねます。",
             "- {yellow} この端末ではまだ設定されていません。「編集」で .exe を設定してください。",
-            "- {grey} セーブがまだない、または確認中です。",
+            "- {grey} セーブがまだない、確認中、または今は確認できなかった状態です（1分ほどで、もう一度確認します）。",
             "- {lavender} セーブは同期済みですが、もう一方の端末ではまだこのゲームが設定されていません。",
             "フォルダーのランプは、中のゲームのランプの色ごとに等分され、重要なものから順に（上から時計回りに）並びます。",
             "上部のバーにもまとめて表示されます：同期済み、同期中、または両方の端末でセーブが変更されたときは「エラー」（クリックするとそのゲームに移動します）。",
@@ -287,14 +291,14 @@ GUIDE = {
             "残ります）か、両方から削除するかを選べます。セーブファイルは削除されません。",
             "¤- 削除の前には必ず確認が表示されます。マイ端末では、このパソコンのライブラリからだけ削除されます（そのゲームがある2台目のパソコンには残ります）。セーブファイルは削除されません。",
             "- 削除を取り消したいときは、削除した直後に下部のステータス行の「元に戻す」をクリックしてください。",
-            "- この端末から削除したゲームは、もう一度追加すると、プレイ時間・カバー・セーブフォルダーと一緒に戻ります。",
+            "§- この端末から削除したゲームは、もう一度追加すると、プレイ時間・カバー・セーブフォルダーと一緒に戻ります。",
         ]),
         ("自分好みに", [
             "設定画面で：",
             "- 言語：プログラム全体がすぐに切り替わります。",
             "- フォント：英語と日本語で別々のフォントを選べます。「フォントを追加」で自分のフォントも使えます。",
-            "¤- アクセシビリティ：Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像とタイトルの自動取得、安全なカバーのみの表示を設定できます。",
-            "§- アクセシビリティ：同期ランプの点滅、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像とタイトルの自動取得、安全なカバーのみの表示を設定できます。",
+            "¤- アクセシビリティ：Discordへのアクティビティ表示、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像とタイトルの自動取得、安全なカバーのみの表示を設定できます。",
+            "§- アクセシビリティ：同期ランプの点滅、Discordへのアクティビティ表示、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像とタイトルの自動取得、安全なカバーのみの表示を設定できます。",
             "- ライブラリの背景をカスタマイズ：画像を選び、不透明度とズームを調整して、ドラッグで位置を合わせます。",
             "- テーマ：ダーク、ライト、またはすべての色を自分で選べるカスタムから選べます。",
             "- アップデート：イケメンリーダーの新しいバージョンが出ると、起動時にアップデートするか尋ねます。「アップデートを自動でインストール」をオンにすると、"

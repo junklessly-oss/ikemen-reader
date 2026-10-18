@@ -9984,7 +9984,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             # "session" as if all was well (owner, 2026-10-17)
             bar.show_with_bar(tr("status.closed_at_once"), 15000)
         else:
-            bar.show_with_bar(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)), 15000)
+            # (strip: with no sync message - My Device - the line began with the gap meant to follow it)
+            bar.show_with_bar(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)).strip(), 15000)
         if game and r.seconds > 0:
             self._count_up = (game.game_id, max(0.0, game.total_playtime - r.seconds), time.monotonic())
         if r.new_title:
@@ -10347,7 +10348,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         dark_logo = QColor(LOGO["logo_fill"]).lightness() < 128
         self.presence.show(look[0], look[1], start=self._presence_since,
                            image="logo_light" if dark_logo else "logo",
-                           image_text=tr("presence.games", n=len(self.games)))
+                           image_text=tr("presence.games_one") if len(self.games) == 1 else tr("presence.games", n=len(self.games)))
 
     def closeEvent(self, e) -> None:
         if (self.worker and self.play_phase == "syncing") or self.syncer is not None:
