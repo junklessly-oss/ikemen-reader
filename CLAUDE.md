@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 216 tests (2026-10-17), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 227 tests (2026-10-17), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -777,6 +777,28 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   play.already_running_luna "When you close it, Luna closes too, and the game starts here." - and after the game
   closes (or Force Close), Luna is checked again (idle), closed, and the game starts through it: one pop-up, not two.
   Verified with stand-ins (fake Luna folder + fake game loading a DLL from it: fakegame\IkemenFakeHookedNovel.exe).
+- DISCORD PRESENCE (owner, 2026-10-17; presence.py): Settings "Show Activity on Discord" right under Pulsing Sync
+  Lights (LocalSettings.discord, END field, per device, off at first). MainWindow._presence_look every 2 s: Reading...
+  + title (wins) / Away (5 min without using Ikemen Reader; foreground_pid + seconds_since_input; Anki the egg opened
+  counts as using it) / Tweaking... (PRESENCE_TWEAKING windows open) / Browsing.... Timer restarts when reading starts
+  / ends. Picture by the logo colours IN USE: a dark logo (Light theme, custom from Light) -> "logo_light", else
+  "logo" (custom from Dark included). Hover: N Games in Library. Two Discord applications because Discord shows the
+  APPLICATION'S NAME: CLIENT_IDS en "Ikemen Reader" 1561206702357872735, ja "イケメンリーダー" 1561208897988071475
+  (owner made both, same pictures); use_application() reconnects on a language change. Thread + retry ~60 s, clears
+  on close. Tests use a stand-in (rpc_class / a mocked presence) - never the owner's real Discord.
+- PULSE SWITCH LIVE (owner, 2026-10-17): ticking Pulsing Sync Lights applies at once (SettingsDialog -> set_pulse;
+  Cancel puts the original back). Switched off, each light finishes its breath and rests at the low point = the
+  still look (PULSE_OFF_AT + pulse_settled_at; _lights_moving keeps the clock running until then). Switched back ON
+  from rest (Cancel / ticked): the breathing starts again at the low point (PULSE_EPOCH reset by pulse_switched;
+  the shared clock had kept running, so the lights jumped in mid-breath); on again while still settling: they carry
+  on. Same when Ikemen Sync switches it (apply_settings). Test: PulseSwitch.
+- Discord "Coding..." / コーディング中… (owner, 2026-10-17, "cute"): when run from the project folder (not
+  updater.FROZEN) it replaces Browsing / Tweaking - that's the owner working on it. Reading and Away still win.
+- Stats line that MOVES (the sync words before it changed length: game -> folder, "Saves Are in Sync" -> "2 Games"):
+  BarFader fades it out and in as a whole (StatsLine.end_switch) - its own icon-steady switch drew under the sync
+  words' fade, which cut the calendar icon in half. In place: the icon-steady switch as before.
+- After a session the time no longer rolls up (owner, 2026-10-17: "more trouble than it's worth"): the numbers show
+  the new total, only the clock's hand sweeps (still after the bar has settled). StatsLine._roll / ROLL_GAP removed.
 - LIGHT THEME LOGO (owner, 2026-10-17): theme_colors("light") swaps logo_fill / logo_outline (dark fill, light
   outline) - so the top-bar logo, stars, trash, bookmark button and window icon are inverted on the light theme
   (before, every built-in theme used the original colours). discord_assets/logo.png + logo_light.png are the same

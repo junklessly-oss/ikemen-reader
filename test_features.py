@@ -1220,13 +1220,15 @@ class SaveFolderSuggestionsInTheWindow(unittest.TestCase):
             fake = mock.MagicMock()
             fake.return_value.start.side_effect = lambda: started.append(True)
             try:
+                # (kept off for the whole check: a later reload under a busy test run filled the folder in by itself
+                # before Read was pressed, so there was nothing left to ask)
                 with mock.patch.object(app, "certain_saves", return_value={}):
                     w.refresh()
                     app.wait_for_tasks(5)
-                with mock.patch.object(app, "message", return_value="use") as asked, \
-                        mock.patch.object(app, "PlayWorker", fake):
-                    w.play_selected(gid=g.game_id)
-                    self.assertTrue(self._wait(lambda: started))
+                    with mock.patch.object(app, "message", return_value="use") as asked, \
+                            mock.patch.object(app, "PlayWorker", fake):
+                        w.play_selected(gid=g.game_id)
+                        self.assertTrue(self._wait(lambda: started))
                 self.assertIn(want, asked.call_args[0][1])
                 self.assertEqual(lib.get(g.game_id).paths_for("PC").save_dir, want)
             finally:
@@ -3447,6 +3449,46 @@ class UndoRemove(unittest.TestCase):
                 app.wait_for_tasks(5)
 
 
+class PulseSwitch(unittest.TestCase):
+    """2026-10-17 (owner): Pulsing Sync Lights works as it's ticked (Save keeps it, Cancel puts it back); switched
+    off, the lights finish their breath and rest where a still light sits, then stop."""
+
+    def test_live_and_settling(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            s = LocalSettings("PC", str(cloud))
+            s.pulse = True
+            w = app.MainWindow(s)
+            try:
+                w.refresh()
+                d = app.SettingsDialog(w.settings, w)
+                d.pulse.setChecked(False)                                  # unticked: at once...
+                self.assertFalse(w.settings.pulse)
+                self.assertIsNotNone(app.PULSE_OFF_AT[0])
+                self.assertTrue(w._lights_moving())                         # ...still finishing its breath
+                d.reject()                                                  # Cancel: back on
+                self.assertTrue(w.settings.pulse)
+                self.assertIsNone(app.PULSE_OFF_AT[0])
+                w.set_pulse(False)
+                settled = app.pulse_settled_at() + 0.01
+                with mock.patch.object(app.time, "monotonic", return_value=settled):
+                    self.assertFalse(w._lights_moving())                    # settled: still from here on
+                self.assertIsNone(app.PULSE_OFF_AT[0])
+                with mock.patch.object(app.time, "monotonic", return_value=settled + 7.3):
+                    w.set_pulse(True)                                       # on again (Cancel / ticked)...
+                    self.assertEqual(app.pulse_phase(app.PULSE_CALM_S, settled + 7.3), 0.0)   # ...from rest
+            finally:
+                app.PULSE_OFF_AT[0] = None
+                w.close()
+                app.wait_for_tasks(5)
+
+
 class DiscordPresence(unittest.TestCase):
     """2026-10-17 (owner): Browsing / Reading <title> / Tweaking / Away (5 min), logo only (light theme: the light
     one), hover = games in library, elapsed timer restarting only when reading starts / ends; off until turned on;
@@ -3528,6 +3570,12 @@ class DiscordPresence(unittest.TestCase):
                 w.settings.discord = True
                 with mock.patch.object(app.outside, "foreground_pid", return_value=os.getpid()), \
                         mock.patch.object(app.outside, "seconds_since_input", return_value=0.5):
+                    self.assertEqual(w._presence_look(), ("Coding...", ""))   # run from source: the owner coding
+                patch_frozen = mock.patch.object(app.updater, "FROZEN", True)   # (the packaged app from here on)
+                patch_frozen.start()
+                self.addCleanup(patch_frozen.stop)
+                with mock.patch.object(app.outside, "foreground_pid", return_value=os.getpid()), \
+                        mock.patch.object(app.outside, "seconds_since_input", return_value=0.5):
                     self.assertEqual(w._presence_look(), ("Browsing...", ""))
                     d = app.NameDialog("x", "y", w)
                     d.show()
@@ -3544,10 +3592,19 @@ class DiscordPresence(unittest.TestCase):
                     self.assertEqual(w._presence_look()[0], "Reading...")    # reading wins, even "idle"
                     w.worker, w.playing_id, w.play_phase = None, None, "done"
                     self.assertEqual(w._presence_look(), ("Away", ""))
-                w.settings.theme = "light"
-                w._update_presence()
-                shown = w.presence.show.call_args.kwargs
-                self.assertEqual((shown["image"], shown["image_text"]), ("logo_light", "1 Games in Library"))
+                try:
+                    app.apply_theme("light")                              # the Light theme: the light picture
+                    w._update_presence()
+                    shown = w.presence.show.call_args.kwargs
+                    self.assertEqual((shown["image"], shown["image_text"]), ("logo_light", "1 Games in Library"))
+                    app.apply_theme("custom", app.theme_colors("light"))   # custom, started from Light: same
+                    w._update_presence()
+                    self.assertEqual(w.presence.show.call_args.kwargs["image"], "logo_light")
+                    app.apply_theme("custom", app.theme_colors("dark"))    # custom from Dark: the original
+                    w._update_presence()
+                    self.assertEqual(w.presence.show.call_args.kwargs["image"], "logo")
+                finally:
+                    app.apply_theme("dark")
                 w.presence.use_application.assert_called_with(app.presence.CLIENT_IDS["en"])
                 app.i18n.set_language("ja")                               # Japanese: the イケメンリーダー application
                 try:

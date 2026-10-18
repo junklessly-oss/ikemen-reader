@@ -630,6 +630,7 @@ S: dict[str, tuple[str, str]] = {
     "presence.reading":         ("Reading...", "読書中…"),
     "presence.tweaking":        ("Tweaking...", "設定中…"),
     "presence.away":            ("Away", "離席中"),
+    "presence.coding":          ("Coding...", "コーディング中…"),     # running from the project folder (the owner)
     "presence.games":           ("{n} Games in Library", "ライブラリに{n}ゲーム"),
     "update.available_title":   ("Update Available", "アップデートがあります"),
     "update.available":         ("Ikemen Reader {version} is available. You have {current}.",

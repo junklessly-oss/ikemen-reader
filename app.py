@@ -777,7 +777,6 @@ PRESENCE_AWAY_S = 300                # ...and "Away" after this long without usi
 INSTANT_CLOSE_S = 5                 # a game that closes within this long of appearing "closed right after starting"
 ICON_DIM = 0.4                     # the bar's icon buttons when greyed (trash) or off (bookmarks): one dimness
 BAR_WAKE_S = 0.22                    # nothing selected <-> selected: the whole bar blends as one, over this long
-ROLL_GAP = 5                         # px between the old and the new number as the time rolls up after a session
 COUNT_UP_SETTLE_S = 0.25           # after the bar's cross-fade: the old total sits still this long, then rolls up
 COUNT_UP_WAIT_S = 15                # after a session: how long the count-up waits for the re-read (Google Drive busy)
 SYNC_SHOW_AFTER_S = 0.3              # a sync around a session shows "Syncing" only if it takes longer than this
@@ -2268,8 +2267,7 @@ class StatsLine(QWidget):
     """Bottom bar: "[clock] 12h 05m   [calendar] 3 Days Ago" on the sync line, right after the sync status, in the
     same style as the cover hover (owner's pick of four layouts). Groups that don't fit are left off the end (the
     date first). Pointing at the time shows it per device; pointing at the day shows the date itself.
-    Changes land at once (the bar's one cross-fade, BarFader, blends old and new); after a reading session the
-    numbers that changed roll up from the old total while the clock's hand sweeps once round."""
+    New values fade in place (the icons stay); after a reading session the clock's hand sweeps once round."""
     LEAD = 16                               # after the sync status
     COUNT_S = 0.8                           # count-up after a session
 
@@ -2309,6 +2307,11 @@ class StatsLine(QWidget):
         self.seconds, self.last, self.per_device = seconds, last, per_device
         self.per_last = per_last or []
         self.updateGeometry()
+        self.update()
+
+    def end_switch(self) -> None:
+        """Show the new values plainly at once (the bar fades this whole line instead)."""
+        self._switch = None
         self.update()
 
     def set_shown(self, on: bool) -> None:
@@ -2420,12 +2423,12 @@ class StatsLine(QWidget):
         num, _ = self._fonts()
         fm = QFontMetricsF(num)
         now = time.monotonic()
-        k, sweep, old = 1.0, 0.0, None
+        sweep = 0.0
         if self._count:
+            # after a session the clock's hand sweeps once round; the numbers simply show the new total (a roll-up
+            # was tried and dropped by the owner, 2026-10-17: "more trouble than it's worth")
             t = max(0.0, min(1.0, (now - self._count[1]) / self.COUNT_S))   # (< 0: still waiting to start)
-            k = 1 - (1 - t) ** 3                # quick start, gentle stop
-            sweep = 360 * k
-            old = self._groups(self._count[0], self.last)[0][0]   # (0: "Not Started" rolls away)
+            sweep = 360 * (1 - (1 - t) ** 3)    # quick start, gentle stop
         # same baseline as the sync status beside it (a label of the same font, centred the same way)
         base = (self.height() - fm.height()) / 2 + fm.ascent()
         mid = base - digit_middle(num)
@@ -2439,46 +2442,11 @@ class StatsLine(QWidget):
                 x += runs_width(runs) + STAT_GROUP_GAP
             p.end()
             return
-        for i, (runs, tip) in enumerate(fitting):
-            if i == 0 and old is not None and k < 1:
-                # each number travels its own height plus a gap: old and new never touch (owner: 12 -> 13 looked
-                # glued together)
-                end = self._roll(p, x, base, mid, old, runs, k, 2 * digit_middle(num) + ROLL_GAP)
-            else:
-                end = draw_runs(p, x, base, runs, mid)
+        for runs, tip in fitting:
+            end = draw_runs(p, x, base, runs, mid)
             self._spans.append((x, end, tip))
             x = end + STAT_GROUP_GAP
         p.end()
-
-    @staticmethod
-    def _roll(p: QPainter, x: float, base: float, mid: float, old: list, new: list, k: float, rise: float) -> float:
-        """After a session the time rolls up (owner: a short session changed nothing visible when it counted): each
-        number that changed slides up and fades out while the new one rises in from below; the rest stays still."""
-        def same_shape(a: list, b: list) -> bool:
-            return len(a) == len(b) and all(r[0] == s[0] and (r[0] != "t" or (r[2] == s[2] and r[3] == s[3]))
-                                             for r, s in zip(a, b))
-
-        def swap(x: float, was: list, now: list) -> float:
-            """was rolls up and out, now rolls in; the space glides from was's width to now's (whatever follows
-            moves along smoothly instead of being overlapped)."""
-            p.setOpacity(1 - k)
-            draw_runs(p, x, base - rise * k, was, mid - rise * k)
-            p.setOpacity(k)
-            draw_runs(p, x, base + rise * (1 - k), now, mid + rise * (1 - k))
-            p.setOpacity(1.0)
-            return x + runs_width(was) + (runs_width(now) - runs_width(was)) * k
-
-        p.save()                                     # (the line's own height clips it, like an odometer)
-        if new and old and new[0][0] == "i" and old[0][0] == "i":
-            x = draw_runs(p, x, base, new[:2], mid)  # the clock (+ its gap) stays put; its hand sweeps
-            new, old = new[2:], old[2:]
-        if not same_shape(old, new):                 # e.g. 59m -> 1h 00m, Not Started -> 5m: all of it rolls
-            x = swap(x, old, new)
-        else:
-            for r, s in zip(new, old):
-                x = swap(x, [s], [r]) if r[0] == "t" and r[1] != s[1] else draw_runs(p, x, base, [r], mid)
-        p.restore()
-        return x
 
     def tip_at(self, pos: QPoint) -> tuple[str, QRect]:
         """Over the time: per device; over the day: the date - only right over them (TipManager)."""
@@ -2899,6 +2867,36 @@ class CardDelegate(QStyledItemDelegate):
         paint_light(p, c, colour_key, pulse, on)
 
 
+PULSE_OFF_AT: list = [None]       # when pulsing was switched off (monotonic), while the lights still settle
+PULSE_EPOCH: list = [0.0]         # the breathing clock's start: every breath begins at the low point from here
+
+
+def pulse_phase(period: float, now: float) -> float:
+    return ((now - PULSE_EPOCH[0]) % period) / period
+
+
+def pulse_settled_at() -> float:
+    """When every light has finished its last breath after pulsing was switched off (the calm breath is the longest)."""
+    off = PULSE_OFF_AT[0]
+    if off is None:
+        return 0.0
+    e = PULSE_EPOCH[0]
+    return max(e + math.ceil((off - e) / p) * p for p in (PULSE_CALM_S, PULSE_BUSY_S))
+
+
+def pulse_switched(on: bool) -> None:
+    """Pulsing switched on / off. Off: the lights settle (finish their breath). On from rest: the breathing starts
+    again from the low point (the still look), not mid-breath - the shared clock kept running meanwhile (owner,
+    2026-10-17). On while still settling: they just carry on from where they are."""
+    now = time.monotonic()
+    if not on:
+        PULSE_OFF_AT[0] = now
+        return
+    if PULSE_OFF_AT[0] is None or now >= pulse_settled_at():
+        PULSE_EPOCH[0] = now
+    PULSE_OFF_AT[0] = None
+
+
 def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: bool, r: float = LIGHT_R,
                 halo: float = 1.0) -> None:
     """A sync light: a dot with a soft halo that breathes. All lights share one clock, so they pulse
@@ -2907,9 +2905,14 @@ def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: boo
     clockwise, each slice glowing in its own colour."""
     keys = [colour_key] if isinstance(colour_key, str) else list(colour_key) or ["grey"]
     s = 0.0
-    if pulsing_on and pulse != "steady":
+    if pulse != "steady" and (pulsing_on or PULSE_OFF_AT[0] is not None):
         period = PULSE_BUSY_S if pulse == "busy" else PULSE_CALM_S
-        s = (1 - math.cos(2 * math.pi * (time.monotonic() % period) / period)) / 2   # 0..1, all in step
+        now = time.monotonic()
+        # just switched off: finish this breath and rest at its low point - where a still light sits - rather
+        # than stopping mid-breath (owner, 2026-10-17)
+        e = PULSE_EPOCH[0]
+        if pulsing_on or now < e + math.ceil((PULSE_OFF_AT[0] - e) / period) * period:
+            s = (1 - math.cos(2 * math.pi * pulse_phase(period, now))) / 2   # 0..1, all in step
     halo_r = r * (1.6 + 1.2 * s)
     span = 360 * 16 / len(keys)                         # Qt angles: 1/16 degree, counter-clockwise from 3 o'clock
     p.setPen(Qt.NoPen)
@@ -4993,6 +4996,9 @@ class SettingsDialog(FitsScreen, QDialog):
         lay.addSpacing(4)
         self.pulse = self._tx(QCheckBox(), "settings.pulse")
         self.pulse.setChecked(current.pulse if current else True)
+        # shown at once, like the theme (owner, 2026-10-17): Save keeps it, Cancel puts it back
+        self._orig_pulse = self.pulse.isChecked()
+        self.pulse.toggled.connect(lambda on: getattr(self.parent(), "set_pulse", lambda _on: None)(on))
         self.auto_update = self._tx(QCheckBox(), "settings.auto_update")
         self.auto_update.setChecked(current.auto_update if current else False)
         self.startup = self._tx(QCheckBox(), "settings.startup")
@@ -5004,11 +5010,11 @@ class SettingsDialog(FitsScreen, QDialog):
         self.discord = self._tx(QCheckBox(), "settings.discord")
         self.discord.setChecked(current.discord if current else False)      # (off until turned on)
         lay.addWidget(self.pulse)
+        lay.addWidget(self.discord)                          # (right under Pulsing Sync Lights - owner)
         lay.addWidget(self.startup)
         lay.addWidget(self.auto_update)
         lay.addWidget(self.vndb)
         lay.addWidget(self.vndb_safe)
-        lay.addWidget(self.discord)
 
         # Background, then Theme: Light / Dark / Custom (the one in use stays highlighted)
         self.bg_path = current.bg_image if current else ""
@@ -5229,6 +5235,8 @@ class SettingsDialog(FitsScreen, QDialog):
     def reject(self) -> None:
         self._preview(self._orig_theme, self._orig_custom)          # always undo any preview
         apply_background(*self._orig_bg)
+        if hasattr(self.parent(), "set_pulse"):
+            self.parent().set_pulse(self._orig_pulse)               # (the pulse preview too)
         if i18n.language() != self._orig_lang:
             set_interface_language(self._orig_lang)
             if hasattr(self.parent(), "preview_language"):
@@ -6639,6 +6647,9 @@ class MainWindow(TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ data
     def apply_settings(self, settings: LocalSettings) -> None:
+        before = getattr(self, "settings", None)
+        if before is not None and before.pulse != settings.pulse:
+            pulse_switched(settings.pulse)               # (e.g. Ikemen Sync: settle / start from rest, as by hand)
         self.settings = settings
         self.bookmark_alpha = 1.0 if settings.show_bookmarks else 0.0   # (a new setting shows at once)
         i18n.set_language(settings.language)
@@ -7691,8 +7702,12 @@ class MainWindow(TaskOwner, QMainWindow):
                 greys.append((k, before[k][0] | self._in_bar(w)))
                 continue
             if k == "stats" and before[k][1][0] and after[k][1][0]:
-                continue                              # (on screen before and after: StatsLine fades its own values,
+                if before[k][0].x() == self._in_bar(w).x():
+                    continue                          # (in place, before and after: StatsLine fades its own values,
                                                       # icons staying put)
+                # the line MOVED (the sync words before it changed length: game -> folder...): it fades out and in
+                # as a whole like those words - its icons gliding under their fade got cut in half (owner, 2026-10-17)
+                w.end_switch()
             if bare is None:                          # the bar with nothing on it (its own background)
                 bare = QPixmap(old.size())
                 bare.setDevicePixelRatio(dpr)
@@ -8598,8 +8613,32 @@ class MainWindow(TaskOwner, QMainWindow):
     def _sb_target(self) -> float:
         return 1.0 if (self._sb_hover or time.monotonic() < self._sb_until) else 0.0
 
+    def _lights_moving(self) -> bool:
+        """The lights breathe: pulsing is on, or was just switched off and they're finishing their last breath."""
+        if self.settings.pulse:
+            return True
+        if PULSE_OFF_AT[0] is None:
+            return False
+        if time.monotonic() < pulse_settled_at():
+            return True
+        PULSE_OFF_AT[0] = None                            # all settled: still from here on
+        self.grid.viewport().update()
+        self.sync_light.update()
+        return False
+
+    def set_pulse(self, on: bool) -> None:
+        """Pulsing Sync Lights, at once (Settings previews it as it's ticked; Cancel puts it back). Switched off,
+        each light finishes its breath and rests where a still light sits."""
+        if on == self.settings.pulse:
+            return
+        self.settings.pulse = on
+        pulse_switched(on)
+        self._update_anim()
+        self.grid.viewport().update()
+        self.sync_light.update()
+
     def _update_anim(self) -> None:
-        needed = (self.settings.pulse or self.hovered is not None or bool(self.hover)
+        needed = (self._lights_moving() or self.hovered is not None or bool(self.hover)
                   or self.sb_alpha > 0 or self._sb_target() > 0   # keep ticking until it has faded out
                   or self._ghost is not None or self.drag_dim > 0
                   or self._landing is not None or bool(self.slides) or self._search_moving()
@@ -8678,6 +8717,7 @@ class MainWindow(TaskOwner, QMainWindow):
         region = QRegion()
         view = self.grid.viewport().rect()
         lights = []                                       # (centre, id) of the lights redrawn on their own
+        breathing = self._lights_moving()                 # (pulsing, or settling after being switched off)
         lights_only = not moving and self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0)             and self._ghost is None and self._landing is None and not self.rumble
         for i in self.grid.visible_range():
             it = self.grid.item(i)
@@ -8685,7 +8725,7 @@ class MainWindow(TaskOwner, QMainWindow):
             iid = it.data(GAME_ID_ROLE)
             if iid in moving:
                 region += r.adjusted(-30, -30, 30, 36)
-            elif self.settings.pulse:
+            elif breathing:
                 c = CardDelegate.light_center(CardDelegate.cover_rect(r, self.hover.get(iid, 0.0)))
                 rad = int(LIGHT_R * 2.9) + 2
                 region += QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
@@ -8722,7 +8762,7 @@ class MainWindow(TaskOwner, QMainWindow):
                     and self.grid.prepare_still():
                 self.grid.light_frame = {"region": region, "lights": lights}
             self.grid.viewport().update(region)
-        if self.settings.pulse:
+        if breathing:
             self.sync_light.update()
         if self._fader.active:                            # the bottom bar's cross-fade, on this same clock
             self._fader.step()
@@ -9429,6 +9469,10 @@ class MainWindow(TaskOwner, QMainWindow):
             self._last_active = now
         if now - self._last_active >= PRESENCE_AWAY_S:
             return tr("presence.away"), ""
+        if not updater.FROZEN:
+            # run from the project folder, not the packaged Ikemen Reader.exe: that's the owner working on it
+            # (owner, 2026-10-17: "it would be cute") - instead of Browsing / Tweaking
+            return tr("presence.coding"), ""
         tweaking = any(isinstance(w, PRESENCE_TWEAKING) and w.isVisible() for w in QApplication.topLevelWidgets())
         return tr("presence.tweaking" if tweaking else "presence.browsing"), ""
 
@@ -9442,8 +9486,11 @@ class MainWindow(TaskOwner, QMainWindow):
             return
         # (the name Discord shows comes from the application: イケメンリーダー when the interface is Japanese)
         self.presence.use_application(presence.CLIENT_IDS.get(i18n.language(), presence.CLIENT_ID))
+        # the picture follows the logo colours in use: a dark logo (the Light theme, or a custom theme started from
+        # it / recoloured that way) -> the light picture (owner, 2026-10-17)
+        dark_logo = QColor(LOGO["logo_fill"]).lightness() < 128
         self.presence.show(look[0], look[1], start=self._presence_since,
-                           image="logo_light" if self.settings.theme == "light" else "logo",
+                           image="logo_light" if dark_logo else "logo",
                            image_text=tr("presence.games", n=len(self.games)))
 
     def closeEvent(self, e) -> None:
