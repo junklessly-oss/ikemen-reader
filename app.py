@@ -5912,7 +5912,7 @@ class CoverPickerDialog(TaskOwner, QDialog):
         self.setMinimumSize(640, 560)
         self.choice = None
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setContentsMargins(22, 18, 22, 18)
         body = QLabel(tr("vndb.pick_body", n=len(options), title=html.escape(title)))
         body.setWordWrap(True)
         lay.addWidget(body)
@@ -5984,7 +5984,7 @@ class VndbDialog(TaskOwner, QDialog):
         self.cover_file: Optional[str] = None
         self.use_title = False
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)        # (as every other window)
+        lay.setContentsMargins(22, 18, 22, 18)        # (as every other window)
         row = QHBoxLayout()
         self.q = QLineEdit(query)
         self.q.returnPressed.connect(self.search)
@@ -6144,7 +6144,7 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         root.setSpacing(0)
         self._content = QWidget(objectName="settings_content")
         outer = QHBoxLayout(self._content)
-        outer.setContentsMargins(20, 18, 20, 4)
+        outer.setContentsMargins(22, 18, 22, 4)
         outer.setSpacing(20)
         scroll = QScrollArea(objectName="settings_scroll")
         scroll.setWidgetResizable(True)
@@ -6295,7 +6295,7 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         row.addWidget(cancel)
         row.addWidget(save)
         # under the right-hand column, as before (the cover column's width + the gaps on its left)
-        row.setContentsMargins(20 + left.sizeHint().width() + 20, 8, 20, 18)
+        row.setContentsMargins(22 + left.sizeHint().width() + 20, 8, 22, 18)
         root.addLayout(row)
 
         # adding with "fetch covers from VNDB" on: look it up straight away
@@ -6525,7 +6525,7 @@ class NameDialog(QDialog):
         self.setWindowTitle(title)
         self.setMinimumWidth(380)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setContentsMargins(22, 18, 22, 18)
         lay.addWidget(section(tr("folder.name")))
         self.edit = QLineEdit(name)
         self.edit.selectAll()
@@ -6558,7 +6558,7 @@ class ConflictDialog(QDialog):
         self.setMinimumWidth(480)
         self.choice: Optional[str] = None
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setContentsMargins(22, 18, 22, 18)
         body = QLabel(tr("conflict.body_solo" if not other_set_up else "conflict.body_first" if first_sync
                          else "conflict.body", title=html.escape(title)))
         body.setWordWrap(True)
@@ -6608,7 +6608,7 @@ class SaveChoicesDialog(QDialog):
         self.setMinimumWidth(560)
         self.choices: dict[str, str] = {}
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setContentsMargins(22, 18, 22, 16)
         lay.setSpacing(10)
         body = QLabel(tr("dual.saves_body"))
         body.setWordWrap(True)
@@ -6675,7 +6675,7 @@ class DetectDialog(QDialog):
         from sync_engine import safe_game_id
         self._registry_only_dir = str(app_dir / "registry-only" / safe_game_id(game.game_id))
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setContentsMargins(22, 18, 22, 18)
         folders = [c for c in candidates if c.kind == "folder"]
         regs = [c for c in candidates if c.kind == "registry"]
         sure = [c for c in regs if c.sure]
@@ -6784,7 +6784,7 @@ class RestoreDialog(QDialog):
         self.game, self.engine, self.save_dir = game, engine, save_dir
         self.restored = False
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setContentsMargins(22, 18, 22, 18)
         body = QLabel(tr("restore.body", title=html.escape(game.title)))
         body.setWordWrap(True)
         lay.addWidget(body)

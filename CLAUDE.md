@@ -1008,7 +1008,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Text: JA first start uses イケメンリーダー and breaks after the first question; もう一方の端末 everywhere; "Saves Changed in
   Both Places"; presence.games_one; 10 dead keys removed; JA colon in Sync Now's line. Guide: Discord in Accessibility,
   "game already open / Close Luna" bullet, grey light incl. couldn't check, JA backup sentence in the right paragraph.
-- SaveChoicesDialog buttons never squeezed (JA dates were clipped).
+- SaveChoicesDialog buttons never squeezed (JA dates were clipped). Every window: 22 px side margins (owner, was 20 or 22;
+  the Edit window's button row follows: Remove under the fields, Save under Browse - measured).
 - Checks: fuzz110 (2 x 600 random actions incl. My Device switching, drags, rename, undo, other-device changes): 0
   errors; searchfuzz 1500: 0; real-window frame bench at 143 Hz: launch 0 late frames, worst 22 ms anywhere.
 - Gotcha: the Bash tool collapses double backslashes in inline heredocs - write scripts to files or use Edit.
