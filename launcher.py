@@ -247,7 +247,9 @@ def _related_processes(root: Optional[psutil.Process], game_dir: Path,
     family = family if family is not None else {}
     if root is not None:
         try:
-            if root.is_running() and root.status() != psutil.STATUS_ZOMBIE:
+            # (zombies exist only outside Windows: psutil's status() walks every thread of the process without letting go
+            # of Python - 13 ms a look on the owner's laptop, every 30 ms while a game starts: the window stuttered)
+            if root.is_running() and (sys.platform == "win32" or root.status() != psutil.STATUS_ZOMBIE):
                 found[root.pid] = False
                 family.setdefault(root.pid, root.create_time())
         except psutil.Error:
@@ -542,6 +544,7 @@ def _wait_for_an_exit(pids, seconds: float, clock: Optional["_ExactClock"] = Non
 # lives only ~0.1 s (born after one look and gone before the next, it broke the chain from the launcher to the game:
 # the session "ended" at once). A look is cheap now (asked through Windows directly, letting go of Python).
 STARTUP_POLL = 0.03
+TITLE_EVERY = 0.5               # window titles are looked at this often while the game runs (see run())
 
 
 @dataclass
@@ -582,6 +585,7 @@ def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll:
     active = 0.0
     was_found = False
     titles: Counter = Counter()
+    titles_at = 0.0                                      # when window titles were last looked at
     while True:
         if proc:
             proc.poll()  # reap the root process if it has already exited
@@ -601,11 +605,17 @@ def run(cmd: Optional[list[str]], game_dir: Path, track_root: bool = True, poll:
             else:
                 active += min(now - prev, max(poll, 0.2) * 5 + 2)   # a big jump = the PC was asleep
             last_seen = now
-            wins = _window_titles()
-            for pid, from_folder in found.items():
-                for t in wins.get(pid, []):
-                    if usable_window_title(t):
-                        titles[t] += 2 if from_folder else 1
+            if now - titles_at >= TITLE_EVERY:
+                # window titles: sampled every TITLE_EVERY s, each sample counting for the time it covers (looking at every
+                # window on the screen took ~17 ms a look on the laptop; and votes per look over-counted the first
+                # seconds, when looks come every 30 ms)
+                weight = now - titles_at if titles_at else TITLE_EVERY
+                titles_at = now
+                wins = _window_titles()
+                for pid, from_folder in found.items():
+                    for t in wins.get(pid, []):
+                        if usable_window_title(t):
+                            titles[t] += (2 if from_folder else 1) * weight
         elif first_seen is None:
             if now - start > startup_wait or not cmd:
                 return RunInfo(0, "", started=False)
