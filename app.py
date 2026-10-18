@@ -376,6 +376,7 @@ class LibraryGrid(QListWidget):
     # from a picture of the grid made without its lights, and only the lights are drawn on top. Redrawing the
     # covers every frame cost ~6-9 ms a frame on the owner's PC, which games starting / closing tipped into hitches.
     light_frame: Optional[dict] = None   # set by MainWindow._tick: {"region": QRegion, "lights": [...]}
+    painted_all = False                  # most of the grid was just drawn the usual way (lights included)
     _still: Optional[QPixmap] = None     # the grid without lights (made when first needed)
     _still_dirty = None                  # QRegion of it that's out of date (redrawn there, only there, when next used)
 
@@ -451,10 +452,14 @@ class LibraryGrid(QListWidget):
                     delegate._paint_light(p, centre, self.w.light_state(iid), iid)
             p.end()
             return
+        if not getattr(self, "_making_still", False):
+            r = ev.region().boundingRect()
+            vr = self.viewport().rect()
+            if r.width() * r.height() > 0.5 * vr.width() * vr.height():
+                self.painted_all = True                   # (see MainWindow._tick)
         if not getattr(self, "_making_still", False) and self._still is not None:
             # something else was drawn: that part of the picture is out of date (patched when next used); a change
             # over most of the grid (scrolling, a search...) just makes it again
-            vr = self.viewport().rect()
             dirty = (self._still_dirty or QRegion()) | ev.region()
             area = sum(r.width() * r.height() for r in dirty)
             if area > 0.5 * vr.width() * vr.height():
@@ -544,6 +549,15 @@ class LibraryGrid(QListWidget):
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
+        if self._still is not None and (dx or dy):
+            # Qt moved the covers on screen and draws only the strip it uncovered: the lights-only frames' picture
+            # moves the same way (the strip is patched in when next used). It used to stay put: small squares of
+            # what was there before the scroll showed around the lights (without a background picture)
+            k = self._still.devicePixelRatio()
+            self._still.scroll(round(dx * k), round(dy * k), self._still.rect())
+            if self._still_dirty is not None:
+                self._still_dirty.translate(dx, dy)
+        self.w.scrolled()
         if BACKGROUND["path"]:
             self.viewport().update()          # keep the picture still while the covers scroll
 
@@ -1295,6 +1309,7 @@ class CoverCache:
     """Covers ready to draw. Only the most recently shown ones stay in memory (the grid only draws
     what's on screen), so a library of hundreds of games doesn't eat hundreds of MB."""
     MAX_COVERS = 120          # ~120 x 0.85 MB at most
+    KEEP_DRAWN = 48           # the covers drawn last are never dropped for ones prepared ahead (> a screenful)
     MAX_ORIGINALS = 4         # full-size images kept while cropping/zooming the same cover
 
     def __init__(self):
@@ -1351,8 +1366,13 @@ class CoverCache:
         key = self._key(sp, mtime, crop)
         return key in self._cache or key in self._ready
 
-    def _trim_ready(self) -> None:
-        """Covers drawn + covers waiting stay within MAX_COVERS (the least wanted waiting ones go first)."""
+    def _trim_ready(self, evict_drawn: bool = False) -> None:
+        """Covers drawn + covers waiting stay within MAX_COVERS (the least wanted waiting ones go first).
+        evict_drawn (covers prepared just around the view): the covers drawn longest ago make room for them first
+        (scrolled far away; the last KEEP_DRAWN stay: what's on screen) - once a big library had filled the
+        memory, every cover prepared ahead was dropped at once, and decoded while drawing when scrolled to."""
+        while evict_drawn and len(self._cache) + len(self._ready) > self.MAX_COVERS and len(self._cache) > self.KEEP_DRAWN:
+            self._cache.popitem(last=False)
         while self._ready and len(self._cache) + len(self._ready) > self.MAX_COVERS:
             self._ready.pop(next(reversed(self._ready)))
 
@@ -1391,8 +1411,10 @@ class CoverCache:
                 out.append((path, mtime, crop, cls._cut(img, crop)))
         return out
 
-    def accept(self, prepared: list, urgent: bool = False) -> None:
-        """urgent: covers about to be drawn (a search lets them in): kept even past the budget, until drawn."""
+    def accept(self, prepared: list, urgent: bool = False, ahead: bool = False) -> None:
+        """urgent: covers about to be drawn (a search lets them in): kept even past the budget, until drawn.
+        ahead: the covers around the view (see MainWindow._prefetch_ahead): wanted before the rest, and older drawn
+        covers make room for them."""
         for path, mtime, crop, part in prepared:
             sp = str(path)
             if self._mtimes.setdefault(sp, mtime) != mtime:
@@ -1402,8 +1424,11 @@ class CoverCache:
                 self._ready[key] = part                # (in the order wanted: most wanted first)
                 if urgent:
                     self._ready = {key: self._ready.pop(key), **self._ready}   # (trimmed last)
+        if ahead:                                      # (in front of the rest, in their own order: nearest first)
+            keys = [k for k in (self._key(str(pa), m, c) for pa, m, c, _ in prepared) if k in self._ready]
+            self._ready = {**{k: self._ready[k] for k in keys}, **self._ready}
         if not urgent:
-            self._trim_ready()
+            self._trim_ready(evict_drawn=ahead)
 
     @staticmethod
     def _decode(path: Path, zoom: float) -> Optional[QImage]:
@@ -8076,19 +8101,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         except Exception:                          # noqa: BLE001 - (they're then decoded when drawn, as before)
             pass
 
-    def _prefetch_covers(self, entries) -> None:
+    def _prefetch_covers(self, entries, ahead: bool = False) -> None:
         """Prepare the covers of what's shown (in order; a folder's first four for its mosaic) in the background,
         so scrolling to them later never waits for a decode - and the cover files are looked up there too, not
         on the cloud drive while drawing. One task at a time; a newer request replaces a waiting one."""
         games = []
         for kind, obj in entries:
             games += [obj] if kind == "game" else self.folder_games.get(obj, [])[:4]
-        for kind, obj in entries:                        # then the rest of each folder, so opening one is instant
+        for kind, obj in [] if ahead else entries:     # then the rest of each folder, so opening one is instant
             games += self.folder_games.get(obj, [])[4:] if kind == "folder" else []
         todo = [(g.game_id, g.artwork, (g.crop_zoom, g.crop_x, g.crop_y))
                 for g in games if g.artwork][:CoverCache.MAX_COVERS]
         if getattr(self, "_prefetching", False):
-            self._prefetch_next = entries
+            self._prefetch_next = (entries, ahead)
             return
         if not todo:
             return
@@ -8115,13 +8140,41 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 arts, prepared = result
                 for key, path in arts.items():
                     self._art.setdefault(key, path)
-                self.covers.accept(prepared)
+                self.covers.accept(prepared, ahead=ahead)
             if self._prefetch_next is not None:
-                self._prefetch_covers(self._prefetch_next)
+                self._prefetch_covers(*self._prefetch_next)
 
         def failed(_):
             self._prefetching = False
         self._run(work, done, failed)
+
+    _ahead_pending = False
+
+    def scrolled(self) -> None:
+        """The grid scrolled: get the covers around the view ready (once per moment, not per scroll step)."""
+        if not self._ahead_pending:
+            self._ahead_pending = True
+            QTimer.singleShot(30, self._prefetch_ahead)
+
+    def _prefetch_ahead(self) -> None:
+        """The covers on screen and the next screenful above and below, nearest first, decoded in the background.
+        A library bigger than the cover memory can't have every cover ready, and a cover decoded while drawing
+        held a scrolling frame up (~6 ms each on the laptop, a row at a time)."""
+        self._ahead_pending = False
+        vis = self.grid.visible_range()
+        if not vis or not hasattr(self, "games"):
+            return
+        n = len(vis)
+        rows = list(vis) + [i for k in range(1, n + 1) for i in (vis.stop - 1 + k, vis.start - k)]
+        entries = []
+        for i in rows:
+            if 0 <= i < self.grid.count():
+                iid = self.grid.item(i).data(GAME_ID_ROLE)
+                if is_folder(iid):
+                    entries.append(("folder", iid[len(FOLDER_PREFIX):]))
+                elif iid in self.games:
+                    entries.append(("game", self.games[iid]))
+        self._prefetch_covers(entries, ahead=True)
 
     @staticmethod
     def _entry_id(entry) -> str:
@@ -9693,10 +9746,15 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not region.isEmpty():
             # (not while a folder opens / closes: the animation covers the grid, and each of these little
             # updates would make it redraw out of step)
-            if lights_only and not self.slides and not self._search_moving() and lights \
-                    and self.grid.prepare_still():
-                self.grid.light_frame = {"region": region, "lights": lights}
-            self.grid.viewport().update(region)
+            if lights_only and self.grid.painted_all:
+                pass    # the whole grid was just drawn (scrolling...), lights and all: making the still picture now
+                #         would draw it all a second time each frame (scrolling a big library stuttered on the laptop)
+            else:
+                if lights_only and not self.slides and not self._search_moving() and lights \
+                        and self.grid.prepare_still():
+                    self.grid.light_frame = {"region": region, "lights": lights}
+                self.grid.viewport().update(region)
+        self.grid.painted_all = False
         if breathing:
             self.sync_light.update()
         if self._fader.active:                            # the bottom bar's cross-fade, on this same clock

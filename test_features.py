@@ -3276,6 +3276,7 @@ class SmoothHoverPopups(unittest.TestCase):
                 grid = w.grid
                 for dirty in (None, app.QRegion(app.QRect(0, 0, 5, 5))):
                     grid._still_dirty = dirty
+                    grid.painted_all = False         # (a frame without a full redraw: see LaptopSmoothness)
                     w._tick()
                     self.assertIsNotNone(grid.light_frame)
                     self.assertEqual(grid._still.size(), grid._still_size())     # ready (and patched) beforehand
@@ -4454,3 +4455,102 @@ class AuditFixes(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class LaptopSmoothness(unittest.TestCase):
+    """Found on the laptop (2026-10-18; weak Windows 11, 60 Hz), scrolling a big library."""
+
+    def _window(self, tmp, n=1):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        cloud = Path(tmp) / "cloud"
+        cloud.mkdir()
+        lib = Library(cloud)
+        for i in range(n):
+            lib.add_game(f"Game {i:03d}", "PC", exe=rf"C:\g{i}\g.exe")
+        w = app.MainWindow(LocalSettings("PC", str(cloud)))
+        w.resize(1200, 800)
+        w.show()
+        w.refresh()
+        return app, w
+
+    def _run(self, seconds):
+        from PySide6.QtWidgets import QApplication
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.004)
+
+    def test_lights_frame_after_a_full_redraw_draws_nothing_twice(self):
+        # scrolling redraws the whole grid every frame; the lights frame then made the still picture as well (a second
+        # full drawing per frame): now it skips that frame - the lights were just drawn with everything else
+        from unittest import mock
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp)
+            try:
+                w.settings.pulse = True
+                w.anim.stop()
+                self._run(0.3)
+                grid = w.grid
+                grid._still, grid.painted_all = None, True
+                with mock.patch.object(app.LibraryGrid, "_make_still") as make:
+                    w._tick()
+                make.assert_not_called()
+                self.assertIsNone(grid.light_frame)
+                self.assertFalse(grid.painted_all)                     # one frame only
+                w._tick()
+                self.assertIsNotNone(grid._still)                        # the next quiet frame makes it as usual
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_still_picture_moves_with_a_scroll(self):
+        # without a background picture Qt moves the covers and draws only the uncovered strip: the lights frames'
+        # picture stayed put, so squares of what was there before showed around the lights
+        from unittest import mock
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp, 40)
+            try:
+                self._run(0.5)
+                grid = w.grid
+                grid.painted_all = False
+                self.assertTrue(grid.prepare_still())
+                before = grid._still.toImage()
+                grid.scrollContentsBy(0, -30)
+                after = grid._still.toImage()
+                k = grid._still.devicePixelRatio()
+                y = round(100 * k)
+                spot = [(x, y) for x in range(0, before.width(), 7)
+                        if before.pixel(x, y) != before.pixel(x, y + round(30 * k))]
+                self.assertTrue(spot)                                # (somewhere the picture differs 30 px lower)
+                self.assertTrue(all(after.pixel(x, y) == before.pixel(x, y + round(30 * k)) for x, _ in spot))
+                self.assertEqual(after.pixel(round(300 * k), y), before.pixel(round(300 * k), y + round(30 * k)))
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_covers_prepared_ahead_are_kept(self):
+        # with the cover memory full, covers prepared just around the view were dropped at once (and then decoded
+        # while drawing); they push out the covers drawn longest ago instead - but the broad start-up preparation
+        # never pushes out drawn ones (a sort brought them straight back)
+        import app
+        from PySide6.QtGui import QImage
+        c = app.CoverCache()
+        img = QImage(4, 4, QImage.Format_RGB32)
+        for i in range(c.MAX_COVERS):
+            c._cache[(f"d{i}", 1.0)] = None
+        c.accept([(Path(f"w{i}.png"), 1.0, (1.0, 0.5, 0.5), img) for i in range(5)])
+        self.assertEqual(len(c._ready), 0)                                   # broad preparation: drawn ones stay
+        self.assertEqual(len(c._cache), c.MAX_COVERS)
+        c._mtimes.clear()
+        c.accept([(Path(f"a{i}.png"), 1.0, (1.0, 0.5, 0.5), img) for i in range(5)], ahead=True)
+        self.assertEqual(len(c._ready), 5)                                   # around the view: kept
+        self.assertNotIn(("d0", 1.0), c._cache)                              # the oldest drawn made room
+        self.assertIn((f"d{c.MAX_COVERS - 1}", 1.0), c._cache)
+        for i in range(200):
+            c._mtimes.clear()
+            c.accept([(Path(f"b{i}.png"), 1.0, (1.0, 0.5, 0.5), img)], ahead=True)
+        self.assertGreaterEqual(len(c._cache), c.KEEP_DRAWN)                  # what's on screen is never dropped
+        self.assertLessEqual(len(c._cache) + len(c._ready), c.MAX_COVERS)
