@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 243 tests (2026-10-18, after the 1.1.0 audit), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 246 tests (2026-10-18, after the 1.1.0 audit), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -1019,6 +1019,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   frames of white ~180 ms in. MainWindow._cloak_until_drawn: cloaked (DWMWA_CLOAK) from its first Show until the
   backdrop's first paint (DwmFlush, then uncloak; 600 ms fallback). 0 white frames in 8 openings; finished window
   ~250 ms after creation (was ~290). Sampler: scratchpad openflash.py.
+- Minimized: nothing animates (_update_anim checks isMinimized; changeEvent restarts it): 6-8 % of a core -> 0 %.
+  Restore measured clean (0 white / black frames).
 - Gotcha: the Bash tool collapses double backslashes in inline heredocs - write scripts to files or use Edit.
 
 ## Ideas for later (owner interested, not scheduled)

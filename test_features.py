@@ -4418,3 +4418,30 @@ class AuditFixes(unittest.TestCase):
                 finally:
                     w.close()
                     app.wait_for_tasks(5)
+
+    def test_nothing_animates_while_minimized(self):
+        # minimized, the breathing lights still drew every frame for nobody (6-8 % of a core); restored, they carry on
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            w = app.MainWindow(LocalSettings("PC", str(cloud), pulse=True))
+            try:
+                w.show()
+                QApplication.processEvents()
+                w._update_anim()
+                self.assertTrue(w.anim.isActive())                   # lights breathing
+                w.setWindowState(Qt.WindowMinimized)
+                QApplication.processEvents()
+                self.assertFalse(w.anim.isActive())                  # minimized: still
+                w.setWindowState(Qt.WindowNoState)
+                QApplication.processEvents()
+                self.assertTrue(w.anim.isActive())                   # restored: breathing again
+            finally:
+                w.close()
+                app.wait_for_tasks(5)

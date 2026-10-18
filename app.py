@@ -7481,6 +7481,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self._fit_start_height()
             self._cloak_until_drawn()
 
+    def changeEvent(self, ev) -> None:
+        super().changeEvent(ev)
+        if ev.type() == QEvent.WindowStateChange and hasattr(self, "anim"):
+            self._update_anim()                    # (minimized: the animation clock stops; restored: it starts again)
+
     _opening = False                               # hidden from the screen until its first picture is drawn
 
     def _cloak_until_drawn(self) -> None:
@@ -9525,6 +9530,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                   or self._landing is not None or bool(self.slides) or self._search_moving()
                   or (hasattr(self, "_fader") and self._fader.active) or bool(self.rumble)
                   or self.bookmark_alpha != (1.0 if self.settings.show_bookmarks else 0.0))
+        # minimized: nothing to see, so nothing animates (it cost 6-8 % of a core - battery on the laptop). Every
+        # animation is timed by the real clock, so on restore they carry on in step, the lights mid-breath as they
+        # would have been
+        needed = needed and not self.isMinimized()
         if needed and not self.anim.isActive():
             self._last_tick = time.monotonic()
             self.anim.start()
