@@ -4392,29 +4392,38 @@ class AuditFixes(unittest.TestCase):
             holder.kill()
             holder.wait()
 
-    def test_window_opens_without_a_white_frame_and_is_revealed(self):
-        # Windows showed the new main window white for a frame or two (owner, 2026-10-18): it's hidden ("cloaked") until
-        # its first picture is drawn - and must always be shown again
+    def test_window_opens_with_its_real_picture(self):
+        # Windows' open animation faded in a WHITE window: the first paint came too late (owner, 2026-10-18). Now the
+        # covers it opens with are decoded before it's shown, its picture is drawn into it just before Windows shows it,
+        # and the window is never hidden (cloaked) - so Windows' own open animation plays, with the real window
         from unittest import mock
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtGui import QImage, QColor
             from PySide6.QtWidgets import QApplication
             import app
             QApplication.instance() or QApplication([])
             cloud = Path(tmp) / "cloud"
             cloud.mkdir()
+            lib = Library(cloud)
+            art = Path(tmp) / "cover.png"
+            img = QImage(400, 560, QImage.Format_RGB32)
+            img.fill(QColor("#884422"))
+            img.save(str(art))
+            for i in range(3):
+                lib.add_game(f"Game {i}", "PC", exe=sys.executable, artwork_src=str(art))
             calls = []
             real = app._dwm_flag
             with mock.patch.object(app, "_dwm_flag", lambda w, attr, on: (calls.append((attr, on)), real(w, attr, on))):
                 w = app.MainWindow(LocalSettings("PC", str(cloud)))
                 try:
+                    w.prepare_first_screen()
+                    g = next(iter(w.games.values()))
+                    self.assertTrue(w.covers.ready(w.art(g), (g.crop_zoom, g.crop_x, g.crop_y)))   # (decoded already)
                     w.show()
-                    end = time.time() + 2
-                    while time.time() < end and w._opening:
-                        QApplication.processEvents()
-                    if IS_WINDOWS:
-                        self.assertEqual([c for c in calls if c[0] == 13], [(13, True), (13, False)])   # hidden, then shown
-                    self.assertFalse(w._opening)
+                    QApplication.processEvents()
+                    app.paint_into_window(w)                                  # (never raises, whatever the platform)
+                    self.assertNotIn((13, True), calls)                       # never hidden: Windows animates it
                 finally:
                     w.close()
                     app.wait_for_tasks(5)

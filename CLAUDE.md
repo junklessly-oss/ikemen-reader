@@ -1015,10 +1015,15 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Single instance: claim_instance() takes a Windows named mutex (Local\IkemenReader-<user>) at the very start of main();
   later copies wait (hand_over_when_ready, <= 8 s) for the first window and bring it forward. Before, the check came
   before the first copy's QLocalServer existed: spam-clicking opened 3 windows on the laptop (5 quick launches -> 1 now).
-- Opening flash (owner, 2026-10-18, "one millisecond of white"): measured from a separate process, every opening showed 1-2
-  frames of white ~180 ms in. MainWindow._cloak_until_drawn: cloaked (DWMWA_CLOAK) from its first Show until the
-  backdrop's first paint (DwmFlush, then uncloak; 600 ms fallback). 0 white frames in 8 openings; finished window
-  ~250 ms after creation (was ~290). Sampler: scratchpad openflash.py.
+- Opening (owner, 2026-10-18): Windows' open animation (fade + slight zoom) fades in whatever the window shows, and an
+  undrawn window is WHITE. The first paint came ~150-250 ms after showing (covers decoded in it, the background picture
+  prepared) - the whole animation was a white window fading in (filmed: 104 -> 235 grey, then a pop). First tried:
+  cloaking until drawn = no animation at all (owner wanted it cohesive with the animated close). Now:
+  prepare_first_screen() decodes the opening covers before show (first paint 165 -> 6 ms), and MainWindow.nativeEvent
+  at WM_SHOWWINDOW draws the window's grab() straight into it (paint_into_window, SetDIBitsToDevice): the animation
+  starts with the real window, background picture included (filmed with the owner's look). A dark class brush does
+  nothing (Qt never erases). Settings / pop-ups still open at once (no_open_animation + cloak, unchanged).
+  Tools: scratchpad openfilm.py (contact sheet of the first frames), openflash.py.
 - Minimized: nothing animates (_update_anim checks isMinimized; changeEvent restarts it): 6-8 % of a core -> 0 %.
   Restore measured clean (0 white / black frames).
 - Gotcha: the Bash tool collapses double backslashes in inline heredocs - write scripts to files or use Edit.

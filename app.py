@@ -2095,6 +2095,41 @@ def set_border(w: QWidget) -> None:
         pass
 
 
+def paint_into_window(w: QWidget) -> None:
+    """Draw the widget's whole picture straight into its native window (Windows only): used just before a window is
+    shown, so the first thing on screen is its real picture, not an empty white window (see MainWindow.nativeEvent)."""
+    from ctypes import wintypes
+    for lay in (w.layout(), getattr(w.centralWidget(), "layout", lambda: None)() if hasattr(w, "centralWidget") else None):
+        if lay is not None:
+            lay.activate()                             # (its final size and places, not a stale layout)
+    img = w.grab().toImage().convertToFormat(QImage.Format_RGB32)
+    if img.isNull():
+        return
+
+    class BIH(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                    ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", ctypes.c_long),
+                    ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+    user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+    user32.GetDC.restype = wintypes.HDC
+    user32.GetDC.argtypes = [wintypes.HWND]
+    user32.ReleaseDC.argtypes = [wintypes.HWND, wintypes.HDC]
+    gdi32.SetDIBitsToDevice.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD, wintypes.DWORD,
+                                        ctypes.c_int, ctypes.c_int, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
+                                        ctypes.c_void_p, wintypes.UINT]
+    data = bytes(img.constBits())[: img.sizeInBytes()]
+    buf = ctypes.create_string_buffer(data, len(data))
+    head = BIH(ctypes.sizeof(BIH), img.width(), -img.height(), 1, 32, 0, 0, 0, 0, 0, 0)   # (top-down rows)
+    hwnd = wintypes.HWND(int(w.winId()))
+    hdc = user32.GetDC(hwnd)
+    if hdc:
+        try:
+            gdi32.SetDIBitsToDevice(hdc, 0, 0, img.width(), img.height(), 0, 0, 0, img.height(), buf, ctypes.byref(head), 0)
+        finally:
+            user32.ReleaseDC(hwnd, hdc)
+
+
 def no_open_animation(w: QWidget) -> None:
     """Windows' own open / close animation (a fade with a slight zoom, ~250 ms) off for this window: during it the
     window is see-through, and the covers behind Settings showed through it (owner, 2026-10-18; measured on the
@@ -7479,36 +7514,31 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not self._start_fitted:
             self._start_fitted = True
             self._fit_start_height()
-            self._cloak_until_drawn()
 
     def changeEvent(self, ev) -> None:
         super().changeEvent(ev)
         if ev.type() == QEvent.WindowStateChange and hasattr(self, "anim"):
             self._update_anim()                    # (minimized: the animation clock stops; restored: it starts again)
 
-    _opening = False                               # hidden from the screen until its first picture is drawn
+    _prepainted = False
 
-    def _cloak_until_drawn(self) -> None:
-        """Opening: Windows puts a new window on screen before it's drawn and shows it WHITE for a frame or two
-        (owner, 2026-10-18; measured: every opening, ~180 ms in). Like every pop-up (PopupsToFront), the window is
-        hidden ("cloaked") until its first picture is drawn. (Show arrives before the window goes on screen.)"""
-        if sys.platform != "win32":
-            return
-        _dwm_flag(self, 13, True)                  # DWMWA_CLOAK
-        self._opening = True
-        self.backdrop.installEventFilter(self)     # (its first paint: the window's picture is on its way)
-        QTimer.singleShot(600, self._reveal_opening)   # (in case one never comes)
-
-    def _reveal_opening(self) -> None:
-        if not self._opening:
-            return
-        self._opening = False
-        self.backdrop.removeEventFilter(self)
-        try:
-            ctypes.windll.dwmapi.DwmFlush()        # (the frame holding the first picture: uncloaked just before it, the
-        except (OSError, AttributeError):          # window could still show empty for a frame)
-            pass
-        _dwm_flag(self, 13, False)
+    def nativeEvent(self, event_type, message):
+        """Opening (owner, 2026-10-18): Windows' open animation fades and zooms in whatever the window shows - and a new
+        window shows WHITE until the program has drawn into it. The first paint came ~150-250 ms after the window went
+        on screen (covers decoded, the background picture prepared), so the whole animation was a white window fading
+        in, the real picture popping in at the end. Now, the moment before Windows shows it (WM_SHOWWINDOW), the
+        window's finished picture is drawn straight into it: the animation starts with the real window, like any
+        native program's. (Settings and pop-ups still open at once: see no_open_animation / PopupsToFront.)"""
+        if not self._prepainted and sys.platform == "win32":
+            try:
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0018 and msg.wParam:          # WM_SHOWWINDOW: about to be shown
+                    self._prepainted = True
+                    paint_into_window(self)
+            except (ValueError, TypeError, OSError, RuntimeError):
+                pass                                              # (then it opens as any Qt window would)
+        return super().nativeEvent(event_type, message)
 
     def _fit_start_height(self) -> None:
         """Opening size: START_ROWS rows of covers with the same gap above, between and below them (the
@@ -8029,6 +8059,22 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._update_details()
         self._prefetch_entries = entries
         self._prefetch_wait.start()                    # (restarted by every change: see _prefetch_covers)
+
+    def prepare_first_screen(self, n: int = 40) -> None:
+        """Before the window first appears: decode the covers it opens with, so its first picture is ready in
+        milliseconds. Windows' open animation fades in whatever the window shows at that moment, and decoding ~20
+        covers inside the first paint took ~165 ms - longer than the animation, which then faded in a blank white window
+        (owner, 2026-10-18)."""
+        games = []
+        for i in range(min(n, self.grid.count())):
+            iid = self.grid.item(i).data(GAME_ID_ROLE)
+            games += self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4] if is_folder(iid) else \
+                    [self.games[iid]] if iid in self.games else []
+        wanted = [(path, (g.crop_zoom, g.crop_x, g.crop_y)) for g in games if g.artwork and (path := self.art(g))]
+        try:
+            self.covers.accept(CoverCache.prepare(wanted, self.covers.cached()))
+        except Exception:                          # noqa: BLE001 - (they're then decoded when drawn, as before)
+            pass
 
     def _prefetch_covers(self, entries) -> None:
         """Prepare the covers of what's shown (in order; a folder's first four for its mosaic) in the background,
@@ -8880,8 +8926,6 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ animation
     def eventFilter(self, obj: QObject, ev: QEvent) -> bool:
-        if self._opening and obj is self.backdrop and ev.type() == QEvent.Paint:
-            QTimer.singleShot(0, self._reveal_opening)   # (after this paint reaches the window)
         if not hasattr(self, "anim"):       # still building the window
             return False
         t = ev.type()
@@ -10719,6 +10763,7 @@ def main() -> None:
         settings = d.result_settings
     w = MainWindow(settings)
     listen_for_second_copies(w)
+    w.prepare_first_screen()                    # (its first picture ready the moment it appears)
     w.show()
     code = app.exec()
     if w.checker is not None and w.checker.isRunning() and not w.checker.wait(3000):
