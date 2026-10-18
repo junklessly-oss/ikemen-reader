@@ -852,6 +852,15 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
     pop-up's title bar focused (WM_NCACTIVATE on), DwmFlush, uncloaks, DwmFlush, then re-posts the held messages and
     bring_to_front. Pop-ups open with WA_ShowWithoutActivating until revealed. Watched (separate process, one pixel
     per refresh, 20 openings): 20/20 -> 0 at opening (1 grey frame seen once, at a close).
+    REGRESSION 2026-10-18 (owner: "flicker is back"): a widget given setVisible(True) BEFORE it has a parent
+    opens as its own top-level window for a moment and takes the focus - the main window's title bar blinked grey
+    (Settings' pulse checkbox, the edit window's Other Device heading). Only ever hide() loose widgets; set
+    visibility after addWidget. Found by tracing Settings' __init__ line by line against the screen. Left: a 1-frame
+    grey blink at CLOSING in ~1-3 of 20: fixed (owner: "do it now"). KeepsTitleBar.done(): before the pop-up
+    closes (while it's the active window) WM_NCACTIVATE(1) goes to the window behind - its real focus came 3-8 ms
+    after the pop-up had gone, a grey frame; and the closing window ignores its own last "unfocused" message.
+    (Sending it on Hide was too late - tried, removed.) KeepsTitleBar on MainWindow, SettingsDialog, GameDialog.
+    Watched: 30 open + close cycles, 0 blinks.
   * Save with the same cloud folder + device: no slot check / claim (Library reads + WRITES devices.json on Drive),
     and apply_settings keeps library + engine and re-reads the library with refresh_soon(keep_files=True) - nothing
     on Drive from the window's thread. Busy-Drive bench (+0.5 s per cloud read): Save froze 3.5 s -> 9 ms.
@@ -904,6 +913,82 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Pop-ups to the front: PopupsToFront (app event filter): every QDialog that opens is put above all windows once
   (bring_to_front: SetWindowPos TOPMOST then NOTOPMOST, with wintypes.HWND argtypes - without them -1/-2 are cut to 32
   bits and ignored) and can be covered again afterwards. Verified over Notepad.
+
+## Solo mode ("My Device" / マイ端末, button "Dual Device" / デュアル端末 - owner renamed them 2026-10-18; plan item 3; building since 2026-10-18 - see memory next-features-plan.md)
+- LocalSettings.solo (END field); machine_name + cloud_root stay as they were (Dual Mode fills them in again).
+  LocalSettings.library_root = library.solo_dir() (%APPDATA%\IkemenReader\solo) when solo, else cloud_root.
+  start_solo_library(): a fresh copy of the cloud library's games/ artwork/ folders.json order.json (not saves /
+  devices / device_settings), made when switching Dual -> Solo (or if the folder is missing).
+- NO SyncEngine while solo (MainWindow.engine None): the per-device sync records stay untouched, so back in Dual the
+  usual three-way compare sees solo progress as this device's own changes. launcher.play(engine=None) just runs the
+  game (no sync, no save-folder detection); playtime / title as usual.
+- Settings: This Is gets "A Solo Device" (data "solo"): the device + cloud rows hide, Dual Mode (settings.dual)
+  takes Ikemen Sync's place, its heading becomes Mode; Dual Mode brings the rows back with the remembered device
+  (_dual_slot) and cloud folder. Save: no cloud checks when solo.
+- Hidden while solo (MainWindow._apply_mode): top-bar Synced/Syncing/Error, every sync light (paint_light returns at
+  once: LIGHTS_SHOWN), the bottom bar's light + words (stats LEAD 0), Sync Now + Restore an Earlier Save in the
+  menu, the edit window's Other Device fields + Registry Saves (values kept) + save suggestions, Custom Theme's
+  light colours, Ikemen Sync sharing, live refresh, conflict / save-folder pop-ups. Only games set up here show,
+  as display copies with only this computer's playtime + dates. Hover: "12 Hours 5 Minutes" (i18n.playtime_words)
+  and the full date. Removing = this computer only (confirm_remove(solo=True): Cancel | Confirm).
+- Back to Dual (MainWindow._merge_from_solo, before the cloud library is opened): backup_solo_library, then
+  library.solo_joins (games added on both sides meanwhile, not the same id: matched by exe file name / title, generic
+  + engine names excluded) -> Ask for Each | Join All (each: Keep Separate | Join), then library.merge_solo: per game
+  the side whose file changed last (mtimes vs solo-start.json, written by start_solo_library) gives the details;
+  this computer's paths / playtime / last_played_by / removed_on always from solo, other devices' from the cloud;
+  added-while-solo -> copied in (+ cover); removed here while solo -> remove_here in the cloud; deleted on the other
+  device meanwhile -> kept only if changed here; folders.json / order.json: the side changed last wins, the rest at
+  the end (joined ids renamed); empty folders dropped. Then _ask_solo_saves (singleShot after the engine exists):
+  every game whose saves are a CONFLICT in one SaveChoicesDialog (per row This Computer / Cloud with dates, newer
+  preselected; Later | Keep Newest for All | Keep These) -> SyncWorker with those answers (backups as usual); the
+  rest syncs silently as always.
+- Backups: backup_solo_library -> %APPDATA%\IkemenReader\solo backups\<time> (games, artwork, folders, order,
+  solo-start), last 5 kept; on closing while solo and before the merge.
+- Round trip checked (scratch roundtrip.py): both devices' time kept, newer details win, rename kept, removed-here gone,
+  same id -> one game, different names -> join asked, save conflict offered + resolved, backup made.
+- Switching on screen is animated (owner, 2026-10-18; "stats pop up in its place"): MainWindow._apply_mode ->
+  _mode_step on a VsyncClock, the bar's pace. To My Device: the top bar's Synced, the bar's light + words, the time +
+  date and every cover light (LIGHTS_ALPHA, applied in paint_light) fade out (BAR_OUT_S); then the bar takes its new
+  shape and the time + date fade in where the light was (BAR_IN_S). Back to Dual: time + date out, then all of it
+  in together. QGraphicsOpacityEffects only while fading. light_state keeps the real colours until faded out
+  (_mode_shown).
+  Fixed after the owner's check: on My Device the time + date were never shown again (quiet() hid them for a game
+  with no save folder - "save at least once" - now never on My Device; the bar is re-filled when the switch
+  ends), and the bar was 5 px shorter (an empty line collapsed: the third row of covers showed; the window also
+  started 5 px shorter) - d_stats keeps its size when hidden (retainSizeWhenHidden) + min height of the light's
+  line. Measured: bar 83 px and window 89..955 in both modes, whichever it starts in.
+- Switch fade made smooth (owner, 2026-10-18: "switching back to dual seems to choke"): (1) the solo-saves question
+  scanned every game's saves ON THE WINDOW'S THREAD (3.6 s frozen, mid-fade) - now _ask_solo_saves takes the games
+  from the first background check's "conflict" states (_sync_checked) and reads only their dates in a task;
+  (2) the background save check waits until the fade ends (_check_after_mode); (3) the fade redraws only the
+  lights (_tick's lights-only frames), not the whole grid each frame; (4) CoverCache keys covers by FILE NAME +
+  mtime (not the full path): My Device's copies have the same names / times, so no re-decoding (a 117 ms frame).
+  Measured: to My Device 121 frames in the fade, longest 15 ms; back to Dual 79 frames, longest 17 ms.
+- Settings stays centred on the main window through LATER height changes while it hasn't been moved by hand
+  (FitsScreen._set_fit_height: _aligned_pos == pos()): Dual Device's rows coming back used to grow only the bottom
+  edge (owner: "snap back to matching the window"), and late fit top-ups could leave it 1 px off. Measured with
+  the VISIBLE edges (DWMWA_EXTENDED_FRAME_BOUNDS): +0 / +0 in Dual, also when switched late; moved by hand -> stays.
+- "Still 1 px off" (owner): measured the owner's LIVE windows from outside (scratch measure_live.py: DWM visible
+  bounds + client rects) - identical. The difference is the border's DRAWING on Windows 10: the unfocused main
+  window's bottom border row is almost see-through (desktop shows through), Settings' (focused) is solid #181818 -
+  so it looked 1 px taller; the top rows both show a line. Windows 10 can't recolour borders (DWMWA_BORDER_COLOR is
+  Windows 11), so SettingsDialog._height_cap is 1 px less on Windows 10 (WINDOWS_10: build < 22000): its solid edge
+  sits on the main window's last visible row. Windows 11: set_border() gives every window (main window on show,
+  each pop-up in PopupsToFront, all of them again in restyle_all) DWMWA_BORDER_COLOR = the theme's band colour,
+  the same focused or not -> same-size windows are flush by construction, no pixel offset. Documented API, but NOT
+  SEEN on Windows 11 yet (the owner can't run Claude on the laptop): check it there when possible.
+- My Device, this computer's date unknown (read here before dates were kept per device, 2026-10-17, and both
+  computers have time on it - the shared date can't be told apart): the display copy's last_played = -1 ->
+  "Unknown" / 不明 (day_text) on the bar and the cover, hover "????" (owner, 2026-10-18; first chose to show
+  nothing, then this). Sorts after dated games. Fills in by itself the next time it's read here.
+- First start (settings.json missing only): message "One Computer | Two Computers" (first.*); One opens the
+  welcome Settings already on My Device (SettingsDialog(solo=True)) - no cloud folder needed.
+- Guide: paragraphs starting with "§" are two-device only, "¤" My Device only; DUAL_SECTIONS (The Sync Lights,
+  Ikemen Sync) left out on My Device; guide_html(solo=...) from GuideDialog (main window's settings.solo, or
+  Settings' pending _solo). Settings hides Pulsing Sync Lights on My Device too.
+- END-OF-SESSION CHECKS (owner: no scans until the end): tests for solo mode (switch both ways, merge cases,
+  SaveChoicesDialog, first start, guide tags); scratch solosmoke.py's bar check failed 1 in 3 (d_stats.last read as
+  0 right after selecting - timing of the probe or a real moment of no date?); full suite.
 
 ## Ideas for later (owner interested, not scheduled)
 - PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows

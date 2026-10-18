@@ -55,7 +55,8 @@ import launcher
 from launcher import PlayResult, finish_first_play, play, warm_up
 from library import (SLOT_NUMBER, SLOTS, STATUSES, Game, Library, LocalSettings, MachinePaths,
                      default_app_dir, load_local_settings, other_slot, save_local_settings,
-                     matches_names, matches_search, sort_games, this_computer)
+                     matches_names, matches_search, solo_dir, sort_games, start_solo_library, this_computer,
+                     backup_solo_library, merge_solo, solo_joins)
 from sync_engine import Action, ConflictInfo, SyncEngine, save_folder_problem
 from titles import guess_title
 
@@ -728,6 +729,8 @@ def restyle_all() -> None:
     (root if root is not None else app).setStyleSheet(build_style())
     app.setWindowIcon(app_icon())
     for w in app.topLevelWidgets():
+        if w.isWindow() and w.isVisible() and w.windowType() in (Qt.Window, Qt.Dialog):
+            set_border(w)                      # (Windows 11: the border follows the theme)
         if hasattr(w, "restyle"):
             w.restyle()
 
@@ -1113,12 +1116,13 @@ def guarded(fn):
     return run
 
 
-def confirm_remove(parent, game: Game, machine: str) -> Optional[str]:
+def confirm_remove(parent, game: Game, machine: str, solo: bool = False) -> Optional[str]:
     """"Are You Sure?" before a game leaves the library. Set up on the other device too: Cancel | Remove From Both
     Devices | Remove From This Device (owner, 2026-10-17); otherwise Cancel | Confirm. Cancel is the safe default (also
-    Enter / closing). Returns "here", "both" or None."""
+    Enter / closing). Returns "here", "both" or None. solo: always Cancel | Confirm, and only from this computer (the
+    other one keeps it - owner's plan)."""
     import html
-    shared = any(p.exe for m, p in game.paths.items() if m != machine)
+    shared = not solo and any(p.exe for m, p in game.paths.items() if m != machine)
     key = "game.remove_choose" if shared else "game.remove_confirm"
     body = html.escape(tr(key, title=game.title)).replace("\n", "<br>")
     text = f'<span style="font-size:13pt; font-weight:600">{html.escape(tr("game.remove_sure"))}</span><br><br>{body}'
@@ -1355,7 +1359,9 @@ class CoverCache:
 
     @staticmethod
     def _key(sp: str, mtime: float, crop) -> tuple:
-        return (sp, mtime) + tuple(round(v, 4) for v in crop)
+        # by FILE NAME + modified time, not the full path: My Device's library is a copy (same names, same times),
+        # so switching modes keeps every decoded cover - decoding them again froze the switch's fade for 120 ms
+        return (os.path.basename(sp), mtime) + tuple(round(v, 4) for v in crop)
 
     @staticmethod
     def _cut(img: QImage, crop) -> QImage:
@@ -2045,6 +2051,18 @@ def bring_to_front(w: QWidget) -> None:
     w.activateWindow()
 
 
+def _windows_10() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        return sys.getwindowsversion().build < 22000          # (Windows 11 is 10.0.22000 and up)
+    except AttributeError:
+        return False
+
+
+WINDOWS_10 = _windows_10()
+
+
 def _dwm_flag(w: QWidget, attribute: int, on: bool) -> None:
     if sys.platform != "win32":
         return
@@ -2054,6 +2072,25 @@ def _dwm_flag(w: QWidget, attribute: int, on: bool) -> None:
         set_attr.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
         value = ctypes.c_int(1 if on else 0)
         set_attr(wintypes.HWND(int(w.winId())), attribute, ctypes.byref(value), ctypes.sizeof(value))
+    except (OSError, AttributeError, RuntimeError):
+        pass
+
+
+def set_border(w: QWidget) -> None:
+    """Windows 11 (owner, 2026-10-18: Settings flush with the main window there too): every window's 1 px border in
+    ONE solid colour - the theme's bar colour - whether focused or not. Windows' own border is see-through on an
+    unfocused window and solid on a focused one, so two windows of the same size didn't look the same size
+    (measured on Windows 10, where it can't be set: see SettingsDialog._height_cap). DWMWA_BORDER_COLOR (34) is
+    Windows 11 only; Windows 10 ignores it."""
+    if sys.platform != "win32" or WINDOWS_10:
+        return
+    try:
+        from ctypes import wintypes
+        c = QColor(COLORS.get("band", "#1C1C1C"))
+        value = wintypes.DWORD(c.red() | (c.green() << 8) | (c.blue() << 16))      # COLORREF: 0x00BBGGRR
+        set_attr = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        set_attr.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        set_attr(wintypes.HWND(int(w.winId())), 34, ctypes.byref(value), ctypes.sizeof(value))
     except (OSError, AttributeError, RuntimeError):
         pass
 
@@ -2077,17 +2114,37 @@ class KeepsTitleBar:
     "flickers"). While a pop-up is hidden, the "draw unfocused" message (WM_NCACTIVATE off) is held back; it's sent
     again once the pop-up is on screen and covering it (PopupsToFront._reveal)."""
 
+    _closing = False                    # a pop-up on its way out (done())
+
     def nativeEvent(self, event_type, message):
-        if _CLOAKED and sys.platform == "win32":
+        if (_CLOAKED or self._closing) and sys.platform == "win32":
             try:
                 from ctypes import wintypes
                 msg = wintypes.MSG.from_address(int(message))
                 if msg.message == 0x0086 and not msg.wParam:          # WM_NCACTIVATE, going unfocused
-                    _HELD_TITLE.add(int(msg.hWnd))
+                    if not self._closing:
+                        _HELD_TITLE.add(int(msg.hWnd))
                     return True, 1                                    # (the change goes ahead; the title bar waits)
             except (ValueError, TypeError, OSError):
                 pass
         return super().nativeEvent(event_type, message)
+
+    def done(self, r) -> None:
+        """Closing: Windows tells the window it's unfocused just before it disappears - its title bar turned grey
+        for a frame on the way out (owner, 2026-10-18). It's leaving anyway: that last change is skipped."""
+        self._closing = True
+        # and the window behind it looks focused again BEFORE it's uncovered (it was still grey for a frame or so:
+        # its real focus arrives 3-8 ms after this one has gone)
+        behind = self.parentWidget().window() if isinstance(self, QDialog) and self.parentWidget() is not None else None
+        if behind is not None and behind.isVisible() and self.isActiveWindow() and sys.platform == "win32":
+            try:
+                from ctypes import wintypes
+                send = ctypes.windll.user32.SendMessageW
+                send.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+                send(wintypes.HWND(int(behind.winId())), 0x0086, 1, 0)
+            except (OSError, AttributeError, RuntimeError):
+                pass
+        super().done(r)
 
 
 class PopupsToFront(QObject):
@@ -2101,6 +2158,7 @@ class PopupsToFront(QObject):
             # ("cloaked", DWMWA_CLOAK) until its first picture is on its way - Windows otherwise shows a new window
             # white for a frame. (Qt sends Show before the window goes on screen.)
             no_open_animation(obj)
+            set_border(obj)
             _dwm_flag(obj, 13, True)
             obj.setProperty("cloaked", True)
             obj.setProperty("painted", None)
@@ -2398,6 +2456,7 @@ class StatsLine(QWidget):
     date first). Pointing at the time shows it per device; pointing at the day shows the date itself.
     New values fade in place (the icons stay); after a reading session the clock's hand sweeps once round."""
     LEAD = 16                               # after the sync status
+    solo = False                            # a solo device: plain hover boxes (MainWindow._apply_mode)
     COUNT_S = 0.8                           # count-up after a session
 
     def __init__(self, parent=None):
@@ -2426,8 +2485,8 @@ class StatsLine(QWidget):
         they move) - owner, 2026-10-17: no need for the icons to fade when switching between games."""
         shown = self.isVisible() and self._key is not None
         if shown and (seconds, last, key) != (self.seconds, self.last, self._key) \
-                and (i18n.playtime(seconds), i18n.ago(last) if last else "") != \
-                (i18n.playtime(self.seconds), i18n.ago(self.last) if self.last else ""):
+                and (i18n.playtime(seconds), day_text(last) if last else "") != \
+                (i18n.playtime(self.seconds), day_text(self.last) if self.last else ""):
             self._switch = (self._fitting(self._groups(self.seconds, self.last)), time.monotonic())
             self._timer.start()
         if key != self._key:
@@ -2521,19 +2580,24 @@ class StatsLine(QWidget):
         num, unit = self._fonts()
         text, muted = COLORS["text"], COLORS["muted"]
         icon = round(digit_middle(num) * 2 * 1.4)
-        # every device listed, like the day's box: one that never read it says so (owner)
+        # every device listed, like the day's box: one that never read it says so (owner); a solo device: the time
+        # spelled out, "12 Hours 5 Minutes" (owner's plan)
         tip = "<br>".join(f'{html.escape(n)}&nbsp;&nbsp;&nbsp;'
                           f'<b>{html.escape(i18n.playtime(s) if s else tr("stats.never_played"))}</b>'
                           for n, s in self.per_device)
+        if self.solo:
+            tip = html.escape(i18n.playtime_words(seconds)) if seconds else tr("stats.never_played")
         clock = ("i", "clock", text, icon, sweep) if sweep else ("i", "clock", text, icon)
         groups = [([clock, ("g", 5)] + time_runs(seconds, num, unit, text, muted), tip) if seconds
                   else ([("t", tr("card.never"), num, text)], tip)]
         if last:
             def when(t: Optional[float]) -> str:
-                return i18n.date(t) if t else tr("stats.never_played" if t == 0 else "stats.not_recorded")
+                return i18n.date(t) if t and t > 0 else tr("stats.never_played" if t == 0 else "stats.not_recorded")
             day_tip = "<br>".join(f'{html.escape(n)}&nbsp;&nbsp;&nbsp;<b>{html.escape(when(t))}</b>'
                                   for n, t in self.per_last) or i18n.date(last)
-            groups.append(([("i", "calendar", text, icon), ("g", 5), ("t", i18n.ago(last), num, text)], day_tip))
+            if self.solo:
+                day_tip = "????" if last < 0 else i18n.date(last)   # (solo: just the full date - or not known)
+            groups.append(([("i", "calendar", text, icon), ("g", 5), ("t", day_text(last), num, text)], day_tip))
         return groups
 
     def _fitting(self, groups: list) -> list:
@@ -2596,6 +2660,11 @@ STAT_GROUP_GAP = 12                        # between "[clock] 12h 05m" and "[cal
 STAT_TITLE_LIFT = 3                        # the hover title sits this much higher above a stats line
 
 
+def day_text(last: float) -> str:
+    """When it was last read, the way people say it - or "Unknown" (-1: My Device, this computer's date not known)."""
+    return tr("stats.unknown") if last < 0 else i18n.ago(last)
+
+
 def cover_stat_groups(font: QFont, seconds: float, last: float, count: str = "") -> list:
     """The hover line of a cover (or folder: count + total time): groups of runs, light on the dark fade."""
     num = QFont(font)
@@ -2614,7 +2683,7 @@ def cover_stat_groups(font: QFont, seconds: float, last: float, count: str = "")
     elif not count:
         groups.append([("t", tr("card.never"), num, text)])
     if last:
-        groups.append([("i", "calendar", text, icon), ("g", 5), ("t", i18n.ago(last), num, text)])
+        groups.append([("i", "calendar", text, icon), ("g", 5), ("t", day_text(last), num, text)])
     return groups
 
 
@@ -3046,8 +3115,27 @@ def pulse_switched(on: bool) -> None:
     PULSE_OFF_AT[0] = None
 
 
+LIGHTS_ALPHA: list = [1.0]               # 0 on a solo device; in between while switching (MainWindow._apply_mode)
+
+
 def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: bool, r: float = LIGHT_R,
                 halo: float = 1.0) -> None:
+    a = LIGHTS_ALPHA[0]
+    if a <= 0.002:
+        return                                  # (a solo device: nothing syncs, so no sync lights)
+    if a >= 0.998:
+        _paint_light(p, c, colour_key, pulse, pulsing_on, r, halo)
+        return
+    p.save()
+    p.setOpacity(p.opacity() * a)               # (switching Dual <-> My Device: fading)
+    try:
+        _paint_light(p, c, colour_key, pulse, pulsing_on, r, halo)
+    finally:
+        p.restore()
+
+
+def _paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: bool, r: float = LIGHT_R,
+                 halo: float = 1.0) -> None:
     """A sync light: a dot with a soft halo that breathes. All lights share one clock, so they pulse
     in step. pulse: "calm" / "busy" (quicker) / "steady" (no pulse). colour_key may also be a list of
     colours (a folder): the light is then split into equal slices, the first at 12 o'clock and the rest
@@ -4523,9 +4611,10 @@ class LiveColour:
 class ThemeDialog(QDialog):
     """Custom theme: every colour role with a swatch and a hex box; changes preview live."""
 
-    def __init__(self, colors: dict, preview: Callable[[dict], None], parent=None):
+    def __init__(self, colors: dict, preview: Callable[[dict], None], parent=None, solo: bool = False):
         super().__init__(parent)
         from PySide6.QtWidgets import QScrollArea
+        self.solo = solo                              # (a solo device has no sync lights: their colours aren't listed)
         self.setWindowTitle(tr("theme.title"))
         self.setMinimumSize(430, 560)
         self.resize(450, 620)
@@ -4609,6 +4698,8 @@ class ThemeDialog(QDialog):
         grid.setColumnStretch(0, 1)
         row = 0
         for group, keys in groups:
+            if group == "lights" and self.solo:
+                continue
             head = section(tr(f"theme.g_{group}"))
             head.setContentsMargins(0, 10 if row else 2, 0, 2)
             grid.addWidget(head, row, 0, 1, 3)
@@ -4863,7 +4954,9 @@ class GuideDialog(QDialog):
         lay.setSpacing(12)
         text = QTextBrowser(objectName="guide")
         text.setOpenExternalLinks(False)
-        text.setHtml(guide.guide_html(i18n.language(), COLORS, LIGHTS))
+        main = parent.window() if parent is not None else None
+        solo = bool(getattr(getattr(main, "settings", None), "solo", False) or getattr(parent, "_solo", False))
+        text.setHtml(guide.guide_html(i18n.language(), COLORS, LIGHTS, solo=solo))
         lay.addWidget(text, 1)
         row = QHBoxLayout()
         row.addStretch()
@@ -5153,15 +5246,19 @@ class FitsScreen:
         return None
 
     def _set_fit_height(self, width: int, h: int) -> None:
+        # kept centred over its window while it's where we put it (owner, 2026-10-18): a later change of height - the
+        # rows coming back with Dual Device, the last pixels of fitting - used to grow only the bottom edge
+        unmoved = self.isVisible() and getattr(self, "_aligned_pos", None) == self.pos()
         self.setMinimumHeight(min(320, h))
         self.resize(width, h)
-        target = self._align_with() if getattr(self, "_aligning", False) else None
+        target = self._align_with() if getattr(self, "_aligning", False) or unmoved else None
         if self.isVisible() and target is not None and target.isVisible():
             deco_w = self.frameGeometry().width() - self.geometry().width()
             deco_h = self.frameGeometry().height() - self.geometry().height()
             t = target.frameGeometry()
             self.move(t.left() + (t.width() - (width + deco_w)) // 2,
                       t.top() + (t.height() - (h + deco_h)) // 2)
+            self._aligned_pos = self.pos()
         if self.isVisible():                    # keep the whole window on the screen
             room = self._screen_room(self)
             frame = max(self.frameGeometry().height() - self.geometry().height(), 32)
@@ -5188,15 +5285,20 @@ class FitsScreen:
 
 class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
     def _height_cap(self) -> int:
-        """Owner's choice: Settings opens no taller than the main window (the rest scrolls)."""
+        """Owner's choice: Settings opens no taller than the main window (the rest scrolls). On Windows 10 one pixel
+        less: the main window, unfocused behind it, has an almost see-through bottom border while Settings' is solid,
+        so at the same size Settings LOOKED one pixel taller (measured on the owner's screen, 2026-10-18; the top edges
+        both show a line and match). Windows 11 draws borders differently: not adjusted there (unmeasured)."""
         main = self._align_with()
-        return main.frameGeometry().height() if main is not None and main.isVisible() else 0
+        if main is None or not main.isVisible():
+            return 0
+        return main.frameGeometry().height() - (1 if WINDOWS_10 else 0)
 
     def _align_with(self) -> Optional[QWidget]:
         """...and centred over it, so at the same height top and bottom line up (owner's request)."""
         return self.parentWidget().window() if self.parentWidget() else None
 
-    def __init__(self, current: Optional[LocalSettings], parent=None, welcome: bool = False):
+    def __init__(self, current: Optional[LocalSettings], parent=None, welcome: bool = False, solo: bool = False):
         super().__init__(parent)
         self._i18n: list[Callable] = []          # re-applies every text when the language is switched
         self._tx(self, "settings.welcome" if welcome else "settings.title", "setWindowTitle")
@@ -5255,6 +5357,13 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
                 row.addWidget(b)
                 if key == "isync.button":
                     self._tx(b, "isync.tip", "setToolTip")
+                    self._isync_head, self._isync_btn = head, b
+                    # a solo device: Dual Mode takes Ikemen Sync's place (same size and spot)
+                    self._dual_btn = self._tx(QPushButton(), "settings.dual")
+                    self._tx(self._dual_btn, "settings.dual_tip", "setToolTip")
+                    self._dual_btn.clicked.connect(lambda _=False: self._set_solo(False))
+                    self._dual_btn.hide()
+                    row.addWidget(self._dual_btn)
             row.addStretch()
             col.addLayout(row)
             pair.addLayout(col, 1)
@@ -5263,23 +5372,39 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         lay.addLayout(self._divider())
         lay.addSpacing(6)                      # + the heading's own top space = the same visible gap as above
 
-        lay.addWidget(self._tx(section(""), "settings.device"))
+        self._device_head = self._tx(section(""), "settings.device")
+        lay.addWidget(self._device_head)
         self.device = ThemedCombo()
         self.device.fade_on_pick = True
         for slot in SLOTS:
             self.device.addItem(tr("settings.device_n", n=SLOT_NUMBER[slot]), slot)
             self._i18n.append(lambda i=self.device.count() - 1, n=SLOT_NUMBER[slot]:
                               self.device.setItemText(i, tr("settings.device_n", n=n)))
+        self.device.addItem(tr("settings.device_solo"), "solo")
+        self._i18n.append(lambda i=self.device.count() - 1: self.device.setItemText(i, tr("settings.device_solo")))
+        # the device number used in Dual Mode: kept while solo, picked again when going back (owner's plan)
+        self._dual_slot = current.machine_name if current else SLOTS[0]
         if current:
             self.device.setCurrentIndex(SLOTS.index(current.machine_name))
         lay.addWidget(self.device)
-        lay.addWidget(self._tx(hint(""), "settings.device_hint"))
+        self._device_hint = self._tx(hint(""), "settings.device_hint")
+        lay.addWidget(self._device_hint)
 
-        lay.addWidget(self._tx(section(""), "settings.cloud"))
+        self._cloud_head = self._tx(section(""), "settings.cloud")
+        lay.addWidget(self._cloud_head)
         self.cloud = QLineEdit(current.cloud_root if current else "")
         self._tx(self.cloud, "settings.cloud_placeholder", "setPlaceholderText")
-        lay.addLayout(self._browse_row(self.cloud, self._pick_cloud))
-        lay.addWidget(self._tx(hint(""), "settings.cloud_hint"))
+        self._cloud_row = self._browse_row(self.cloud, self._pick_cloud)
+        lay.addLayout(self._cloud_row)
+        self._cloud_hint = self._tx(hint(""), "settings.cloud_hint")
+        lay.addWidget(self._cloud_hint)
+        self.device.currentIndexChanged.connect(self._device_changed)
+        self._i18n.append(lambda: self._isync_head.setText(tr("settings.mode" if self._solo else "settings.isync")))
+        if (current and current.solo) or solo:      # (solo: "One Computer" at the first start)
+            self.device.blockSignals(True)
+            self.device.setCurrentIndex(self.device.findData("solo"))
+            self.device.blockSignals(False)
+            self._set_solo(True, quiet=True)
 
         lay.addWidget(self._tx(section(""), "settings.le"))
         self.le = QLineEdit(current.le_path if current else "")
@@ -5306,6 +5431,8 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         lay.addWidget(self._tx(section(""), "settings.accessibility"))
         lay.addSpacing(4)
         self.pulse = self._tx(QCheckBox(), "settings.pulse")
+        if self._solo:                         # (only hide: shown before it has a parent, it'd open as its own
+            self.pulse.hide()                  # window for a moment - the main window's title bar blinked)
         self.pulse.setChecked(current.pulse if current else True)
         # shown at once, like the theme (owner, 2026-10-17): Save keeps it, Cancel puts it back
         self._orig_pulse = self.pulse.isChecked()
@@ -5393,6 +5520,44 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         self._tx(row.itemAt(row.count() - 1).widget(), "game.browse")
         return row
 
+    _solo = False
+
+    def _device_changed(self, _i: int) -> None:
+        slot = self.device.currentData()
+        if slot == "solo":
+            self._set_solo(True)
+        else:
+            self._dual_slot = slot
+
+    def _set_solo(self, on: bool, quiet: bool = False) -> None:
+        """A Solo Device (owner's plan): the device number and cloud folder rows go, and Dual Mode takes Ikemen Sync's
+        place; Dual Mode brings them back with the device number and cloud folder used before. Applied on Save."""
+        self._solo = on
+        frozen = [] if quiet else [x for x in (self,) if x.updatesEnabled()]
+        for x in frozen:
+            x.setUpdatesEnabled(False)
+        try:
+            row = [self._cloud_row.itemAt(i).widget() for i in range(self._cloud_row.count())]
+            for w in (self._device_head, self.device, self._device_hint, self._cloud_head, self._cloud_hint, *row):
+                if w is not None:
+                    w.setVisible(not on)
+            self._isync_btn.setVisible(not on)
+            self._dual_btn.setVisible(on)
+            if hasattr(self, "pulse"):
+                self.pulse.setVisible(not on)      # (no sync lights on My Device)
+            self._isync_head.setText(tr("settings.mode" if on else "settings.isync"))
+            if not on:
+                self.device.blockSignals(True)
+                self.device.setCurrentIndex(SLOTS.index(self._dual_slot))
+                self.device.blockSignals(False)
+                self.device.painted = self.device.currentText()   # (no fade from "A Solo Device")
+            if not quiet:
+                self.layout().activate()
+                self._fit_height(self.sizeHint().width())
+        finally:
+            for x in frozen:
+                x.setUpdatesEnabled(True)
+
     def _switch_language(self, *_):
         """Preview the chosen language everywhere at once (Save keeps it, Cancel switches back)."""
         # nothing is drawn until it's all done, and the window gets its new size in ONE step (adjustSize first
@@ -5422,7 +5587,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
     def _choose_theme(self, name: str) -> None:
         if name == "custom":
             start = theme_colors("custom", self.custom) if self.custom else theme_colors(self.theme)
-            d = ThemeDialog(start, lambda c: self._preview("custom", c), self)
+            d = ThemeDialog(start, lambda c: self._preview("custom", c), self, solo=self._solo)
             root = self
             while root.parentWidget() is not None:
                 root = root.parentWidget()
@@ -5628,7 +5793,8 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
     def _save(self):
         cloud, le, lp = self.cloud.text().strip(), self.le.text().strip(), self.luna.text().strip()
         anki = self.anki.text().strip()
-        if not cloud:
+        solo = self._solo
+        if not cloud and not solo:
             message(self, tr("settings.need_cloud"))
             return
         for path in (le, lp, anki):
@@ -5638,17 +5804,19 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         if lp and luna.is_admin_build(lp):
             message(self, tr("settings.luna_admin"))
             return
-        try:
-            Path(cloud).mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            message(self, tr("settings.bad_cloud", error=e))
-            return
-        slot = self.device.currentData()
+        if not solo:
+            try:
+                Path(cloud).mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                message(self, tr("settings.bad_cloud", error=e))
+                return
+        slot = self._dual_slot if solo else self.device.currentData()
         # safeguard: is that device number already used by another computer? Only asked when the device number or
         # the cloud folder changed: it reads (and writes) the cloud folder, and Google Drive can keep the window
         # waiting - Settings closed with a hard lag (owner, 2026-10-18). Unchanged, it's already this computer's.
-        same = self.current is not None and slot == self.current.machine_name             and os.path.normcase(cloud) == os.path.normcase(self.current.cloud_root)
-        lib = Library(cloud)
+        same = solo or (self.current is not None and not self.current.solo and slot == self.current.machine_name
+                        and os.path.normcase(cloud) == os.path.normcase(self.current.cloud_root))
+        lib = None if same else Library(cloud)
         owner = None if same else lib.slot_owner(slot)
         if owner and owner.lower() != this_computer().lower():
             n, other = SLOT_NUMBER[slot], SLOT_NUMBER[other_slot(slot)]
@@ -5682,7 +5850,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             anki_path=anki,
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
             bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4),
-            discord=self.discord.isChecked())
+            discord=self.discord.isChecked(), solo=solo)
         save_local_settings(self.result_settings)
         self.accept()
 
@@ -5951,7 +6119,7 @@ class VndbDialog(TaskOwner, QDialog):
         self.accept()
 
 
-class GameDialog(FitsScreen, TaskOwner, QDialog):
+class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
     """Add or edit a game: title, cover, launch options, reading status, and paths for This Device
     (with Browse) and the Other Device (greyed, text only)."""
 
@@ -6071,9 +6239,13 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
 
         # paths: This Device first, Other Device below (greyed)
         self.fields: dict[str, tuple[QLineEdit, QLineEdit]] = {}
+        solo = settings.solo                  # (a solo device: the other device's fields + registry hidden, kept)
         for slot in (self.machine, other_slot(self.machine)):
             here = slot == self.machine
-            lay.addWidget(section(tr("game.this_device") if here else tr("game.other_device")))
+            head = section(tr("game.this_device") if here else tr("game.other_device"))
+            lay.addWidget(head)
+            if not here and solo:
+                head.hide()                   # (after it's placed: shown loose, it'd open as its own window)
             p = game.paths_for(slot) if game else MachinePaths(exe if here else "", "")
             g = QGridLayout()
             exe_e, save_e = QLineEdit(p.exe), QLineEdit(p.save_dir)
@@ -6098,14 +6270,21 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
                 for e in (exe_e, save_e):
                     e.setProperty("secondary", True)
                     e.setToolTip(tr("game.other_tip"))
+                if solo:
+                    for i in range(g.count()):
+                        g.itemAt(i).widget().hide()
             lay.addLayout(g)
             self.fields[slot] = (exe_e, save_e)
 
-        lay.addWidget(section(tr("game.registry")))
+        reg_head = section(tr("game.registry"))
+        lay.addWidget(reg_head)
         self.registry = QLineEdit(game.registry_key if game else "")
         self.registry.setPlaceholderText(r"HKEY_CURRENT_USER\Software\...")
         lay.addWidget(self.registry)
-        lay.addWidget(hint(tr("game.registry_hint")))
+        reg_hint = hint(tr("game.registry_hint"))
+        lay.addWidget(reg_hint)
+        for w in (reg_head, self.registry, reg_hint):
+            w.setVisible(not solo)            # (registry saves only matter for syncing)
         lay.addStretch()
 
         row = QHBoxLayout()
@@ -6137,7 +6316,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
         existing save folder) and fill it in as a suggestion; the owner checks it and saves."""
         exe_e, save_e = self.fields[self.machine]
         exe = exe_e.text().strip()
-        if save_e.text().strip() or not exe:
+        if save_e.text().strip() or not exe or self.settings.solo:
             return
         o = self.game.paths_for(other_slot(self.machine)) if self.game else None
         other = (o.exe, o.save_dir) if o and o.save_dir else None
@@ -6291,7 +6470,7 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
 
     @guarded
     def _remove(self):
-        how = confirm_remove(self, self.game, self.machine)
+        how = confirm_remove(self, self.game, self.machine, solo=self.settings.solo)
         if how:
             self.removed = remove_game_from(self.library, self.game.game_id, self.machine, how)   # (Undo needs it)
             self.removed_how = how
@@ -6409,6 +6588,79 @@ class ConflictDialog(QDialog):
 
     def _pick(self, key: str):
         self.choice = key
+        self.accept()
+
+
+def _newest(folder: Path) -> Optional[float]:
+    """When anything in this folder last changed (None: nothing in it)."""
+    best = None
+    try:
+        for f in folder.rglob("*"):
+            if f.is_file():
+                t = f.stat().st_mtime
+                best = t if best is None or t > best else best
+    except OSError:
+        pass
+    return best
+
+
+class SaveChoicesDialog(QDialog):
+    """Back to Dual (owner's plan): every game whose saves changed both here and in the cloud while this computer was
+    on its own, in ONE window - pick a side for each (the newer one picked at first), or Keep Newest for All. The
+    copy not kept is backed up as usual. Later: nothing changes now (the games wait as "saves changed on both")."""
+
+    def __init__(self, rows: list[tuple[str, str, Optional[float], Optional[float]]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("dual.saves_title"))
+        self.setMinimumWidth(560)
+        self.choices: dict[str, str] = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 16)
+        lay.setSpacing(10)
+        body = QLabel(tr("dual.saves_body"))
+        body.setWordWrap(True)
+        lay.addWidget(body)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        self._groups: dict[str, tuple] = {}
+        for r, (gid, title, local_t, cloud_t) in enumerate(rows):
+            name = QLabel(title)
+            name.setTextFormat(Qt.PlainText)
+            grid.addWidget(name, r, 0)
+            group = QButtonGroup(self)
+            newer = "local" if (local_t or 0) >= (cloud_t or 0) else "cloud"
+            for c, (key, label, t) in enumerate((("local", tr("dual.this_computer"), local_t),
+                                                 ("cloud", tr("dual.cloud"), cloud_t))):
+                when = i18n.datetime_str(t) if t else tr("conflict.none")
+                b = QPushButton(f"{label}\n{when}", objectName="seg")
+                b.setCheckable(True)
+                b.setChecked(key == newer)
+                group.addButton(b)
+                b.setProperty("side", key)
+                grid.addWidget(b, r, c + 1)
+            self._groups[gid] = (group, newer)
+        grid.setColumnStretch(0, 1)
+        lay.addLayout(grid)
+        lay.addWidget(hint(tr("conflict.backup_note")))
+        row = QHBoxLayout()
+        row.setSpacing(BUTTON_GAP)
+        later = QPushButton(tr("dual.later"))
+        later.clicked.connect(self.reject)
+        newest = QPushButton(tr("dual.newest_all"))
+        newest.clicked.connect(lambda: self._done(True))
+        keep = QPushButton(tr("dual.keep_these"))
+        keep.clicked.connect(lambda: self._done(False))
+        row.addWidget(later)
+        row.addStretch()
+        row.addWidget(newest)
+        row.addWidget(keep)
+        lay.addLayout(row)
+
+    def _done(self, newest: bool) -> None:
+        for gid, (group, newer) in self._groups.items():
+            b = group.checkedButton()
+            self.choices[gid] = newer if newest or b is None else b.property("side")
         self.accept()
 
 
@@ -6820,6 +7072,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.d_sync = SyncStatus()             # (a long message may still be cut on a very narrow window)
         line.addWidget(self.d_sync)
         self.d_stats = StatsLine()
+        sp = self.d_stats.sizePolicy()
+        sp.setRetainSizeWhenHidden(True)       # (hidden, it still holds the line's height: the bar never shrinks -
+        self.d_stats.setSizePolicy(sp)         # on My Device nothing else is on that line)
         self.d_stats.hide()
         line.addWidget(self.d_stats, 1)
         line.addStretch()                      # (stats hidden: the line still takes the spare width, not the buttons)
@@ -6933,7 +7188,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.retranslate()
         self._update_sync_label()
         self._update_details()
-        if not Path(self.settings.cloud_root).is_dir():
+        if not Path(self.settings.library_root).is_dir():
             self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root))
         self.grid.viewport().update()
         self._styled_fonts = ui_families()
@@ -7011,7 +7266,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         elif ui_families() != fonts_before or getattr(self, "_styled_fonts", None) != ui_families():
             restyle_all()                       # a different font (or language, which changes the order)
         self._styled_fonts = ui_families()
-        if before is not None and before.machine_name == settings.machine_name                 and os.path.normcase(before.cloud_root) == os.path.normcase(settings.cloud_root)                 and getattr(self, "library", None) is not None:
+        if before is not None and before.machine_name == settings.machine_name and before.solo == settings.solo                 and os.path.normcase(before.cloud_root) == os.path.normcase(settings.cloud_root)                 and getattr(self, "library", None) is not None:
             # the same cloud folder and device: nothing to set up again, and the library is re-read in the background
             # (on the window's own thread, Google Drive kept Settings' Save waiting - owner, 2026-10-18)
             self.retranslate()
@@ -7022,21 +7277,207 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.share_settings()
             return
         self.app_dir = default_app_dir()
-        self.library = Library(settings.cloud_root)
-        self.engine = SyncEngine(settings.cloud_root, self.app_dir, computers=self.library.known_computers)
-        try:
-            owner = self.library.slot_owner(settings.machine_name)
-            if owner is None or owner.lower() == this_computer().lower():
-                self.library.claim_slot(settings.machine_name)
-        except OSError:
-            pass
+        if settings.solo:
+            # A Solo Device: its own copy of the library, and no syncing at all - the sync records stay exactly as
+            # they were, so going back to Dual compares saves correctly (solo progress counts as this device's)
+            if (before is not None and not before.solo) or not solo_dir(self.app_dir).is_dir():
+                try:
+                    start_solo_library(settings.cloud_root, self.app_dir)
+                except OSError as e:
+                    report_failure(self, e)
+            self.library = Library(settings.library_root)
+            self.engine = None
+        else:
+            back_from_solo = before is not None and before.solo
+            if back_from_solo:
+                self._merge_from_solo(settings)
+            self.library = Library(settings.cloud_root)
+            self.engine = SyncEngine(settings.cloud_root, self.app_dir, computers=self.library.known_computers)
+            try:
+                owner = self.library.slot_owner(settings.machine_name)
+                if owner is None or owner.lower() == this_computer().lower():
+                    self.library.claim_slot(settings.machine_name)
+            except OSError:
+                pass
+            if back_from_solo:
+                self._solo_saves_asked = False      # (asked with the first background check's results)
         self.retranslate()
+        self._apply_mode()
         self.refresh()
         self._update_anim()
         self.share_settings()
 
+    _solo_saves_asked = True                     # (False just after going back to Dual: _ask_solo_saves)
+
+    def _merge_from_solo(self, settings: LocalSettings) -> None:
+        """Back to Dual: this computer's solo library goes into the shared one (library.merge_solo). Games added on
+        both devices meanwhile: Ask for Each | Join All (owner's plan)."""
+        machine = settings.machine_name
+        try:
+            backup_solo_library(self.app_dir)
+            pairs = solo_joins(settings.cloud_root, machine, self.app_dir)
+        except OSError as e:
+            report_failure(self, e)
+            return
+        joins = {}
+        if pairs:
+            listing = "\n".join(f"• {mine.title}" for mine, _ in pairs)
+            how = message(self, tr("dual.joins_body", titles=listing), tr("dual.joins_title"),
+                          [("each", tr("dual.ask_each")), ("all", tr("dual.join_all"))], dismiss="each")
+            for mine, theirs in pairs:
+                if how == "all" or message(self, tr("dual.join_one", mine=mine.title, theirs=theirs.title),
+                                           tr("dual.joins_title"),
+                                           [("no", tr("dual.keep_separate")), ("join", tr("dual.join"))],
+                                           dismiss="no") == "join":
+                    joins[mine.game_id] = theirs.game_id
+        try:
+            merge_solo(settings.cloud_root, machine, joins, self.app_dir)
+        except OSError as e:
+            report_failure(self, e)
+            return
+        self.statusBar().showMessage(i18n.line("status.dual_merged"), 8000)
+
+    def _ask_solo_saves(self) -> None:
+        """Right after going back to Dual: saves changed here AND in the cloud while solo - asked at once, in one
+        window (owner's plan). The games come from the first background check (the window never scans saves itself:
+        that froze the fade for seconds - owner, 2026-10-18); only their dates are read, in the background too."""
+        if self._solo_saves_asked or self.engine is None:
+            return
+        self._solo_saves_asked = True
+        machine, engine = self.settings.machine_name, self.engine
+        games = [g for gid, st in self.sync_states.items() if st == "conflict" and (g := self.games.get(gid)) is not None]
+        if not games:
+            return
+        self._conflicts_snoozed |= {g.game_id for g in games}   # (this window asks: not Choose Now / Later too)
+
+        def dates():
+            return [(g.game_id, g.title, _newest(Path(g.paths_for(machine).save_dir)), _newest(engine.cloud_dir(g.game_id)))
+                    for g in games]
+
+        def ask(rows: list) -> None:
+            if engine is not self.engine or self.syncer is not None or self.worker is not None:
+                return
+            d = SaveChoicesDialog(rows, self)
+            if not d.exec():
+                return
+            answers = dict(d.choices)
+            s = SyncWorker(self.engine, games, machine)
+            s.conflict.connect(lambda info: setattr(s, "answer", answers.get(info.game_id)), Qt.BlockingQueuedConnection)
+            s.finished_all.connect(self._synced_now)
+            self.syncer = s
+            self.statusBar().showMessage(tr("status.checking"))
+            s.start()
+        self._run(dates, ask)
+
+    _mode_anim: Optional[dict] = None          # switching Dual <-> My Device on screen (see _apply_mode)
+    _check_after_mode = False                  # a save check waiting for that to finish
+    _mode_shown: Optional[bool] = None         # the mode the window shows (solo True / False)
+
+    def _apply_mode(self) -> None:
+        """Dual / solo: on a solo device everything about syncing is hidden (owner's plan) - the top bar's
+        Synced / Syncing / Error, every sync light, the bottom bar's light + words (the time and date start where the
+        light was). Switched on screen, it's animated (owner, 2026-10-18), at the bar's pace: to My Device everything
+        about syncing fades out with the time + date, then the time + date fade in where the light was; back to Dual
+        the time + date fade out, then everything fades in together."""
+        solo = self.settings.solo
+        self.d_stats.solo = solo
+        if self._mode_shown is None or not self.isVisible() or self._mode_shown == solo:
+            self._mode_anim = None
+            self._mode_final(solo)
+            return
+        if self._mode_anim is not None:
+            self._mode_final(self._mode_anim["solo"])        # (switched again mid-way: start from the end of it)
+        self._mode_anim = {"solo": solo, "t0": time.monotonic(), "phase": 0}
+        self._mode_effects = {}
+        fading = [self.d_stats] + ([self.sync_label, self.d_sync] if solo else [])
+        for w in fading:
+            fx = QGraphicsOpacityEffect(w)
+            fx.setOpacity(1.0)
+            w.setGraphicsEffect(fx)
+            self._mode_effects[w] = fx
+        if not hasattr(self, "_mode_clock"):
+            self._mode_clock = VsyncClock(self)
+            self._mode_clock.setInterval(0)
+            self._mode_clock.timeout.connect(self._mode_step)
+        self._mode_clock.start()
+
+    def _mode_final(self, solo: bool) -> None:
+        """The mode's look, with nothing fading."""
+        LIGHTS_ALPHA[0] = 0.0 if solo else 1.0
+        for w in (self.sync_label, self.d_sync, self.d_stats):
+            w.setGraphicsEffect(None)
+        self.sync_light.setVisible(not solo)
+        self.sync_label.setVisible(not solo)
+        self.d_sync.setVisible(not solo)
+        self.d_stats.LEAD = 0 if solo else StatsLine.LEAD
+        self.d_stats.setMinimumHeight(self.d_sync.sizeHint().height())   # (the bar keeps its height: no 3rd row)
+        self.d_stats.updateGeometry()
+        self.d_stats.update()
+        self._mode_shown = solo
+        self._update_details()
+        self.grid.viewport().update()
+        self.sync_light.update()
+
+    def _mode_step(self) -> None:
+        a = self._mode_anim
+        if a is None:
+            self._mode_clock.stop()
+            return
+        t = time.monotonic() - a["t0"]
+        solo = a["solo"]
+        if a["phase"] == 0:
+            k = 1.0 - ease(min(1.0, t / BAR_OUT_S))           # fading out
+            for fx in self._mode_effects.values():
+                fx.setOpacity(k)
+            if solo:
+                LIGHTS_ALPHA[0] = k
+            if t < BAR_OUT_S:
+                self._mode_repaint()
+                return
+            # the swap: the bar takes its new shape while nothing shows, then everything due fades in
+            a["phase"], a["t0"] = 1, time.monotonic()
+            for w in (self.sync_label, self.d_sync, self.d_stats):
+                w.setGraphicsEffect(None)
+            self._mode_effects = {}
+            self.sync_light.setVisible(not solo)
+            self.sync_label.setVisible(not solo)
+            self.d_sync.setVisible(not solo)
+            self.d_stats.LEAD = 0 if solo else StatsLine.LEAD
+            self.d_stats.setMinimumHeight(self.d_sync.sizeHint().height())
+            self.d_stats.updateGeometry()
+            self._update_details_now()           # (the new mode's bar, still invisible: no fade of its own)
+            for w in [self.d_stats] + ([] if solo else [self.sync_label, self.d_sync]):
+                fx = QGraphicsOpacityEffect(w)
+                fx.setOpacity(0.0)
+                w.setGraphicsEffect(fx)
+                self._mode_effects[w] = fx
+            if not solo:
+                LIGHTS_ALPHA[0] = 0.0
+            self._mode_repaint()
+            return
+        k = ease(min(1.0, t / BAR_IN_S))                       # fading in
+        for fx in self._mode_effects.values():
+            fx.setOpacity(k)
+        if not solo:
+            LIGHTS_ALPHA[0] = k
+        if t < BAR_IN_S:
+            self._mode_repaint()
+            return
+        self._mode_anim = None
+        self._mode_clock.stop()
+        self._mode_final(solo)
+        if self._check_after_mode:
+            self._check_after_mode = False
+            self._check_sync()
+
+    def _mode_repaint(self) -> None:
+        # (the cover lights redraw in _tick's lights-only frames - _lights_moving is true meanwhile - over the stored
+        # picture of the covers: redrawing the whole grid every frame made the fade stutter)
+        self.sync_light.update()
+
     def showEvent(self, ev) -> None:
         super().showEvent(ev)
+        set_border(self)                           # (Windows 11: one solid border colour, like every pop-up)
         if not self._start_fitted:
             self._start_fitted = True
             self._fit_start_height()
@@ -7066,6 +7507,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     def share_settings(self) -> None:
         """Copy this device's personal settings into the cloud folder for Ikemen Sync (in the background:
         a big background picture or font file can take a moment the first time)."""
+        if self.settings.solo:
+            return                              # (no other device to share with)
         s = dataclasses.replace(self.settings, custom_colors=dict(self.settings.custom_colors))
         fonts = dict(FONT_FILES)
 
@@ -7188,6 +7631,16 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         out = {"cloud": Path(library.root).is_dir()}
         here = self.settings.machine_name                  # (games removed from this device only: not shown here)
         out["games"] = [g for g in library.list_games() if not g.removed_here(here)] if out["cloud"] else []
+        if self.settings.solo:
+            # solo: only the games set up on this computer, with only this computer's time read and dates (display
+            # copies: every change re-reads the game's file, so the other device's numbers are never lost)
+            out["games"] = [dataclasses.replace(
+                g, playtime={here: g.playtime[here]} if here in g.playtime else {},
+                # (None: this computer's date isn't known - read here before dates were kept per device -> -1,
+                # shown as "Unknown", owner 2026-10-18; never read here -> 0)
+                last_played=-1.0 if g.last_played_on(here) is None else g.last_played_on(here),
+                last_played_by={here: g.last_played_by[here]} if here in g.last_played_by else {})
+                for g in out["games"] if g.paths_for(here).exe]
         out["folders"] = library.list_folders() if out["games"] else {}
         try:
             out["meta"] = {fid: {"sort": v["sort"], "order": v["order"]} for fid, v in library._folders_raw().items()}
@@ -7220,7 +7673,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self._quiet_rebuild = False
         if was_empty and games and self.no_results > 0 and self.isVisible():
             self._slide_from({}, appear=True)            # the first games fade in once "No Games Yet" has gone
-        cloud = Path(self.settings.cloud_root).is_dir()
+        cloud = Path(self.settings.library_root).is_dir()
         self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root))
         self.empty.setVisible(not cloud)             # (no games yet: drawn on the grid like No Results Found)
         self.grid.setVisible(cloud)
@@ -7235,7 +7688,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """The other device set a game's save folder and this device's is still empty: fill it in by itself when
         its place here is certain (certain_saves), within one live poll of the change arriving. Then the usual
         check syncs it: nothing here -> silent download; files of its own here -> straight to "which to keep"."""
-        if self._fill_busy or not self.games:
+        if self._fill_busy or not self.games or self.settings.solo:
             return
         self._fill_busy = True
         library, settings, games = self.library, self.settings, list(self.games.values())
@@ -7306,8 +7759,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._run(lambda: vndb.names(list(set(todo.values()))), done, failed)
 
     def _live_poll(self) -> None:
-        if self._live_checking:
-            return
+        if self._live_checking or self.settings.solo:
+            return                              # (solo: nothing else changes this library)
         self._live_checking = True
         library = self.library
 
@@ -7337,6 +7790,12 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def _check_sync(self, quiet: bool = False) -> None:
         """quiet: a routine background re-check - the top bar doesn't flash "Syncing" for it."""
+        if self.settings.solo:
+            self.sync_states = {gid: "synced" for gid in self.games}   # (nothing syncs on a solo device)
+            return
+        if self._mode_anim is not None:
+            self._check_after_mode = True          # (after the switch's fade: checking saves alongside made it stutter)
+            return
         if self.checker and self.checker.isRunning():
             self._recheck = True  # one at a time; check again when the running one finishes
             return
@@ -7368,6 +7827,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._update_sync_label()
         if self._recheck:
             self._check_sync()
+        elif not self._solo_saves_asked:
+            self._ask_solo_saves()                  # (just back to Dual: one window for all of them)
         else:
             self._offer_conflicts()
 
@@ -7375,6 +7836,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """Saves changed on both devices can't sync silently: ask once (Choose Now / Later). Later isn't
         asked again for the same games until the other device changes something new. A game whose settings
         were just saved here skips that step: straight to "which saves to keep" (even if Later was said before)."""
+        if self.settings.solo:
+            return
         conflicts = [gid for gid, s in self.sync_states.items() if s == "conflict" and gid in self.games
                      and gid != self.playing_id]
         self._ask_now &= set(conflicts)             # (the others synced by themselves, or need nothing)
@@ -7399,7 +7862,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def sync_now(self, games: list) -> None:
         """Sync these games right away (right-click Sync Now, or Choose Now for saves changed on both)."""
-        if self.syncer is not None or self.worker is not None or not games:
+        if self.syncer is not None or self.worker is not None or not games or self.engine is None:
             return
         s = SyncWorker(self.engine, games, self.settings.machine_name)
         s.conflict.connect(lambda info: setattr(s, "answer", self._conflict_choice(info)), Qt.BlockingQueuedConnection)
@@ -7791,6 +8254,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         to Read the moment the game closes, while the light still says Now Reading until the saves have uploaded."""
         if gid == self.playing_id:                  # (the session runs until its saves have synced)
             return self._session_look(gid)[1] in ("starting", "playing", "syncing")
+        if self.settings.solo:
+            return False                            # (My Device: no "save at least once" - nothing syncs)
         return self.sync_states.get(gid) == "detect"
 
     def folder_colours(self, fid: str) -> list[str]:
@@ -7805,7 +8270,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return next((s for s in STATE_PRIORITY if s in states), "synced")
         if gid == self.playing_id:
             return self._session_look(gid)[1]
-
+        if self.settings.solo and self._mode_shown is not False:   # (still fading out: their real colours)
+            return "synced"
         return self.sync_states.get(gid, "checking")
 
     # ------------------------------------------------------------------ sort / filter
@@ -8007,7 +8473,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         return {
             "button": (self.play_btn, (self.play_btn.text(), self.play_btn.isEnabled())),
             "title": (self.d_title, self.d_title.text()),
-            "sync": (self.d_sync, self.d_sync._shown),
+            "sync": (self.d_sync, self.d_sync._shown if self.d_sync.isVisibleTo(self) else None),   # (hidden: solo)
             "stats": (st, (st.isVisible(), st.seconds, st.last, st._key)),
             "status": (ds, (self._status_box_shown(), ds.currentIndex(), ds.blank)),
             "saves": (self.saves_btn, btn(self.saves_btn)),
@@ -8990,6 +9456,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         return 1.0 if (self._sb_hover or time.monotonic() < self._sb_until) else 0.0
 
     def _lights_moving(self) -> bool:
+        if self._mode_anim is not None:
+            return True                        # (fading in / out: Dual <-> My Device)
+        if self.settings.solo:
+            return False                       # (no lights on a solo device)
         """The lights breathe: pulsing is on, or was just switched off and they're finishing their last breath."""
         if self.settings.pulse:
             return True
@@ -9029,7 +9499,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def showing_empty_library(self) -> bool:
         """No games at all yet (the cloud folder is there): said the same way as No Results Found."""
-        return not self.games and Path(self.settings.cloud_root).is_dir()
+        return not self.games and Path(self.settings.library_root).is_dir()
 
     def _no_results_target(self) -> float:
         """1 once nothing matches (or there are no games) AND the last cover has finished fading out (never both
@@ -9331,7 +9801,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not mine.exe:
             self.edit_selected()
             return
-        if not mine.save_dir and not watch and not asked:
+        if not mine.save_dir and not watch and not asked and not self.settings.solo:
             self._offer_save_folder(g, without)     # comes back here (asked=True) when done
             return
         self.playing_id = g.game_id
@@ -9458,7 +9928,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     def first_sync(self, g: Optional[Game]) -> bool:
         """This device has never synced the game (but the other device has it): a mismatch then isn't "both changed",
         this device already had files of its own (often made by the game when installed or first opened)."""
-        return g is not None and not self.only_here(g) and not self.engine.has_synced(g.game_id)
+        return g is not None and self.engine is not None and not self.only_here(g)             and not self.engine.has_synced(g.game_id)
 
     def solo_key(self, key: str, g: Optional[Game]) -> str:
         """The true wording for a save mismatch: "<key>_solo" for a game set up only on this device (the cloud copy
@@ -9674,15 +10144,17 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if g.folder:
             m.addAction(tr("menu.remove_from_folder"), lambda: self.move_to_folder(g.game_id, ""))
         m.addSeparator()
-        a = m.addAction(tr("menu.sync_now"), lambda: self.sync_now([g]))
-        a.setEnabled(self.light_state(g.game_id) in ("push", "pull", "conflict") and self.worker is None
-                     and self.syncer is None)
+        if not self.settings.solo:                   # (solo: nothing syncs, and no earlier saves are kept)
+            a = m.addAction(tr("menu.sync_now"), lambda: self.sync_now([g]))
+            a.setEnabled(self.light_state(g.game_id) in ("push", "pull", "conflict") and self.worker is None
+                         and self.syncer is None)
         a = m.addAction(tr("menu.open_saves"), lambda: open_folder(mine.save_dir))
         a.setEnabled(bool(mine.save_dir))
         a = m.addAction(tr("menu.open_game"), lambda: open_folder(str(Path(mine.exe).parent)))
         a.setEnabled(bool(mine.exe))
-        a = m.addAction(tr("menu.restore"), self.restore_selected)
-        a.setEnabled(bool(mine.save_dir) and self.worker is None)
+        if not self.settings.solo:
+            a = m.addAction(tr("menu.restore"), self.restore_selected)
+            a.setEnabled(bool(mine.save_dir) and self.worker is None)
         m.addSeparator()
         a = m.addAction(tr("game.remove"), lambda: self.remove_game(g.game_id))
         a.setEnabled(self.worker is None)             # not while a game is running or syncing
@@ -9693,7 +10165,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         g = self.games.get(gid)
         if g is None or self.worker is not None:
             return
-        how = confirm_remove(self, self.library.get(gid) or g, self.settings.machine_name)
+        how = confirm_remove(self, self.library.get(gid) or g, self.settings.machine_name, solo=self.settings.solo)
         if how:
             before = self._positions()
             removed = remove_game_from(self.library, gid, self.settings.machine_name, how)
@@ -9885,6 +10357,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.presence.stop()                  # (Discord: no "Reading" left behind)
             os._exit(0)  # the game keeps running; nothing of ours is mid-write while we only watch it
         self.presence.stop()                      # Discord shows nothing once Ikemen Reader has closed
+        if self.settings.solo:
+            try:
+                backup_solo_library(self.app_dir)     # (a solo library lives on one disk only)
+            except OSError:
+                pass
         if self.checker:
             self.checker.wait(5000)       # (it may be uploading saves made outside Ikemen Reader)
         if self._update_ready is not None and updater.FROZEN:
@@ -10149,8 +10626,13 @@ def main() -> None:
     app.setStyleSheet(build_style())
     if settings is not None:
         i18n.set_language(settings.language)
-    if settings is None or not settings.cloud_root:
-        d = SettingsDialog(None, welcome=True)
+    if settings is None or (not settings.cloud_root and not settings.solo):
+        # a new setup (never asked of existing two-device users): one computer = My Device (owner's plan)
+        how = message(None, tr("first.body"), tr("first.title"),
+                      [("one", tr("first.one")), ("two", tr("first.two"))], dismiss="quit") if settings is None else "two"
+        if how == "quit":
+            return
+        d = SettingsDialog(None, welcome=True, solo=how == "one")
         if not d.exec():
             return
         settings = d.result_settings

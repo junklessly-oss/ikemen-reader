@@ -139,14 +139,21 @@ class LocalSettings:
     last_sort: str = "hours"          # the automatic sort used last (My Arrangement's folder options use it)
     anki_path: str = ""               # anki.exe on this device (opened from the easter egg)
     discord: bool = False             # Discord presence (Browsing / Reading / Tweaking / Away); per device, off at first
+    solo: bool = False                # A Solo Device: no syncing, its own library copy (machine_name / cloud_root are
+                                      # kept as they were: going back to Dual fills them in again)
+
+    @property
+    def library_root(self) -> str:
+        """Where the library lives: the cloud folder, or a solo device's own copy on this computer."""
+        return str(solo_dir()) if self.solo else self.cloud_root
 
 
 def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSettings]:
     f = (app_dir or default_app_dir()) / "settings.json"
     try:
         data = json.loads(f.read_text("utf-8"))
-        if not isinstance(data.get("cloud_root"), str) or not data.get("cloud_root"):
-            return None
+        if not isinstance(data.get("cloud_root"), str) or (not data.get("cloud_root") and data.get("solo") is not True):
+            return None                   # (a solo device may never have had a cloud folder)
         if "theme" not in data and data.get("light_mode") is True:   # settings from before themes
             data["theme"] = "light"
         s = LocalSettings(**_known(LocalSettings, data))
@@ -166,6 +173,7 @@ def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSetting
         s.status_filter = "all"
     if s.theme not in ("dark", "light", "custom"):
         s.theme = "dark"
+    s.solo = s.solo is True
     import math
     fin = lambda v, d: v if math.isfinite(v) else d          # (a hand-edited "NaN" or "Infinity")
     s.bg_opacity = min(1.0, max(0.0, fin(s.bg_opacity, 0.35)))
@@ -175,6 +183,85 @@ def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSetting
     s.custom_colors = {k: v for k, v in (s.custom_colors if isinstance(s.custom_colors, dict) else {}).items()
                        if isinstance(k, str) and isinstance(v, str) and _re.fullmatch(r"#[0-9A-Fa-f]{6}", v)}
     return s
+
+
+SOLO_PARTS = ("games", "artwork", "folders.json", "order.json")   # the library itself (not saves / devices / settings)
+SOLO_START = "solo-start.json"     # the shared library as it was when solo began (file times), for the merge
+
+
+def _mtime(f: Path) -> int:
+    try:
+        return f.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def solo_dir(app_dir: Optional[Path] = None) -> Path:
+    """A solo device's own library (same layout as the cloud folder's, minus the saves)."""
+    return (app_dir or default_app_dir()) / "solo"
+
+
+def backup_solo_library(app_dir: Optional[Path] = None, keep: int = 5) -> Optional[Path]:
+    """A small copy of the solo library (titles, time read, statuses, folders, covers - not the games or saves), the
+    last `keep` kept: on a solo device it exists on one disk only (owner's plan). Made on closing and before the
+    merge back to Dual. Invisible: no settings."""
+    src = solo_dir(app_dir)
+    if not (src / "games").is_dir():
+        return None
+    base = (app_dir or default_app_dir()) / "solo backups"
+    dest = base / time.strftime("%Y-%m-%d %H-%M-%S")
+    n = 2
+    while dest.exists():
+        dest = base / (time.strftime("%Y-%m-%d %H-%M-%S") + f" ({n})")
+        n += 1
+    tmp = dest.with_name(dest.name + ".partial")
+    shutil.rmtree(tmp, ignore_errors=True)
+    for part in SOLO_PARTS + (SOLO_START,):
+        p = src / part
+        if p.is_dir():
+            shutil.copytree(p, tmp / part)
+        elif p.is_file():
+            tmp.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, tmp / part)
+    tmp.rename(dest)
+    old = sorted((d for d in base.iterdir() if d.is_dir() and not d.name.endswith(".partial")),
+                 key=lambda d: d.stat().st_mtime)
+    for d in old[:-keep]:
+        shutil.rmtree(d, ignore_errors=True)
+    return dest
+
+
+def start_solo_library(cloud_root: str, app_dir: Optional[Path] = None) -> Path:
+    """Going solo: this computer's own copy of the shared library, made fresh from the cloud folder (when there is
+    one: a new solo device starts empty). Nothing in the cloud folder changes. An older copy is replaced."""
+    root = solo_dir(app_dir)
+    fresh = root.with_name("solo.new")
+    shutil.rmtree(fresh, ignore_errors=True)
+    fresh.mkdir(parents=True)
+    src = Path(cloud_root) if cloud_root else None
+    if src is not None and src.is_dir():
+        for part in SOLO_PARTS:
+            p = src / part
+            if p.is_dir():
+                shutil.copytree(p, fresh / part)
+            elif p.is_file():
+                shutil.copy2(p, fresh / part)
+    (fresh / "games").mkdir(exist_ok=True)
+    # what the shared library looked like when solo began: going back to Dual tells from it what changed where
+    snap = {"time": time.time(), "games": {}, "folders": _mtime(fresh / "folders.json"),
+            "order": _mtime(fresh / "order.json")}
+    for f in (fresh / "games").glob("*.json"):
+        snap["games"][f.stem] = _mtime(f)
+    _atomic_write(fresh / SOLO_START, json.dumps(snap))
+    if root.exists():
+        old = root.with_name("solo.old")
+        shutil.rmtree(old, ignore_errors=True)
+        root.rename(old)
+        fresh.rename(root)
+        shutil.rmtree(old, ignore_errors=True)
+    else:
+        fresh.rename(root)
+    return root
 
 
 def save_local_settings(settings: LocalSettings, app_dir: Optional[Path] = None) -> None:
@@ -825,3 +912,142 @@ def title_sort_key(title: str) -> tuple:
             group = 0
         out.append((group, ch))
     return tuple(out)
+
+
+# --------------------------------------------------------------------------- back to Dual: the merge
+def _solo_start(root: Path) -> dict:
+    try:
+        d = json.loads((root / SOLO_START).read_text("utf-8"))
+        return d if isinstance(d, dict) and isinstance(d.get("games"), dict) else {"games": {}}
+    except (OSError, ValueError):
+        return {"games": {}}
+
+
+def _exe_name(exe: str) -> str:
+    return Path(exe.replace("\\", "/")).name if exe else ""
+
+
+def _same_game(g: Game, other: Game, machine: str) -> bool:
+    """Added here while solo, and another device added the same game meanwhile (matched like "Set Up on This
+    Device": the same exe file name or title; names many games share don't count)."""
+    from titles import is_engine_name, is_generic_name
+    mine = _exe_name(g.paths_for(machine).exe)
+    stem = Path(mine).stem
+    name = "" if not mine or is_generic_name(stem) or is_engine_name(stem) else mine.casefold()
+    names = {_exe_name(p.exe).casefold() for m, p in other.paths.items() if p.exe and m != machine}
+    titles = {t.casefold() for t in (g.title, g.auto_title) if t and not is_engine_name(t) and not is_generic_name(t)}
+    theirs = {t.casefold() for t in (other.title, other.auto_title) if t}
+    return bool((name and name in names) or titles & theirs)
+
+
+def solo_joins(cloud_root: str, machine: str, app_dir: Optional[Path] = None) -> list[tuple[Game, Game]]:
+    """Games added on this computer while solo that the shared library also gained meanwhile (another device added
+    them, not set up here): (solo game, shared game) - the owner chooses whether each pair becomes one game."""
+    root = solo_dir(app_dir)
+    start = _solo_start(root)["games"]
+    C = Library(cloud_root)
+    shared = [g for g in C.list_games() if not g.paths_for(machine).exe]
+    out, taken = [], set()
+    for g in Library(root).list_games():
+        if g.game_id in start or not g.paths_for(machine).exe or C._file(g.game_id).exists():
+            continue
+        match = next((o for o in shared if o.game_id not in taken and _same_game(g, o, machine)), None)
+        if match is not None:
+            taken.add(match.game_id)
+            out.append((g, match))
+    return out
+
+
+def merge_solo(cloud_root: str, machine: str, joins: Optional[dict] = None, app_dir: Optional[Path] = None) -> dict:
+    """Back to Dual (owner's plan): this computer's solo library goes into the shared one. Per game, the details (title,
+    cover, status, folder...) of the side changed most recently win; this computer's own setup, time read and dates
+    always come from the solo copy, the other devices' from the shared one - nothing is lost. Games added while solo
+    join the library (or become one with the shared game in `joins`: solo id -> shared id); games removed here while
+    solo leave this device's library. Folders / My Arrangement: the side changed last wins, the rest go at the end.
+    Nothing changed since solo -> nothing happens. Returns counts (added / updated / joined / removed)."""
+    root = solo_dir(app_dir)
+    S, C = Library(root), Library(cloud_root)
+    C.games_dir.mkdir(parents=True, exist_ok=True)
+    C.art_dir.mkdir(parents=True, exist_ok=True)
+    snap = _solo_start(root)
+    start = snap["games"]
+    joins = dict(joins or {})
+    report = {"added": 0, "updated": 0, "joined": 0, "removed": 0}
+
+    def copy_art(g: Game) -> None:
+        src = S.art_dir / g.artwork if g.artwork else None
+        if src is not None and src.is_file():
+            dest = C.art_dir / g.artwork
+            if not dest.exists() or _mtime(dest) != _mtime(src):
+                shutil.copy2(src, dest)
+
+    def combine(details: Game, solo: Game, shared: Optional[Game], gid: str) -> Game:
+        g = Game(**{**details.__dict__, "game_id": gid})
+        paths = dict(shared.paths) if shared else {}
+        play = dict(shared.playtime) if shared else {}
+        by = dict(shared.last_played_by) if shared else {}
+        removed = dict(shared.removed_on) if shared else {}
+        for d, src in ((paths, solo.paths), (play, solo.playtime), (by, solo.last_played_by), (removed, solo.removed_on)):
+            d.pop(machine, None)
+            if machine in src:
+                d[machine] = src[machine]
+        g.paths, g.playtime, g.last_played_by, g.removed_on = paths, play, by, removed
+        g.last_played = max(solo.last_played, shared.last_played if shared else 0.0)
+        return g
+
+    solo_games = {g.game_id: g for g in S.list_games()}
+    renamed = {}                                       # solo id -> shared id (joined)
+    for gid, sg in solo_games.items():
+        target = C.get(joins[gid]) if gid in joins else None
+        if target is not None:
+            newer = _mtime(S._file(gid)) >= _mtime(C._file(target.game_id))
+            if newer:
+                copy_art(sg)
+            C.save(combine(sg if newer else target, sg, target, target.game_id))
+            renamed[gid] = target.game_id
+            report["joined"] += 1
+            continue
+        cg = C.get(gid)
+        changed_s = _mtime(S._file(gid)) != start.get(gid)
+        if cg is not None:
+            if not changed_s:
+                continue                               # (nothing changed here: the shared copy stands)
+            changed_c = _mtime(C._file(gid)) != start.get(gid)
+            solo_wins = not changed_c or _mtime(S._file(gid)) >= _mtime(C._file(gid))
+            if solo_wins:
+                copy_art(sg)
+            C.save(combine(sg if solo_wins else cg, sg, cg, gid))
+            report["updated"] += 1
+        elif gid not in start or changed_s:
+            # added while solo - or removed on another device meanwhile but read / changed here: kept
+            copy_art(sg)
+            C.save(sg)
+            report["added" if gid not in start else "updated"] += 1
+    for gid in start:                                 # removed here while solo: leaves this device's library
+        if gid not in solo_games:
+            cg = C.get(gid)
+            if cg is not None and cg.paths_for(machine).exe:
+                C.remove_here(gid, machine)
+                report["removed"] += 1
+
+    def solo_newer(name: str) -> bool:
+        """The solo copy's file changed more recently (or only it changed)."""
+        s_t, c_t, at = _mtime(root / name), _mtime(C.root / name), snap.get(name.split(".")[0], 0)
+        if s_t == at:
+            return False
+        return c_t == at or s_t >= c_t
+    sf, cf = S._folders_raw(), C._folders_raw()
+    if sf != cf:
+        base, rest = (sf, cf) if solo_newer("folders.json") else (cf, sf)
+        merged = {**rest, **base}
+        for v in merged.values():
+            v["order"] = [renamed.get(x, x) for x in v["order"]]
+        _atomic_write(C.folders_file, json.dumps(merged, ensure_ascii=False, indent=2))
+    so, co = S.library_order(), C.library_order()
+    if so != co:
+        first, second = (so, co) if solo_newer("order.json") else (co, so)
+        first = [renamed.get(x, x) for x in first]
+        C.set_library_order(first + [x for x in (renamed.get(y, y) for y in second) if x not in first])
+    for fid in list(C._folders_raw()):
+        C._drop_folder_if_empty(fid)
+    return report

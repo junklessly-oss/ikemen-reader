@@ -621,7 +621,7 @@ def launch_plan(game: Game, settings: LocalSettings) -> tuple[Optional[str], dic
     return None, plan
 
 
-def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngine,
+def play(game: Game, settings: LocalSettings, library: Library, engine: Optional[SyncEngine],
          on_conflict: Optional[ConflictResolver] = None,
          status: Callable[[str], None] = print,
          poll: float = 1.0, grace: float = 2.0,
@@ -633,7 +633,8 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
     appear), "playing" and "done". stop/force: the Stop button (see run()).
     without: launch options to skip this time ("luna", "le") after the UI asked the owner.
     If this device has no save folder yet, the game runs without syncing and the result carries
-    detected save-location candidates for the owner to confirm (see finish_first_play)."""
+    detected save-location candidates for the owner to confirm (see finish_first_play).
+    engine None = a solo device: no syncing at all (and so nothing to detect) - the game just runs."""
     machine = settings.machine_name
     mine = game.paths_for(machine)
     if not mine.exe or not Path(mine.exe).is_file():
@@ -660,13 +661,13 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
             # Luna is open and certainly not busy with a game: it can be closed for you (Close Luna)
             return PlayResult(False, problem, retry_without="close_luna")
         return PlayResult(False, problem, retry_without="luna" if "luna" in problem else "le")
-    if mine.save_dir:
+    if mine.save_dir and engine is not None:
         unsafe = save_folder_problem(mine.save_dir, engine.cloud_root)
         if unsafe:
             return PlayResult(False, unsafe)
 
-    detecting = not mine.save_dir
-    if not detecting and not watch:          # watching: the running game has the saves loaded already
+    detecting = not mine.save_dir and engine is not None
+    if not detecting and not watch and engine is not None:   # watching: the running game has its saves loaded
         on_phase("syncing")
         status("status.checking")
         try:
@@ -726,7 +727,7 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngi
             except (OSError, ValueError):
                 result.candidates = []
             result.message = "play.detected" if result.candidates else "play.detect_none"
-        else:
+        elif engine is not None:
             status("status.closed_syncing")
             try:
                 after = engine.after_exit(game.game_id, mine.save_dir, on_conflict, game.registry_key)

@@ -515,6 +515,37 @@ S: dict[str, tuple[str, str]] = {
     "lang.ja":                  ("日本語", "日本語"),
     "settings.device":          ("This Is", "この端末は"),
     "settings.device_n":        ("Device {n}", "端末{n}"),
+    "settings.device_solo":     ("My Device", "マイ端末"),
+    "settings.mode":            ("Mode", "モード"),
+    "settings.dual":            ("Dual Device", "デュアル端末"),
+    "stats.unknown":            ("Unknown", "不明"),
+    "first.title":              ("Welcome", "ようこそ"),
+    "first.body":               ("Is Ikemen Reader for one computer, or for two that share their saves?\n\nYou can change this later in Settings.",
+                                 "Ikemen Readerを1台のパソコンで使いますか？それとも2台でセーブを共有しますか？\n\nあとから設定で変更できます。"),
+    "first.one":                ("One Computer", "1台で使う"),
+    "first.two":                ("Two Computers", "2台で使う"),
+    "dual.joins_title":         ("Same Games on Both Devices", "両方の端末に同じゲーム"),
+    "dual.joins_body":          ("While this computer was on its own, these games were added here and on the other device too:\n\n{titles}\n\nJoined, each one becomes a single game with both devices' time read and dates.",
+                                 "この端末を単独で使っている間に、次のゲームがここと別の端末の両方に追加されました：\n\n{titles}\n\nまとめると、それぞれ1つのゲームになり、両方の端末の読書時間と日付が合わさります。"),
+    "dual.ask_each":            ("Ask for Each", "1つずつ選ぶ"),
+    "dual.join_all":            ("Join All", "すべてまとめる"),
+    "dual.join_one":            ("\"{mine}\" here and \"{theirs}\" on the other device look like the same game.",
+                                 "この端末の「{mine}」と別の端末の「{theirs}」は同じゲームのようです。"),
+    "dual.keep_separate":       ("Keep Separate", "別々にする"),
+    "dual.join":                ("Join", "まとめる"),
+    "dual.saves_title":         ("Saves Changed on Both", "両方で変わったセーブ"),
+    "dual.saves_body":          ("These games' saves changed on this computer and in the cloud while this computer was on its own. Choose which saves to keep for each one. The other copy is backed up, so nothing is lost.",
+                                 "この端末を単独で使っている間に、次のゲームのセーブがこの端末とクラウドの両方で変わりました。それぞれ残すセーブを選んでください。もう一方はバックアップされるので、失われません。"),
+    "dual.this_computer":       ("This Computer", "この端末"),
+    "dual.cloud":               ("Cloud", "クラウド"),
+    "dual.newest_all":          ("Keep Newest for All", "すべて新しい方を残す"),
+    "dual.keep_these":          ("Keep These", "これで決定"),
+    "dual.later":               ("Later", "後で"),
+    "status.dual_merged":       ("Dual Device: this computer's library is part of the shared one again.",
+                                 "デュアル端末：この端末のライブラリが共有ライブラリに戻りました。"),
+    "status.dual_merged:line":  ("Dual Device: the libraries are joined.", "デュアル端末：ライブラリを統合しました。"),
+    "settings.dual_tip":        ("Use Ikemen Reader on two computers again, with saves synced through your cloud service.",
+                                 "2台のパソコンで使う設定に戻します。セーブはクラウドサービスで同期されます。"),
     "settings.device_hint":     ("Choose Device 1 on one computer and Device 2 on the other. That's how Ikemen Reader tells them apart.",
                                  '片方のパソコンでは端末1、もう片方では端末2を選んでください。イケメンリーダーはこれで端末を区別します。'),
     "settings.device_taken":    ('Device {n} is already used by another computer ({computer}). Use Device {other} instead?',
@@ -782,6 +813,20 @@ def playtime_parts(seconds: float) -> list[tuple[str, str]]:
     if h == 0:
         return [(str(rem // 60), "分" if ja else "m")]
     return [(str(h), "時間" if ja else "h"), (str(rem // 60) if ja else f"{rem // 60:02d}", "分" if ja else "m")]
+
+
+def playtime_words(seconds: float) -> str:
+    """Playtime spelled out, for a solo device's hover box: 12 Hours 5 Minutes / 12時間5分 (owner's plan)."""
+    seconds = int(seconds)
+    ja = _lang == "ja"
+    if seconds < 60:
+        return f"{seconds}秒" if ja else f"{seconds} Second{'' if seconds == 1 else 's'}"
+    h, rem = divmod(seconds, 3600)
+    m = rem // 60
+    if ja:
+        return (f"{h}時間" if h else "") + (f"{m}分" if m or not h else "")
+    parts = ([f"{h} Hour{'' if h == 1 else 's'}"] if h else []) + ([f"{m} Minute{'' if m == 1 else 's'}"] if m or not h else [])
+    return " ".join(parts)
 
 
 def date(ts: float) -> str:
