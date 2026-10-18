@@ -3124,19 +3124,27 @@ class SmoothHoverPopups(unittest.TestCase):
                     w.worker, w.playing_id = object(), g.game_id
                     w._on_phase("playing")
                     w._on_phase("syncing")                # the game closed: uploading...
-                    end = time.monotonic() + sync_seconds
+                    start = time.monotonic()
+                    end = start + sync_seconds
                     while time.monotonic() < end:
                         QApplication.processEvents()
                         seen.add((w.play_btn.text(), w.light_state(g.game_id)))
                         time.sleep(0.005)
                     w.worker, w.playing_id = None, None   # ...done
+                    took = time.monotonic() - start
                     w._on_phase("done")
                     seen.add((w.play_btn.text(), w.light_state(g.game_id)))
-                    return seen
+                    return seen, took
 
-                quick = session(0.1)
+                # (a busy test run can stall the loop past SYNC_SHOW_AFTER_S: then that "quick" sync really wasn't
+                # quick, and showing it was right - try again; failed twice in full runs on 2026-10-18)
+                for _ in range(3):
+                    quick, took = session(0.1)
+                    if took < app.SYNC_SHOW_AFTER_S * 0.8:
+                        break
+                self.assertLess(took, app.SYNC_SHOW_AFTER_S * 0.8)
                 self.assertFalse(any(l == "syncing" for t, l in quick))       # too quick: never shown
-                slow = session(0.8)
+                slow, _ = session(0.8)
                 self.assertIn("syncing", {l for t, l in slow})                # the light shows it while it lasts
                 self.assertEqual({t for t, l in quick | slow} - {app.tr("bar.stop"), app.tr("bar.play")}, set())
                 self.assertEqual(w.play_btn.text(), app.tr("bar.play"))      # (the button: only Read / Stop)
@@ -3963,6 +3971,203 @@ class FewerGuesses(unittest.TestCase):
                 self.assertFalse(asked.called)                          # no Choose Now / Later step
                 self.assertEqual([x.game_id for x in now.call_args[0][0]], [g.game_id])
                 self.assertEqual(w._ask_now, set())
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class QuickThemePreview(unittest.TestCase):
+    """2026-10-18 (owner: the Custom Theme preview lagged): while Custom Theme is open the style sheet sits on the
+    outermost window instead of the whole app (each live step ~52 ms instead of ~131); closing puts it back."""
+
+    def test_sheet_moves_while_open(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            qa = QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            seen = {}
+
+            def opened(dlg):
+                seen["root"] = app._SHEET_ROOT[0]
+                seen["app_sheet"] = qa.styleSheet()
+                c = dict(dlg.colors)
+                c["bg"] = "#123456"
+                dlg.preview(c)                                          # a live step
+                seen["window_sheet"] = w.styleSheet()
+                return 0                                                # Cancel
+            try:
+                qa.setStyleSheet(app.build_style())
+                d = app.SettingsDialog(w.settings, w)
+                with mock.patch.object(app.ThemeDialog, "exec", opened):
+                    d._choose_theme("custom")
+                self.assertIs(seen["root"], w)                          # on the main window while open...
+                self.assertEqual(seen["app_sheet"], "")
+                self.assertIn("#123456", seen["window_sheet"].upper())  # ...and the live step went there
+                self.assertIsNone(app._SHEET_ROOT[0])                   # closed: back on the app
+                self.assertEqual(w.styleSheet(), "")
+                self.assertNotIn("#123456", qa.styleSheet().upper())    # (Cancel: the original look)
+                self.assertTrue(qa.styleSheet())
+                d.reject()
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class DropDownWordFades(unittest.TestCase):
+    """2026-10-18 (owner): picking in the top bar's sort / status filter fades the box's words with the covers (out as
+    they leave, in with the first arriving one); Settings' Language / Device at the bottom status drop-down's pace."""
+
+    def test_words_fade(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            qa = QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            for i, t in enumerate(("Zeta", "Alpha", "Mu")):
+                lib.add_game(t, "PC", exe=rf"C:\g{i}\x.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.show()
+                w.refresh()
+                qa.processEvents()
+                w.sort.repaint()
+                old = w.sort.painted
+                i = w.sort.findData("title" if w.settings.sort != "title" else "hours")
+                w.sort.setCurrentIndex(i)
+                w.sort.activated.emit(i)
+                self.assertEqual(w.sort._words[0], old)                 # fading from the click on
+                t0 = w.sort._words[1]
+                for _ in range(20):
+                    qa.processEvents()
+                self.assertEqual(w.sort._words[1], t0)                  # the sort landing kept its clock
+                self.assertEqual(w.sort._words[2], max(w.arrive_wait, 0.05))   # new words come in with the first cover
+                w.filter.repaint()
+                old = w.filter.painted
+                w.filter.setCurrentIndex(w.filter.findData("reading"))
+                self.assertEqual(w.filter._words[0], old)
+                d = app.SettingsDialog(w.settings, w)
+                d.show()
+                d.device.repaint()
+                old = d.device.painted
+                j = 1 - d.device.currentIndex()
+                d.device.setCurrentIndex(j)
+                d.device.activated.emit(j)
+                self.assertEqual(d.device._words[:3], (old, d.device._words[1], app.BAR_OUT_S))
+                self.assertEqual(d.device._words[3], app.BAR_IN_S)
+                d.reject()
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class QuickSettingsClose(unittest.TestCase):
+    """2026-10-18 (owner: Settings lagged hard on close): with the same cloud folder and device, Save doesn't read or
+    write the cloud folder on the window's thread (Google Drive kept it waiting seconds); Cancel doesn't re-style the
+    app unless a theme was previewed; Settings opens without Windows' see-through open animation."""
+
+    def test_no_cloud_work_on_save(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            Library(cloud).add_game("Sakura", "PC", exe=r"C:\g\x.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.refresh()
+                lib = w.library
+                d = app.SettingsDialog(w.settings, w)
+                with mock.patch.object(app.Library, "slot_owner") as owner, \
+                        mock.patch.object(app.Library, "claim_slot") as claim, \
+                        mock.patch.object(app, "restyle_all") as restyle:
+                    d.pulse.setChecked(False)
+                    d._save()
+                    w.apply_settings(d.result_settings)
+                    owner.assert_not_called()
+                    claim.assert_not_called()
+                    self.assertIs(w.library, lib)                       # nothing set up again
+                    d2 = app.SettingsDialog(w.settings, w)
+                    d2.reject()
+                    restyle.assert_not_called()                         # Cancel with nothing previewed
+                app.wait_for_tasks(5)
+                self.assertEqual(len(w.games), 1)                       # (re-read in the background)
+                d3 = app.SettingsDialog(w.settings, w)
+                d3.device.setCurrentIndex(1 - d3.device.currentIndex())
+                with mock.patch.object(app.Library, "slot_owner", return_value=None) as owner:
+                    d3._save()
+                    owner.assert_called()                               # a new device number: checked as before
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class LiveColourDrag(unittest.TestCase):
+    """2026-10-18 (owner: "liquid smooth" colour picking): while the colour picker is open, each step is drawn from
+    two pictures (the role black / white) on a layer over each window - every step at once; the real look is put
+    back underneath when the picker closes, and the lights pause meanwhile without jumping."""
+
+    def test_picker_drag(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication, QColorDialog
+            from PySide6.QtGui import QColor
+            import app
+            qa = QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            Library(cloud).add_game("Sakura", "PC", exe=r"C:\g\x.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            seen = {}
+            try:
+                w.show()
+                w.refresh()
+                qa.processEvents()
+                d = app.SettingsDialog(w.settings, w)
+                d.show()
+                td = app.ThemeDialog(app.theme_colors("dark"), lambda c: d._preview("custom", c), d)
+                td.show()
+                qa.processEvents()
+
+                def drag(picker):
+                    live = td._live
+                    seen["live"] = live is not None and live.role == "bg"
+                    seen["layers"] = len(live.parts)
+                    seen["held"] = app.PULSE_HOLD[0] is not None
+                    with mock.patch.object(app, "restyle_all") as restyle:
+                        for h in range(0, 360, 30):                       # the drag: no restyle at all
+                            picker.currentColorChanged.emit(QColor.fromHsv(h, 120, 90))
+                        seen["restyles"] = restyle.call_count
+                    canvas = live.parts[0][4]                             # the main window's picture follows
+                    seen["shown"] = canvas.pixelColor(10, 120).name()
+                    picker.setCurrentColor(QColor("#2E6B4A"))
+                    return 1
+                with mock.patch.object(QColorDialog, "exec", drag):
+                    td._pick("bg")
+                self.assertTrue(seen["live"])
+                self.assertEqual(seen["layers"], 2)                       # main window + Settings
+                self.assertTrue(seen["held"])
+                self.assertEqual(seen["restyles"], 0)
+                self.assertEqual(seen["shown"], QColor.fromHsv(330, 120, 90).name())
+                self.assertIsNone(td._live)                               # closed: layers gone, real look back
+                self.assertIsNone(app.PULSE_HOLD[0])
+                self.assertEqual(app.COLORS["bg"].upper(), "#2E6B4A")
+                qa.processEvents()
+                self.assertEqual([c for c in w.findChildren(app._ColourLayer) if c.isVisible()], [])
+                td.reject()
+                d.reject()
             finally:
                 w.close()
                 app.wait_for_tasks(5)

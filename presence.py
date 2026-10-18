@@ -20,7 +20,7 @@ CLIENT_ID = "1561206702357872735"            # "Ikemen Reader"
 # change it, so Japanese uses a second application named イケメンリーダー (owner, 2026-10-17). Same pictures in both.
 CLIENT_IDS = {"en": CLIENT_ID, "ja": "1561208897988071475"}
 
-RETRY_S = 60.0                 # Discord not running: try again this often
+RETRY_S = 10.0                 # Discord not running: try again this often (owner: picked up within ~10 s)
 
 
 class Presence:

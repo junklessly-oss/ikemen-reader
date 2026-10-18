@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 227 tests (2026-10-17), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 231 tests (2026-10-18), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -784,7 +784,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   / ends. Picture by the logo colours IN USE: a dark logo (Light theme, custom from Light) -> "logo_light", else
   "logo" (custom from Dark included). Hover: N Games in Library. Two Discord applications because Discord shows the
   APPLICATION'S NAME: CLIENT_IDS en "Ikemen Reader" 1561206702357872735, ja "イケメンリーダー" 1561208897988071475
-  (owner made both, same pictures); use_application() reconnects on a language change. Thread + retry ~60 s, clears
+  (owner made both, same pictures); use_application() reconnects on a language change. Thread + retry every 10 s (owner: Discord started later is picked up quickly), clears
   on close. Tests use a stand-in (rpc_class / a mocked presence) - never the owner's real Discord.
 - PULSE SWITCH LIVE (owner, 2026-10-17): ticking Pulsing Sync Lights applies at once (SettingsDialog -> set_pulse;
   Cancel puts the original back). Switched off, each light finishes its breath and rests at the low point = the
@@ -796,7 +796,68 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   updater.FROZEN) it replaces Browsing / Tweaking - that's the owner working on it. Reading and Away still win.
 - Stats line that MOVES (the sync words before it changed length: game -> folder, "Saves Are in Sync" -> "2 Games"):
   BarFader fades it out and in as a whole (StatsLine.end_switch) - its own icon-steady switch drew under the sync
-  words' fade, which cut the calendar icon in half. In place: the icon-steady switch as before.
+  words' fade, which cut the calendar icon in half. In place: the icon-steady switch as before. In that switch a
+  group (icon + its words) moves as ONE unit, and only when it can't cross numbers: moving right during the fade-out,
+  moving left during the fade-in (_paint_switch.at) - the calendar slid over the time ("12h 05m" -> "5m").
+  BarFader covers the overlap of pieces fading in step only once (the doubled cover ate a letter of the sync words
+  for a moment, folder -> game).
+- QUICKER CUSTOM THEME PREVIEW (2026-10-18, plan item 4): a live colour step cost ~140 ms, almost all of it
+  QApplication.setStyleSheet re-styling every widget (70 ms even for an EMPTY sheet). While Custom Theme is open the
+  sheet sits on the OUTERMOST window instead (sheet_on(root) in _choose_theme; Settings, Custom Theme, the colour
+  picker and drop-downs are its children and inherit it): 131 -> 52 ms a step, pixel-identical; closed -> back on the
+  app (sheet_on(None)). Simulated picker drag: freezes 160 -> 78 ms, window 4 -> 6 updates/s, picker steps 67 -> 89
+  of 187. Tried and dropped: the sheet on each open window ON TOP of the app's (Qt merges both: slower, 155 ms);
+  shorter waits than 80 ms (the window updates more, but the picker itself gets choppier). Test: QuickThemePreview.
+- LIVE COLOUR DRAG (owner, 2026-10-18: "liquid smooth", 60 fps like the live background): QSS can't (any sheet change
+  rebuilds every widget's styling: 70 ms even empty, 43 on one window; palette(role) in QSS doesn't follow palette
+  changes - tested). LiveColour: every pixel is linear in any ONE colour role, so while the colour picker is open
+  (ThemeDialog._pick) each window (main + Settings; not Custom Theme / the picker) is drawn once with the role
+  #000000 and once #FFFFFF (two restyles + grabs, then the real look restyled back underneath: ~215 ms set-up as
+  the picker opens). A step = black + Difference(white, black) Multiply-tinted with the colour, Plus-ed (~1 ms) on a
+  _ColourLayer (opaque, click-through) over each window. Measured: ~140 redraws/s at 143 Hz (every frame), gaps
+  <= 19 ms; vs the real restyle 99.95 % of pixels identical, rest <= 7/255 (text gamma / derived shades). Picker
+  closed: preview(colors) underneath, then finish() removes the layers - no visible jump. The lights PAUSE meanwhile
+  (hold_pulse / PULSE_HOLD: paint_light's clock stops, PULSE_EPOCH shifts by the pause) - else they breathed under
+  the still picture and jumped at the end. Hex typing / Start From still use the 80 ms restyle path.
+  Test: LiveColourDrag. SmoothHoverPopups' quick-sync check now retries when a busy full run stalled the loop past
+  SYNC_SHOW_AFTER_S (it then wasn't quick: failed 2x in full runs).
+- Discord: when it isn't running, the connection is retried every 10 s (presence.RETRY_S; owner).
+- DROP-DOWN WORD FADES (owner, 2026-10-18): a pick in the top bar's sort / status filter fades the box's words with
+  the covers - old words out on the leaving covers' ease, new ones in from MainWindow.arrive_wait (the first arriving
+  cover's start, set where the arrivals are queued) on their curve, stretched by MainWindow.arrive_span (the stagger)
+  so they settle with the LAST cover (owner, 2026-10-18: past three covers it stopped looking uniform) (ThemedCombo.fade_words; the sort fade
+  starts at the click - choose_sort runs a moment later and keeps that clock - so the new words never show for a
+  frame first). Settings' Language + This Device (ThemedCombo.fade_on_pick): the bottom status drop-down's pace and
+  curves (BAR_OUT_S out, BAR_IN_S in, ease). Language was taken off once (looked weird: the blank frame below), then
+  put back by the owner once that was fixed - timed "at_once": the old words go in the same instant as every other
+  word in the window, the new ones fade in from there (BAR_IN_S). Test: DropDownWordFades.
+- Language switch in Settings: nothing is drawn until it's all done (setUpdatesEnabled off on Settings + the main
+  window) and Settings gets its new size in ONE step (_fit_height(sizeHint width); adjustSize first shrank it, then
+  _fit_height grew it back: a blank / see-through frame where the covers showed - owner, 2026-10-18). Real-screen
+  check: 1 blank frame -> 0.
+- Language switch: the bottom bar changes at once, no piece fades (MainWindow._bar_lang; Edit faded out and back in
+  on its own - owner, 2026-10-18).
+- SETTINGS OPEN / CLOSE (owner, 2026-10-18: "lags hard on close", covers seen through it on open):
+  * Open: Windows' own open animation (fade + slight zoom, ~250 ms) made Settings see-through (screen pixel went from
+    the cover's red into the Settings colour). no_open_animation(w) = DwmSetWindowAttribute(DWMWA_TRANSITIONS_
+    FORCEDISABLED) on SettingsDialog: it appears fully drawn in one frame. Without the fade Windows showed a new
+    window's TITLE BAR white for a frame before it turned dark (owner: "flash white"; an ordinary pop-up did it in 7
+    of 8 openings even with the fade). Now EVERY pop-up (PopupsToFront, on Show): no fade + cloaked (DWMWA_CLOAK) until
+    its first paint has gone out (_reveal; 250 ms fallback). Watched from a separate process (sampler: GetPixel waits
+    for each screen refresh, so one point = every frame): 0 of 8 for Settings and pop-ups.
+  * "Flickers every 10th open": a GREY title bar for 1-3 frames on EVERY opening (#2B2B2B = unfocused). Not the
+    pop-up's: Settings lies exactly over the main window, and opening a modal pop-up disables the main window, whose
+    title bar went grey while the pop-up was still cloaked. KeepsTitleBar mixin (MainWindow, SettingsDialog):
+    nativeEvent holds back WM_NCACTIVATE(off) while _CLOAKED is non-empty; _reveal (on the first paint) draws the
+    pop-up's title bar focused (WM_NCACTIVATE on), DwmFlush, uncloaks, DwmFlush, then re-posts the held messages and
+    bring_to_front. Pop-ups open with WA_ShowWithoutActivating until revealed. Watched (separate process, one pixel
+    per refresh, 20 openings): 20/20 -> 0 at opening (1 grey frame seen once, at a close).
+  * Save with the same cloud folder + device: no slot check / claim (Library reads + WRITES devices.json on Drive),
+    and apply_settings keeps library + engine and re-reads the library with refresh_soon(keep_files=True) - nothing
+    on Drive from the window's thread. Busy-Drive bench (+0.5 s per cloud read): Save froze 3.5 s -> 9 ms.
+  * Cancel restores the theme / background only if one was previewed (_previewed / _bg_previewed): 129 -> 4 ms.
+  Test: QuickSettingsClose. (test_features.SmoothHoverPopups.test_syncing_shows_only_when_it_takes_a_while failed once
+  in a full run on 2026-10-18, passed 3/3 alone: timing-sensitive.)
 - After a session the time no longer rolls up (owner, 2026-10-17: "more trouble than it's worth"): the numbers show
   the new total, only the clock's hand sweeps (still after the bar has settled). StatsLine._roll / ROLL_GAP removed.
 - LIGHT THEME LOGO (owner, 2026-10-17): theme_colors("light") swaps logo_fill / logo_outline (dark fill, light

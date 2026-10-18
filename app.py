@@ -724,11 +724,31 @@ def restyle_all() -> None:
     """After a theme change: new style sheet, and every open window refreshes what it drew itself."""
     app = QApplication.instance()
     apply_palette()
-    app.setStyleSheet(build_style())
+    root = _SHEET_ROOT[0]
+    (root if root is not None else app).setStyleSheet(build_style())
     app.setWindowIcon(app_icon())
     for w in app.topLevelWidgets():
         if hasattr(w, "restyle"):
             w.restyle()
+
+
+_SHEET_ROOT: list = [None]
+
+
+def sheet_on(root: Optional[QWidget]) -> None:
+    """While Custom Theme is open the style sheet sits on the outermost window (its windows, the colour picker and
+    every drop-down / pop-up inside are its children and inherit it) instead of on the whole app: each live colour
+    step re-styles in ~52 ms instead of ~131 (measured, main window + Settings + Custom Theme open; the preview
+    stepped at ~7 a second). Pixel-identical. None: back on the app (Custom Theme closed)."""
+    app = QApplication.instance()
+    old, _SHEET_ROOT[0] = _SHEET_ROOT[0], root
+    css = build_style()
+    if root is not None:
+        root.setStyleSheet(css)
+        app.setStyleSheet("")
+    elif old is not None:
+        app.setStyleSheet(css)
+        old.setStyleSheet("")
 
 # -- sizes & timing
 COVER_W, COVER_H = 176, 248          # roughly the shape of a VN package
@@ -2025,14 +2045,115 @@ def bring_to_front(w: QWidget) -> None:
     w.activateWindow()
 
 
+def _dwm_flag(w: QWidget, attribute: int, on: bool) -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        from ctypes import wintypes
+        set_attr = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        set_attr.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        value = ctypes.c_int(1 if on else 0)
+        set_attr(wintypes.HWND(int(w.winId())), attribute, ctypes.byref(value), ctypes.sizeof(value))
+    except (OSError, AttributeError, RuntimeError):
+        pass
+
+
+def no_open_animation(w: QWidget) -> None:
+    """Windows' own open / close animation (a fade with a slight zoom, ~250 ms) off for this window: during it the
+    window is see-through, and the covers behind Settings showed through it (owner, 2026-10-18; measured on the
+    screen: the cover's red fading into the Settings colour). It then simply appears - and PopupsToFront keeps it
+    hidden ("cloaked") until its first picture is drawn: without the fade, Windows showed it WHITE for a frame."""
+    _dwm_flag(w, 3, True)                   # DWMWA_TRANSITIONS_FORCEDISABLED
+
+
+_CLOAKED: set = set()          # pop-ups shown but still hidden until drawn (PopupsToFront)
+_HELD_TITLE: set = set()       # windows whose title bar was kept focused-looking meanwhile (hwnds)
+
+
+class KeepsTitleBar:
+    """Mixin for windows pop-ups open over (main window, Settings). Opening a pop-up that blocks this window disables
+    it, and Windows at once draws its title bar in the grey of an unfocused window - while the pop-up, lying exactly
+    over it, is still hidden until drawn: a grey blink of 1-3 frames on every opening (owner, 2026-10-18,
+    "flickers"). While a pop-up is hidden, the "draw unfocused" message (WM_NCACTIVATE off) is held back; it's sent
+    again once the pop-up is on screen and covering it (PopupsToFront._reveal)."""
+
+    def nativeEvent(self, event_type, message):
+        if _CLOAKED and sys.platform == "win32":
+            try:
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0086 and not msg.wParam:          # WM_NCACTIVATE, going unfocused
+                    _HELD_TITLE.add(int(msg.hWnd))
+                    return True, 1                                    # (the change goes ahead; the title bar waits)
+            except (ValueError, TypeError, OSError):
+                pass
+        return super().nativeEvent(event_type, message)
+
+
 class PopupsToFront(QObject):
     """App-wide (owner, 2026-10-17): every pop-up comes to the front of the screen when it opens - e.g. "Force Close"
     while the game's window is on top - and can be covered by other windows afterwards as usual."""
 
     def eventFilter(self, obj, ev) -> bool:
-        if ev.type() == QEvent.Show and isinstance(obj, QDialog) and obj.isWindow():
-            QTimer.singleShot(0, lambda d=obj: shiboken6.isValid(d) and bring_to_front(d))   # (once it's on screen)
+        t = ev.type()
+        if t == QEvent.Show and isinstance(obj, QDialog) and obj.isWindow():
+            # every pop-up appears at once, already drawn (owner, 2026-10-18): no see-through fade-in, and hidden
+            # ("cloaked", DWMWA_CLOAK) until its first picture is on its way - Windows otherwise shows a new window
+            # white for a frame. (Qt sends Show before the window goes on screen.)
+            no_open_animation(obj)
+            _dwm_flag(obj, 13, True)
+            obj.setProperty("cloaked", True)
+            obj.setProperty("painted", None)
+            _CLOAKED.add(obj)
+            # the focus comes AFTER it's shown (_reveal): taking it first turned the main window's title bar grey -
+            # right under where the pop-up was about to appear - for 1-3 frames (owner: "flickers")
+            obj.setAttribute(Qt.WA_ShowWithoutActivating, True)
+            QTimer.singleShot(250, lambda d=obj: self._reveal(d, True))            # (in case one never comes)
+        elif t == QEvent.Paint and isinstance(obj, QDialog) and obj.property("cloaked"):
+            obj.setProperty("painted", True)
+            QTimer.singleShot(0, lambda d=obj: self._reveal(d))   # (after this paint reaches its window)
         return False
+
+    @staticmethod
+    def _reveal(d: QWidget, anyway: bool = False) -> None:
+        """Shown once it's drawn, with its title bar already in the focused look (WM_NCACTIVATE), and only THEN given
+        the focus (bring_to_front): Settings lies exactly over the main window, whose title bar turns grey (#2B2B2B)
+        when the pop-up takes the focus - seen for 1-3 frames in every opening while the pop-up was still hidden."""
+        if not shiboken6.isValid(d) or not d.property("cloaked"):
+            return
+        if not anyway and not d.property("painted"):
+            return
+        d.setProperty("cloaked", None)
+        _CLOAKED.discard(d)
+        if sys.platform == "win32":
+            try:
+                from ctypes import wintypes
+                hwnd = wintypes.HWND(int(d.winId()))
+                send = ctypes.windll.user32.SendMessageW
+                send.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+                send(hwnd, 0x0086, 1, 0)            # WM_NCACTIVATE: the title bar drawn in its focused look
+                # wait for Windows to compose the frame that holds the first picture: uncloaked just before it, the
+                # window could show empty for a frame. At most one screen refresh.
+                ctypes.windll.dwmapi.DwmFlush()
+            except (OSError, AttributeError, RuntimeError):
+                pass
+        _dwm_flag(d, 13, False)
+        d.setAttribute(Qt.WA_ShowWithoutActivating, False)
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.dwmapi.DwmFlush()     # (on screen first - then the windows behind it go unfocused)
+                if not _CLOAKED:
+                    from ctypes import wintypes
+                    post = ctypes.windll.user32.PostMessageW
+                    post.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+                    front = ctypes.windll.user32.GetForegroundWindow()
+                    for hwnd in list(_HELD_TITLE):
+                        if hwnd != front:
+                            post(wintypes.HWND(hwnd), 0x0086, 0, 0)
+                    _HELD_TITLE.clear()
+            except (OSError, AttributeError):
+                pass
+        bring_to_front(d)
 
 
 _POPUPS_TO_FRONT: Optional[PopupsToFront] = None
@@ -2108,10 +2229,18 @@ class BarFader(QWidget):
     def paintEvent(self, ev) -> None:
         now = time.monotonic()
         p = QPainter(self)
+        # pieces fading in step whose areas overlap (the sync words and the stats line beside them): their overlap
+        # is covered ONCE - covered twice, the half-faded cover stacked and ate a letter for a moment
+        covered: dict = {}
         for f in self.pieces.values():
             t = now - f.t0
+            key = (f.t0, f.cross, f.out_s, f.in_s, f.xfade_s, f.delay, id(f.old), id(f.bare))
+            area = QRegion(f.rect).subtracted(covered.get(key, QRegion()))
+            covered[key] = covered.get(key, QRegion()) | QRegion(f.rect)
+            if area.isEmpty():
+                continue
             p.save()
-            p.setClipRect(f.rect)
+            p.setClipRegion(area)
             if f.cross:
                 p.setOpacity(1.0 - ease_cross((t - f.delay) / f.xfade_s))
                 p.drawPixmap(0, 0, f.old)
@@ -2351,27 +2480,34 @@ class StatsLine(QWidget):
         """Values changing on screen: old words / numbers fade out, then the new ones in; an icon in both stays
         fully drawn, gliding from its old place to its new one (only an icon that comes or goes fades)."""
         t = time.monotonic() - self._switch[1]
-        # (the name and the status words' timing: the three change together - owner)
         out_a = 1.0 - ease(min(1.0, t / BAR_OUT_S))
         in_a = ease(max(0.0, min(1.0, (t - BAR_OUT_S) / BAR_IN_S)))
-        glide = ease(min(1.0, t / BAR_OUT_S))    # (in place before the new values appear: never over them)
         x0 = float(self.LEAD)
         was, now = self._placed(self._switch[0], x0), self._placed(new, x0)
         icons_was = {r[1]: x for x, r, _ in was if r[0] == "i"}
         icons_now = {r[1]: x for x, r, _ in now if r[0] == "i"}
+
+        def at(icon: str) -> float:
+            """Where this icon is drawn now. A group (icon + its words) moves as one, and only while the numbers
+            before it can't be crossed (owner, 2026-10-17: the calendar slid over the time): moving RIGHT during
+            the fade-out (away from the old numbers), moving LEFT during the fade-in (the old numbers are gone, and
+            the new ones end before its new place)."""
+            a, b = icons_was[icon], icons_now[icon]
+            g = ease(min(1.0, t / BAR_OUT_S)) if b > a else ease(max(0.0, min(1.0, (t - BAR_OUT_S) / BAR_IN_S)))
+            return a + (b - a) * g
         for x, r, icon in was:
             if r[0] == "t" or (r[0] == "i" and r[1] not in icons_now):
-                # (fading words travel with their group's gliding icon: it never slides over them)
-                shift = (icons_now[icon] - icons_was[icon]) * glide if icon in icons_now else 0.0
+                shift = at(icon) - icons_was[icon] if icon in icons_now and icon in icons_was else 0.0
                 p.setOpacity(out_a)
                 draw_runs(p, x + shift, base, [r], mid)
-        for x, r, _ in now:
+        for x, r, icon in now:
             if r[0] == "i" and r[1] in icons_was:
                 p.setOpacity(1.0)
-                draw_runs(p, icons_was[r[1]] + (x - icons_was[r[1]]) * glide, base, [r], mid)
+                draw_runs(p, at(r[1]), base, [r], mid)
             elif r[0] != "g":
+                shift = at(icon) - icons_now[icon] if icon in icons_was and icon in icons_now else 0.0
                 p.setOpacity(in_a)
-                draw_runs(p, x, base, [r], mid)
+                draw_runs(p, x + shift, base, [r], mid)
         p.setOpacity(1.0)
 
     def _fonts(self) -> tuple[QFont, QFont]:
@@ -2869,6 +3005,19 @@ class CardDelegate(QStyledItemDelegate):
 
 PULSE_OFF_AT: list = [None]       # when pulsing was switched off (monotonic), while the lights still settle
 PULSE_EPOCH: list = [0.0]         # the breathing clock's start: every breath begins at the low point from here
+PULSE_HOLD: list = [None]         # the breathing paused at this moment (LiveColour's picture can't breathe)
+
+
+def hold_pulse(on: bool) -> None:
+    """Pause the lights' breathing where it is / carry on from that same point (nothing jumps either way)."""
+    now = time.monotonic()
+    if on and PULSE_HOLD[0] is None:
+        PULSE_HOLD[0] = now
+    elif not on and PULSE_HOLD[0] is not None:
+        PULSE_EPOCH[0] += now - PULSE_HOLD[0]
+        if PULSE_OFF_AT[0] is not None:
+            PULSE_OFF_AT[0] += now - PULSE_HOLD[0]
+        PULSE_HOLD[0] = None
 
 
 def pulse_phase(period: float, now: float) -> float:
@@ -2907,7 +3056,7 @@ def paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: boo
     s = 0.0
     if pulse != "steady" and (pulsing_on or PULSE_OFF_AT[0] is not None):
         period = PULSE_BUSY_S if pulse == "busy" else PULSE_CALM_S
-        now = time.monotonic()
+        now = PULSE_HOLD[0] or time.monotonic()   # (held: LiveColour)
         # just switched off: finish this breath and rest at its low point - where a still light sits - rather
         # than stopping mid-breath (owner, 2026-10-17)
         e = PULSE_EPOCH[0]
@@ -3299,23 +3448,76 @@ class ThemedCombo(QComboBox):
         self._slide_timer.setInterval(0)                                # paced by time, like the other animations
         self._slide_timer.timeout.connect(self._slide)
         self._watched: Optional[QWidget] = None
+        self.activated.connect(lambda _i: self.fade_on_pick and self.fade_words(
+            self.painted, 0, bar=True, at_once=self.fade_on_pick == "at_once"))
+
+    # a pick fades the words at the bottom bar's pace (Settings). "at_once": the old words go in the same instant
+    # as every other word in the window and the new ones fade in from there (Language: owner, 2026-10-18)
+    fade_on_pick = False
 
     def _box(self) -> QWidget:
         return self.view().parentWidget()          # Qt's frame round the list: the pop-up window itself
 
     blank = False                                  # the box without its words (the status drop-down while reading)
+    painted = ""                                   # the words last drawn (what a pick fades away from)
+    _words: Optional[tuple] = None                 # (old words, since, wait, in_s, bar): words changing on a pick
+
+    def fade_words(self, old: str, wait: float, bar: bool = False, at_once: bool = False, span: float = 0.0) -> None:
+        """Words changing on a pick (owner, 2026-10-18). Top bar's drop-downs: the old words fade out as the covers
+        leave, the new ones fade in from `wait` on, on the arriving covers' own curve (ease out) - starting with the
+        first cover and stretched by `span` (the covers' stagger) so they settle with the LAST one (owner: past three
+        covers it stopped looking uniform). bar=True (Settings' drop-downs): the bottom status drop-down's pace and curve (BAR_OUT_S out,
+        BAR_IN_S in)."""
+        if old == self.currentText() or not self.isVisible():
+            return
+        now = time.monotonic()
+        w = self._words
+        if w is not None and w[0] == old and now - w[1] < 0.05:
+            now = w[1]                             # (the same pick, its timing now known: keep the clock)
+        wait = 0.0 if at_once else BAR_OUT_S if bar else max(wait, 0.05)
+        self._words = (old, now, wait, BAR_IN_S if bar else APPEAR_S + span, bar)
+        if not hasattr(self, "_word_clock"):
+            self._word_clock = VsyncClock(self)
+            self._word_clock.setInterval(0)
+            self._word_clock.timeout.connect(self.update)
+        self._word_clock.start()
+        self.update()
 
     def paintEvent(self, ev) -> None:
-        if not self.blank:
+        words = self._words
+        if words is not None and time.monotonic() - words[1] >= words[2] + words[3]:
+            self._words = words = None
+            self._word_clock.stop()
+        if not self.blank and words is None:
+            self.painted = self.currentText()
             super().paintEvent(ev)
             return
         from PySide6.QtWidgets import QStyleOptionComboBox, QStylePainter
         p = QStylePainter(self)                    # (as QComboBox draws itself, with no text)
         opt = QStyleOptionComboBox()
         self.initStyleOption(opt)
+        text, icon = opt.currentText, opt.currentIcon
         opt.currentText, opt.currentIcon = "", QIcon()
         p.drawComplexControl(QStyle.CC_ComboBox, opt)
-        p.drawControl(QStyle.CE_ComboBoxLabel, opt)
+        if words is None:
+            p.drawControl(QStyle.CE_ComboBoxLabel, opt)
+        else:
+            old, t0, wait, in_s, bar = words
+            t = time.monotonic() - t0
+            k = min(1.0, max(0.0, (t - wait) / in_s))
+            if not wait:                                                # (at once: nothing fades out)
+                out_a, in_a = 0.0, ease(k)
+            elif bar:                                                   # (BarFader's curves)
+                out_a, in_a = 1 - ease(min(1.0, t / wait)), ease(k)
+            else:                                                       # (the leaving / arriving covers' ease)
+                out_a, in_a = max(0.0, 1 - t / wait) ** 3, 1 - (1 - k) ** 3
+            for words_now, a in ((old, out_a), (text, in_a)):
+                if a > 0.003:
+                    opt.currentText = words_now
+                    p.setOpacity(a)
+                    p.drawControl(QStyle.CE_ComboBoxLabel, opt)
+            p.setOpacity(1.0)
+            self.painted = text
         p.end()
 
     # -- the arrow points the way the list will open (up when there isn't room for it below on the screen)
@@ -4227,6 +4429,97 @@ class Logo(QLabel):
 
 
 # =========================================================================== dialogs
+class _ColourLayer(QWidget):
+    """LiveColour's picture of a window, lying over all of it (clicks pass through)."""
+
+    def __init__(self, win: QWidget):
+        super().__init__(win)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_OpaquePaintEvent)          # (nothing beneath it is drawn meanwhile)
+        self.image: Optional[QImage] = None
+
+    def paintEvent(self, ev) -> None:
+        if self.image is not None:
+            p = QPainter(self)
+            p.drawImage(0, 0, self.image)
+            p.end()
+
+
+class LiveColour:
+    """One colour changing continuously (the colour picker's drag), shown at the screen's own pace (owner, 2026-10-18:
+    "liquid smooth", like the live background). A restyle can't do that (Qt rebuilds every widget's styling: 52+ ms
+    a step). Every pixel on screen depends LINEARLY on any one colour role (flat fills, and anti-aliased edges are
+    alpha blends): drawn once with the role black (= everything else) and once white, their difference is how much of
+    the role each pixel holds. A step is then: the black picture + that difference tinted with the new colour (Qt's
+    Multiply + Plus: ~1 ms for the main window), on a layer over each window. Measured against the real restyle:
+    99.95 % of pixels identical, the rest within 8/255 (text gamma, derived shades). Set-up ~115 ms (two restyles
+    + grabs), done when the picker opens; finish() once the real look is back underneath. The windows themselves are
+    left in the real look the whole time (a third restyle), so nothing depends on the layer going away."""
+
+    def __init__(self, role: str, colors: dict, preview: Callable[[dict], None], exclude: tuple = ()):
+        from PySide6.QtWidgets import QColorDialog
+        self.role = role
+        app_ = QApplication.instance()
+        self.windows = [w for w in app_.topLevelWidgets()
+                        if w.isVisible() and w.windowType() in (Qt.Window, Qt.Dialog)
+                        and not isinstance(w, (ThemeDialog, QColorDialog)) and w not in exclude]
+        hold_pulse(True)        # (the lights pause where they are: the pictures and the window underneath agree)
+        shots = []
+        for probe in ("#000000", "#FFFFFF"):
+            c = dict(colors)
+            c[role] = probe
+            preview(c)
+            shots.append([w.grab().toImage().convertToFormat(QImage.Format_RGB32) for w in self.windows])
+        preview(colors)                                   # (the real look underneath again)
+        self.parts = []
+        for w, black, white in zip(self.windows, *shots):
+            diff = QImage(white)                          # how much of the role each pixel holds (x 255)
+            p = QPainter(diff)
+            p.setCompositionMode(QPainter.CompositionMode_Difference)
+            p.drawImage(0, 0, black)
+            p.end()
+            layer, canvas = QImage(black), QImage(black)
+            cover = _ColourLayer(w)
+            cover.setGeometry(w.rect())
+            cover.image = canvas
+            self.parts.append((cover, black, diff, layer, canvas))
+        self.show(colors[role])
+        for cover, *_ in self.parts:
+            cover.raise_()
+            cover.show()
+
+    def show(self, colour: str) -> None:
+        col = QColor(colour)
+        for cover, black, diff, layer, canvas in self.parts:
+            p = QPainter(layer)
+            p.setCompositionMode(QPainter.CompositionMode_Source)
+            p.drawImage(0, 0, diff)
+            p.setCompositionMode(QPainter.CompositionMode_Multiply)
+            p.fillRect(QRect(QPoint(0, 0), layer.size()), col)
+            p.end()
+            p = QPainter(canvas)
+            p.setCompositionMode(QPainter.CompositionMode_Source)
+            p.drawImage(0, 0, black)
+            p.setCompositionMode(QPainter.CompositionMode_Plus)
+            p.drawImage(0, 0, layer)
+            p.end()
+            try:
+                cover.update()
+            except RuntimeError:                          # (its window has closed)
+                pass
+
+    def finish(self) -> None:
+        """The real look is back underneath: take the layers away (same frame: the two match)."""
+        hold_pulse(False)
+        for cover, *_ in self.parts:
+            try:
+                cover.hide()
+                cover.deleteLater()
+            except RuntimeError:
+                pass
+        self.parts = []
+
+
 class ThemeDialog(QDialog):
     """Custom theme: every colour role with a swatch and a hex box; changes preview live."""
 
@@ -4238,6 +4531,7 @@ class ThemeDialog(QDialog):
         self.resize(450, 620)
         self.colors = dict(colors)
         self.preview = preview
+        self._live: Optional[LiveColour] = None       # the colour picker's live drag (see _pick)
         self.rows: dict[str, tuple] = {}
         # redraw the whole window only once changes pause (dragging in the colour picker stays smooth)
         self._preview_timer = QTimer(self)
@@ -4363,8 +4657,9 @@ class ThemeDialog(QDialog):
         hx.setText(self.colors[k])
 
     def _changed(self) -> None:
-        # update continuously while dragging (at most every 80 ms), not only once it stops
-        if not self._preview_timer.isActive():
+        # update continuously while dragging (at most every 80 ms), not only once it stops - unless the colour
+        # picker's live layer shows it (every step, at once)
+        if self._live is None and not self._preview_timer.isActive():
             self._preview_timer.start()
         c = self.colors
         weak = [tr(f"theme.where_{w}") for w, (fg, bg) in {
@@ -4377,6 +4672,8 @@ class ThemeDialog(QDialog):
     def _set(self, k: str, hex_colour: str) -> None:
         self.colors[k] = QColor(hex_colour).name().upper()
         self._show(k)
+        if self._live is not None and k == self._live.role:
+            self._live.show(self.colors[k])
         self._changed()
 
     def _typed(self, k: str) -> None:
@@ -4391,13 +4688,24 @@ class ThemeDialog(QDialog):
     def _pick(self, k: str) -> None:
         from PySide6.QtWidgets import QColorDialog
         before = self.colors[k]
+        self._preview_timer.stop()
+        try:
+            self._live = LiveColour(k, self.colors, self.preview)         # live while choosing, every step
+        except Exception:                                               # (then the restyles every 80 ms as before)
+            self._live = None
         d = QColorDialog(QColor(before), self)
         d.setWindowTitle(tr("theme.pick"))
-        d.currentColorChanged.connect(lambda c: self._set(k, c.name()))   # live while choosing
-        if d.exec():
-            self._set(k, d.currentColor().name())
-        else:
-            self._set(k, before)
+        d.currentColorChanged.connect(lambda c: self._set(k, c.name()))
+        try:
+            if d.exec():
+                self._set(k, d.currentColor().name())
+            else:
+                self._set(k, before)
+        finally:
+            live, self._live = self._live, None
+            if live is not None:
+                self.preview(self.colors)          # the real look underneath, then the layer goes (same frame)
+                live.finish()
 
 
 class FontSample(QWidget):
@@ -4818,10 +5126,10 @@ class FitsScreen:
         screen = widget.screen() or QApplication.primaryScreen()
         return screen.availableGeometry()
 
-    def _fit_height(self) -> None:
+    def _fit_height(self, width: int = 0) -> None:
         """As tall as the contents need (with the hint texts wrapped at the real width), but never
         taller than the screen: then the contents scroll and Cancel / Save stay in view."""
-        width = max(self.width(), self.minimumWidth())
+        width = max(width, self.width(), self.minimumWidth())
         content = self._content.layout().totalHeightForWidth(width)
         buttons = self.layout().itemAt(1).sizeHint().height()
         room = self._screen_room(self)
@@ -4878,7 +5186,7 @@ class FitsScreen:
         QTimer.singleShot(400, lambda: setattr(self, "_aligning", False))
 
 
-class SettingsDialog(FitsScreen, QDialog):
+class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
     def _height_cap(self) -> int:
         """Owner's choice: Settings opens no taller than the main window (the rest scrolls)."""
         main = self._align_with()
@@ -4894,6 +5202,7 @@ class SettingsDialog(FitsScreen, QDialog):
         self._tx(self, "settings.welcome" if welcome else "settings.title", "setWindowTitle")
         self.setObjectName("settings_dialog")
         self.setMinimumWidth(580)
+        no_open_animation(self)
         # the settings scroll when the screen is too short for them; Cancel / Save stay fixed below
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -4913,6 +5222,7 @@ class SettingsDialog(FitsScreen, QDialog):
 
         lay.addWidget(self._tx(section(""), "settings.language"))
         self.lang = ThemedCombo()
+        self.lang.fade_on_pick = "at_once"
         self.lang.addItem(tr("lang.en"), "en")
         self.lang.addItem(tr("lang.ja"), "ja")
         for i, key in enumerate(("lang.en", "lang.ja")):
@@ -4955,6 +5265,7 @@ class SettingsDialog(FitsScreen, QDialog):
 
         lay.addWidget(self._tx(section(""), "settings.device"))
         self.device = ThemedCombo()
+        self.device.fade_on_pick = True
         for slot in SLOTS:
             self.device.addItem(tr("settings.device_n", n=SLOT_NUMBER[slot]), slot)
             self._i18n.append(lambda i=self.device.count() - 1, n=SLOT_NUMBER[slot]:
@@ -5084,16 +5395,27 @@ class SettingsDialog(FitsScreen, QDialog):
 
     def _switch_language(self, *_):
         """Preview the chosen language everywhere at once (Save keeps it, Cancel switches back)."""
-        set_interface_language(self.lang.currentData())
-        for f in self._i18n:
-            f()
+        # nothing is drawn until it's all done, and the window gets its new size in ONE step (adjustSize first
+        # shrank it, then _fit_height grew it back: the library's covers showed through for a frame - owner,
+        # 2026-10-18)
         main = self.parent()
-        if hasattr(main, "preview_language"):
-            main.preview_language()
-        self.adjustSize()
-        self._fit_height()
+        frozen = [x for x in (self, main) if isinstance(x, QWidget) and x.updatesEnabled()]
+        for x in frozen:
+            x.setUpdatesEnabled(False)
+        try:
+            set_interface_language(self.lang.currentData())
+            for f in self._i18n:
+                f()
+            if hasattr(main, "preview_language"):
+                main.preview_language()
+            self.layout().activate()
+            self._fit_height(self.sizeHint().width())
+        finally:
+            for x in frozen:
+                x.setUpdatesEnabled(True)
 
     def _preview(self, theme: str, custom: dict) -> None:
+        self._previewed = True
         apply_theme(theme, custom)
         restyle_all()
 
@@ -5101,13 +5423,20 @@ class SettingsDialog(FitsScreen, QDialog):
         if name == "custom":
             start = theme_colors("custom", self.custom) if self.custom else theme_colors(self.theme)
             d = ThemeDialog(start, lambda c: self._preview("custom", c), self)
-            if d.exec():
-                self.theme, self.custom = "custom", d.colors
-                self._persist(theme="custom", custom_colors=dict(self.custom))
-                self._orig_theme, self._orig_custom = self.theme, dict(self.custom)
-            # cancelled: keep whatever was chosen before (and its look)
-            self.theme_btns[self.theme].setChecked(True)
-            self._preview(self.theme, self.custom)
+            root = self
+            while root.parentWidget() is not None:
+                root = root.parentWidget()
+            sheet_on(root)                       # (quick live steps while it's open)
+            try:
+                if d.exec():
+                    self.theme, self.custom = "custom", d.colors
+                    self._persist(theme="custom", custom_colors=dict(self.custom))
+                    self._orig_theme, self._orig_custom = self.theme, dict(self.custom)
+                # cancelled: keep whatever was chosen before (and its look)
+                self.theme_btns[self.theme].setChecked(True)
+                self._preview(self.theme, self.custom)
+            finally:
+                sheet_on(None)
             return
         self.theme = name
         self._preview(name, self.custom)
@@ -5221,6 +5550,7 @@ class SettingsDialog(FitsScreen, QDialog):
     def _choose_background(self) -> None:
         main = self.parent()
         area = main.backdrop.library_area().size() if hasattr(main, "backdrop") else None
+        self._bg_previewed = True
         d = BackgroundDialog(self.bg_path, self.bg_opacity, apply_background, self, crop=self.bg_crop, area=area)
         if d.exec():
             self.bg_path, self.bg_opacity, self.bg_crop = d.path, d.opacity, d.crop()
@@ -5232,9 +5562,15 @@ class SettingsDialog(FitsScreen, QDialog):
                 self._orig_bg = (self.bg_path, self.bg_opacity, *self.bg_crop)
         apply_background(self.bg_path, self.bg_opacity, *self.bg_crop)   # cancelled: back to the earlier choice
 
+    _previewed = False                          # a theme was previewed (Cancel puts the original back)
+    _bg_previewed = False                       # a background picture was tried (the same)
+
     def reject(self) -> None:
-        self._preview(self._orig_theme, self._orig_custom)          # always undo any preview
-        apply_background(*self._orig_bg)
+        # undo any preview - and only then: re-styling the whole app for nothing took ~70 ms on every Cancel
+        if self._previewed:
+            self._preview(self._orig_theme, self._orig_custom)
+        if self._bg_previewed:
+            apply_background(*self._orig_bg)
         if hasattr(self.parent(), "set_pulse"):
             self.parent().set_pulse(self._orig_pulse)               # (the pulse preview too)
         if i18n.language() != self._orig_lang:
@@ -5308,9 +5644,12 @@ class SettingsDialog(FitsScreen, QDialog):
             message(self, tr("settings.bad_cloud", error=e))
             return
         slot = self.device.currentData()
-        # safeguard: is that device number already used by another computer?
+        # safeguard: is that device number already used by another computer? Only asked when the device number or
+        # the cloud folder changed: it reads (and writes) the cloud folder, and Google Drive can keep the window
+        # waiting - Settings closed with a hard lag (owner, 2026-10-18). Unchanged, it's already this computer's.
+        same = self.current is not None and slot == self.current.machine_name             and os.path.normcase(cloud) == os.path.normcase(self.current.cloud_root)
         lib = Library(cloud)
-        owner = lib.slot_owner(slot)
+        owner = None if same else lib.slot_owner(slot)
         if owner and owner.lower() != this_computer().lower():
             n, other = SLOT_NUMBER[slot], SLOT_NUMBER[other_slot(slot)]
             choice = message(self, tr("settings.device_taken", n=n, computer=owner, other=other),
@@ -5322,7 +5661,8 @@ class SettingsDialog(FitsScreen, QDialog):
                 return
             if choice == "other":
                 slot = other_slot(slot)
-        lib.claim_slot(slot)
+        if not same:
+            lib.claim_slot(slot)
         bg_image = self._store_background()
         if self.startup.isChecked() != startup.is_enabled():
             try:
@@ -5614,6 +5954,10 @@ class VndbDialog(TaskOwner, QDialog):
 class GameDialog(FitsScreen, TaskOwner, QDialog):
     """Add or edit a game: title, cover, launch options, reading status, and paths for This Device
     (with Browse) and the Other Device (greyed, text only)."""
+
+    def _align_with(self) -> Optional[QWidget]:
+        """Opens centred over the program's window, like Settings (owner, 2026-10-18)."""
+        return self.parentWidget().window() if self.parentWidget() else None
 
     def __init__(self, library: Library, settings: LocalSettings, game: Optional[Game] = None,
                  exe: str = "", parent=None):
@@ -6243,7 +6587,7 @@ class RestoreDialog(QDialog):
 
 
 # =========================================================================== main window
-class MainWindow(TaskOwner, QMainWindow):
+class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     START_ROWS = 2                          # the window opens just tall enough for this many rows, evenly spaced
 
     def __init__(self, settings: LocalSettings):
@@ -6295,6 +6639,8 @@ class MainWindow(TaskOwner, QMainWindow):
         self.slides: dict[str, tuple] = {}            # item id -> (dx, dy): sliding from its old place
         self.appearing: dict[str, float] = {}         # item id -> delay: fading in (search / filter let them in)
         self._appear_t0 = 0.0
+        self.arrive_wait = ARRIVE_WAIT                # (when the latest arrivals start: _fade_top_words)
+        self.arrive_span = 0.0                        # (and how far apart the first and last start)
         self._cover_wanted: set = set()               # tiles waiting for their covers to load (search arrivals)
         self._cover_loading = False
         self._cover_given_up: set = set()
@@ -6665,6 +7011,16 @@ class MainWindow(TaskOwner, QMainWindow):
         elif ui_families() != fonts_before or getattr(self, "_styled_fonts", None) != ui_families():
             restyle_all()                       # a different font (or language, which changes the order)
         self._styled_fonts = ui_families()
+        if before is not None and before.machine_name == settings.machine_name                 and os.path.normcase(before.cloud_root) == os.path.normcase(settings.cloud_root)                 and getattr(self, "library", None) is not None:
+            # the same cloud folder and device: nothing to set up again, and the library is re-read in the background
+            # (on the window's own thread, Google Drive kept Settings' Save waiting - owner, 2026-10-18)
+            self.retranslate()
+            self.refresh_soon(keep_files=True)
+            self._update_details()
+            self.grid.viewport().update()
+            self._update_anim()
+            self.share_settings()
+            return
         self.app_dir = default_app_dir()
         self.library = Library(settings.cloud_root)
         self.engine = SyncEngine(settings.cloud_root, self.app_dir, computers=self.library.known_computers)
@@ -7563,12 +7919,16 @@ class MainWindow(TaskOwner, QMainWindow):
         while Qt is still handling the click left it unsure what was selected (the next pick was ignored)."""
         d = self.sort.itemData(index)
         if d:
-            QTimer.singleShot(0, lambda: self.choose_sort(d))
+            was = self.sort.painted                  # (the box may be redrawn before choose_sort runs)
+            self.sort.fade_words(was, ARRIVE_WAIT)   # (from the click: no frame of the new words first)
+            QTimer.singleShot(0, lambda: self.choose_sort(d, was))
 
     @guarded
-    def choose_sort(self, d: str) -> None:
+    def choose_sort(self, d: str, was: Optional[str] = None) -> None:
         if not d:
             return
+        if was is None:
+            was = self.sort.painted
         if d.startswith("place:"):
             # Folders Mixed / First / Last: remembered for the automatic sorts (until another is pressed). In My
             # Arrangement they also rearrange the folders, by the automatic sort used last (see _place_folders)
@@ -7592,12 +7952,19 @@ class MainWindow(TaskOwner, QMainWindow):
         self._save_view_choice()
         self._mark_sort()
         # like search: covers whose place changes fade out there and back in at their new place (no sliding)
-        self._apply_filter()                         # (no reload or save check: only the order changed)
+        self._fade_top_words(self.sort, was, self._apply_filter)   # (no reload or save check: only the order changed)
 
     def _filter_changed(self, _i: int) -> None:
         self.settings.status_filter = self.filter.currentData() or "all"
         self._save_view_choice()
-        self._apply_filter()
+        self._fade_top_words(self.filter, self.filter.painted, self._apply_filter)
+
+    def _fade_top_words(self, box: "ThemedCombo", was: str, change: Callable[[], None]) -> None:
+        """A pick in the top bar's sort / status filter: the grid changes, and the box's words fade with the covers
+        (out as they leave, in with the first arriving one)."""
+        self.arrive_wait, self.arrive_span = ARRIVE_WAIT, 0.0   # (nothing arrives: the usual pause)
+        change()
+        box.fade_words(was, self.arrive_wait, span=self.arrive_span)
 
     @guarded
     def _status_changed(self, _i: int) -> None:
@@ -7669,6 +8036,13 @@ class MainWindow(TaskOwner, QMainWindow):
         cross-fades, every other piece fades out, then in (the status drop-down: only its words)."""
         fade = self.details.isVisible() and not self._resizing and not getattr(self, "_renaming", None) \
             and hasattr(self, "_fader")
+        # a language switch: every word in the window changes at once, so the bar does too (owner, 2026-10-18: Edit
+        # faded out and back in on its own)
+        lang, self._bar_lang = getattr(self, "_bar_lang", None), i18n.language()
+        if fade and lang is not None and lang != self._bar_lang:
+            fade = False
+            self._fader.pieces.clear()
+            self._fader.update()
         if not fade:
             self._update_details_now()
             return
@@ -8386,6 +8760,8 @@ class MainWindow(TaskOwner, QMainWindow):
             step = min(APPEAR_STAGGER, APPEAR_STAGGER_MAX / max(1, len(fresh) - 1))
             self.appearing = {**keep, **{iid: base + i * step for i, iid in enumerate(fresh)}}
             self._appear_t0 = t
+            self.arrive_wait = base                      # (the top drop-downs' words come in with the first cover...
+            self.arrive_span = step * max(0, len(fresh) - 1)   # ...and settle with the last)
         else:
             self.slides = {}
             for iid, p in now.items():
