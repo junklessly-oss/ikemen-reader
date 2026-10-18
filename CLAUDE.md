@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 231 tests (2026-10-18), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 243 tests (2026-10-18, after the 1.1.0 audit), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -989,6 +989,29 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - END-OF-SESSION CHECKS (owner: no scans until the end): tests for solo mode (switch both ways, merge cases,
   SaveChoicesDialog, first start, guide tags); scratch solosmoke.py's bar check failed 1 in 3 (d_stats.last read as
   0 right after selecting - timing of the probe or a real moment of no date?); full suite.
+
+## 1.1.0 audit (2026-10-18; owner: "check every line, make it perfect")
+- Saves: restore() protects the backup being restored from pruning (restoring the oldest of 10 deleted it);
+  _mirror_map compares names case-insensitively (Save.dat vs save.dat was copied, then deleted as "not in source").
+- Launch watch: _snapshot_nt = ONE NtQuerySystemInformation call per look (Toolhelp made ~320 calls, each waiting for
+  Python back: >1 s per look with a busy thread, 43 ms hitches for it; now 17 ms / 2 ms), lock-guarded buffer;
+  STARTUP_POLL 0.03 s in a launch's first 3 s (a helper living ~0.1 s broke the launcher->game chain: the sibling-
+  folder test, the "unexplained" flake since 10-14). _details_win uses the same kernel32 argtypes as _ExactClock (a
+  clash made every quick lookup fail after the first launch -> slow psutil). luna.running uses _scan.
+- Library: _read_game_files caches each game file's text by (size, mtime_ns) from the folder listing (re-read if
+  changed < 2 s ago: Windows' ~15 ms time stamps); change_signature uses scandir stats. Drop out of a folder 47 -> 14
+  ms, list_games 31 -> 7 ms (local; more on Google Drive). set_artwork copies before deleting the old cover.
+- New sync state "failed" (grey, "Couldn't Check the Saves", rechecked in a minute): a read error used to show yellow
+  "Not Set Up on This Device Yet". Check results from an older engine (mode / settings changed mid-check) are dropped.
+- My Device: no DetectDialog after a session (it crashed: engine None); restore guarded; solo backup also on the
+  close-while-reading path; vn.py CLI follows library_root. "Read for X" no leading gap.
+- Text: JA first start uses イケメンリーダー and breaks after the first question; もう一方の端末 everywhere; "Saves Changed in
+  Both Places"; presence.games_one; 10 dead keys removed; JA colon in Sync Now's line. Guide: Discord in Accessibility,
+  "game already open / Close Luna" bullet, grey light incl. couldn't check, JA backup sentence in the right paragraph.
+- SaveChoicesDialog buttons never squeezed (JA dates were clipped).
+- Checks: fuzz110 (2 x 600 random actions incl. My Device switching, drags, rename, undo, other-device changes): 0
+  errors; searchfuzz 1500: 0; real-window frame bench at 143 Hz: launch 0 late frames, worst 22 ms anywhere.
+- Gotcha: the Bash tool collapses double backslashes in inline heredocs - write scripts to files or use Edit.
 
 ## Ideas for later (owner interested, not scheduled)
 - PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows
