@@ -517,7 +517,7 @@ S: dict[str, tuple[str, str]] = {
     "stats.unknown":            ("Unknown", "不明"),
     "first.title":              ("Welcome", "ようこそ"),
     "first.body":               ("Is Ikemen Reader for one computer, or for two that share their saves?\n\nYou can change this later in Settings.",
-                                 "イケメンリーダーを1台のパソコンで使いますか？それとも2台でセーブを共有しますか？\n\nあとから設定で変更できます。"),
+                                 "イケメンリーダーを1台のパソコンで使いますか？\nそれとも2台でセーブを共有しますか？\n\nあとから設定で変更できます。"),
     "first.one":                ("One Computer", "1台で使う"),
     "first.two":                ("Two Computers", "2台で使う"),
     "dual.joins_title":         ("Same Games on Both Devices", "両方の端末に同じゲーム"),

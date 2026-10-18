@@ -6637,6 +6637,9 @@ class SaveChoicesDialog(QDialog):
                                                  ("cloud", tr("dual.cloud"), cloud_t))):
                 when = i18n.datetime_str(t) if t else tr("conflict.none")
                 b = QPushButton(f"{label}\n{when}", objectName="seg")
+                # never squeezed below its text + the seg padding (22 px each side): the dates were cut off (JA)
+                fm = QFontMetrics(ui_font())
+                b.setMinimumWidth(max(fm.horizontalAdvance(t) for t in (label, when)) + 2 * 22 + 4)
                 b.setCheckable(True)
                 b.setChecked(key == newer)
                 group.addButton(b)
