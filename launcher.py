@@ -49,6 +49,7 @@ def _inside(path: str, folder: Path) -> bool:
 
 
 _NT_BUF: list = [None]          # the buffer NtQuerySystemInformation fills (kept: it's asked many times a second)
+_NT_LOCK = threading.Lock()     # (the launch watch, the save check and Luna's check may all ask at once)
 
 
 def _snapshot_nt() -> Optional[list[tuple[int, int]]]:
@@ -63,6 +64,22 @@ def _snapshot_nt() -> Optional[list[tuple[int, int]]]:
     query = ntdll.NtQuerySystemInformation
     query.restype = ctypes.c_long
     query.argtypes = [ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
+    with _NT_LOCK:
+        raw = _nt_query(query)
+    if raw is None:
+        return None
+    out, at = [], 0
+    while True:
+        nxt = struct.unpack_from("<I", raw, at)[0]
+        pid, ppid = struct.unpack_from("<QQ", raw, at + 0x50)    # UniqueProcessId, InheritedFromUniqueProcessId
+        out.append((pid, ppid))
+        if not nxt:
+            return out
+        at += nxt
+
+
+def _nt_query(query) -> Optional[bytes]:
+    import ctypes
     size = 1 << 20
     for _ in range(6):
         buf = _NT_BUF[0]
@@ -77,15 +94,7 @@ def _snapshot_nt() -> Optional[list[tuple[int, int]]]:
         size = max(size * 2, need.value + (1 << 16))
     else:
         return None
-    raw = buf.raw
-    out, at = [], 0
-    while True:
-        nxt = struct.unpack_from("<I", raw, at)[0]
-        pid, ppid = struct.unpack_from("<QQ", raw, at + 0x50)    # UniqueProcessId, InheritedFromUniqueProcessId
-        out.append((pid, ppid))
-        if not nxt:
-            return out
-        at += nxt
+    return buf.raw[:need.value or len(buf)]                    # (a copy: the buffer is used again by the next look)
 
 
 def _snapshot() -> Optional[list[tuple[int, int]]]:
