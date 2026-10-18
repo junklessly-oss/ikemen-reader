@@ -98,7 +98,12 @@ def _details_win(pid: int) -> Optional[tuple[Optional[str], float]]:
         import ctypes
         from ctypes import wintypes
         k32 = ctypes.windll.kernel32
+        # (the same argument types as _ExactClock's: windll's functions are shared by the whole program, and a
+        # mismatch made every lookup fail - silently falling back to psutil - after the first launch)
         k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(ctypes.c_ulonglong)] * 4
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
         h = k32.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
         if not h:
             return None, 0.0                             # (a protected system program: never a game of ours)
@@ -106,11 +111,10 @@ def _details_win(pid: int) -> Optional[tuple[Optional[str], float]]:
             buf = ctypes.create_unicode_buffer(32768)
             size = wintypes.DWORD(len(buf))
             exe = buf.value if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)) else None
-            created, ex, kt, ut = (wintypes.FILETIME() for _ in range(4))
+            created, ex, kt, ut = (ctypes.c_ulonglong() for _ in range(4))
             ct = 0.0
             if k32.GetProcessTimes(h, ctypes.byref(created), ctypes.byref(ex), ctypes.byref(kt), ctypes.byref(ut)):
-                ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime     # 100 ns since 1601
-                ct = ticks / 1e7 - 11644473600.0                                  # -> seconds since 1970
+                ct = created.value / 1e7 - 11644473600.0        # 100 ns since 1601 -> seconds since 1970
             return exe, ct
         finally:
             k32.CloseHandle(h)
@@ -172,8 +176,8 @@ def _scan() -> list[dict]:
         if known is None or known[0] != ppid:
             known = _DETAILS[pid] = (ppid, *_details(pid))
         out.append({"pid": pid, "ppid": ppid, "exe": known[1], "create_time": known[2]})
-    for pid in [p for p in _DETAILS if p not in alive]:
-        del _DETAILS[pid]
+    for pid in [p for p in list(_DETAILS) if p not in alive]:   # (a copy: warm_up may be adding meanwhile)
+        _DETAILS.pop(pid, None)
     return out
 
 

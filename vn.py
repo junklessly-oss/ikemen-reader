@@ -83,7 +83,7 @@ def main() -> None:
         return
 
     settings = need_settings()
-    library = Library(settings.cloud_root)
+    library = Library(settings.library_root)     # (My Device: this computer's own copy, never the cloud)
 
     if args.cmd == "add":
         g = library.add_game(args.title, settings.machine_name, args.exe, args.save, args.art)
@@ -103,7 +103,7 @@ def main() -> None:
                       f"exe={mp.exe or '(not set)'}  saves={mp.save_dir or '(not set)'}{here}")
     elif args.cmd == "play":
         g = library.find(args.title) or sys.exit(f"No game called '{args.title}'.")
-        engine = SyncEngine(settings.cloud_root, default_app_dir(), computers=library.known_computers)
+        engine = None if settings.solo else SyncEngine(settings.cloud_root, default_app_dir(), computers=library.known_computers)
         result = play(g, settings, library, engine, on_conflict=ask_conflict, status=lambda k: print(tr(k)))
         if not result.launched:
             print(tr(result.message))

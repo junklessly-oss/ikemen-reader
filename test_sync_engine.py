@@ -346,6 +346,26 @@ class Attacks(unittest.TestCase):
         self.assertIs(self.pc._lock(GAME), other._lock(GAME))
         self.assertIsNot(self.pc._lock(GAME), self.pc._lock("Another Game"))
 
+    def test_restoring_the_oldest_backup_keeps_it(self):
+        # 10 backups already: the restore's own "before restore" backup must not prune the one being restored
+        import sync_engine
+        write(self.pc_saves, "slot1.sav", "v0")
+        self.pc.before_launch(GAME, self.pc_saves)
+        for i in range(sync_engine.KEEP_BACKUPS):
+            self.pc._backup(GAME, {"slot1.sav": self.pc_saves / "slot1.sav"}, f"test{i:02}")
+        oldest = self.pc.list_backups(GAME)[-1].name
+        write(self.pc_saves, "slot1.sav", "now")
+        self.pc.restore(GAME, oldest, self.pc_saves)
+        self.assertEqual(read_all(self.pc_saves), {"slot1.sav": "v0"})
+        self.assertIn(oldest, [b.name for b in self.pc.list_backups(GAME)])
+
+    def test_names_differing_only_in_case_are_one_file(self):
+        write(self.pc_saves, "SAVE.dat", "new")
+        write(self.laptop_saves, "save.dat", "old")
+        self.pc.before_launch(GAME, self.pc_saves)
+        self.laptop.before_launch(GAME, self.laptop_saves, on_conflict=lambda info: "cloud")
+        self.assertEqual(list(read_all(self.laptop_saves).values()), ["new"])
+
 
 class SilentSync(unittest.TestCase):
     """sync_if_safe: background sync without a launch. Uploads or downloads only when one side changed."""

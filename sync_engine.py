@@ -217,8 +217,9 @@ def _mirror_map(src: dict[str, Path], dst: Path, dst_files: dict[str, Path]) -> 
     for rel, p in src.items():
         _copy_atomic(p, dst / rel)
     emptied = set()
+    keep = {r.casefold() for r in src}  # Windows names ignore case: "Save.dat" IS "save.dat"
     for rel, p in dst_files.items():
-        if rel not in src:
+        if rel.casefold() not in keep:
             _writable(p)
             _retry(lambda p=p: p.unlink(missing_ok=True))
             emptied.add(p.parent)
@@ -424,7 +425,9 @@ class SyncEngine:
         tmp.write_text(json.dumps({"base": fp, "files": sorted(files)}), "utf-8")
         os.replace(tmp, f)                      # atomic: a crash never leaves a half-written record
 
-    def _backup(self, game_id: str, files: dict[str, Path], label: str) -> None:
+    def _backup(self, game_id: str, files: dict[str, Path], label: str, protect: str = "") -> None:
+        """Copy files into a new backup; only the newest KEEP_BACKUPS stay (never `protect`: the backup
+        being restored right now)."""
         if not files:
             return
         root = self._backup_root(game_id)
@@ -436,7 +439,8 @@ class SyncEngine:
             n += 1
             dest = root / f"{stamp}-{label}-{n}"
         _mirror_map(files, dest, {})
-        for old in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: _backup_order(p.name))[:-KEEP_BACKUPS]:
+        kept = sorted((p for p in root.iterdir() if p.is_dir() and p.name != protect), key=lambda p: _backup_order(p.name))
+        for old in kept[:-KEEP_BACKUPS]:
             shutil.rmtree(old, ignore_errors=True)
 
     # -- decision logic (pure, easy to test)
@@ -465,9 +469,9 @@ class SyncEngine:
         return SyncResult(Action.PULLED, "sync.pulled")
 
     def _push(self, game_id: str, local_dir: Path, registry_key: str,
-              local: dict[str, Path]) -> SyncResult:
+              local: dict[str, Path], protect: str = "") -> SyncResult:
         cloud = self._cloud_files(game_id)
-        self._backup(game_id, cloud, "cloud-before-push")
+        self._backup(game_id, cloud, "cloud-before-push", protect)
         _mirror_map(local, self.cloud_dir(game_id), cloud)
         self._save_base(game_id, _fingerprint_map(local), local)
         return SyncResult(Action.PUSHED, "sync.pushed")
@@ -571,7 +575,8 @@ class SyncEngine:
             src = _files(self._backup_root(game_id) / backup_name)
             if not src:
                 raise FileNotFoundError(backup_name)
-            self._backup(game_id, self._local_files(game_id, local_dir, registry_key), "local-before-restore")
+            self._backup(game_id, self._local_files(game_id, local_dir, registry_key), "local-before-restore",
+                         protect=backup_name)
             self._write_local(src, local_dir, registry_key)
             local = self._local_files(game_id, local_dir, registry_key)
-            return self._push(game_id, local_dir, registry_key, local)
+            return self._push(game_id, local_dir, registry_key, local, protect=backup_name)

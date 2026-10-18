@@ -713,10 +713,10 @@ class Library:
         src_path = Path(src)
         self.art_dir.mkdir(parents=True, exist_ok=True)
         dest_name = f"{safe_game_id(game_id)}{src_path.suffix.lower() or '.jpg'}"
-        if game.artwork and game.artwork != dest_name:
-            (self.art_dir / game.artwork).unlink(missing_ok=True)
         if src_path.resolve() != (self.art_dir / dest_name).resolve():
             shutil.copy2(src_path, self.art_dir / dest_name)
+        if game.artwork and game.artwork != dest_name:   # (only after the new one is in: it may come from the old)
+            (self.art_dir / game.artwork).unlink(missing_ok=True)
         game.artwork = dest_name
         game.artwork_from = source
         if reset_crop:

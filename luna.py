@@ -84,32 +84,22 @@ def game_path_for_uid(luna_exe: str, uid: str) -> Optional[str]:
 
 def running(luna_exe: str) -> bool:
     """Is this Luna program already open?"""
-    want = _norm(luna_exe)
-    folder = os.path.dirname(want)
-    for p in psutil.process_iter(["exe", "name"]):
-        try:
-            exe = p.info.get("exe")
-            if exe and (_norm(exe) == want or
-                        (_norm(exe).startswith(folder + os.sep) and "luna" in (p.info.get("name") or "").lower())):
-                return True
-        except psutil.Error:
-            continue
-    return False
+    return bool(_luna_pids(luna_exe))
 
 
 def _luna_pids(luna_exe: str) -> set[int]:
-    """The programs of this Luna that are open (its main program and its helpers in the same folder)."""
+    """The programs of this Luna that are open (its main program and its helpers in the same folder). Uses the
+    launcher's program list (asked through Windows directly and remembered): psutil's own look at every program
+    held Python long enough to stutter the window."""
+    from launcher import _scan
     want = _norm(luna_exe)
     folder = os.path.dirname(want)
     out = set()
-    for p in psutil.process_iter(["exe", "name"]):
-        try:
-            exe = p.info.get("exe")
-            if exe and (_norm(exe) == want or
-                        (_norm(exe).startswith(folder + os.sep) and "luna" in (p.info.get("name") or "").lower())):
-                out.add(p.pid)
-        except psutil.Error:
-            continue
+    for p in _scan():
+        exe = p.get("exe")
+        if exe and (_norm(exe) == want or
+                    (_norm(exe).startswith(folder + os.sep) and "luna" in os.path.basename(exe).lower())):
+            out.add(p["pid"])
     return out
 
 

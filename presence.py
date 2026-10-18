@@ -3,7 +3,7 @@ presence.py - Discord Rich Presence ("Playing Ikemen Reader" on the owner's Disc
 
 Talks to the Discord app on this computer through pypresence, always on its own background thread: Discord being
 slow, closed or restarted never holds up the window, Read or a sync. The window only says what should show
-(show(...) / clear()); this thread connects when needed, sends changes, retries about once a minute while Discord
+(show(...) / clear()); this thread connects when needed, sends changes, retries every 10 s (RETRY_S) while Discord
 isn't there, and clears the status when Ikemen Reader closes (stop()).
 """
 from __future__ import annotations
