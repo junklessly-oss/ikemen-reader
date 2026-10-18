@@ -777,6 +777,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   play.already_running_luna "When you close it, Luna closes too, and the game starts here." - and after the game
   closes (or Force Close), Luna is checked again (idle), closed, and the game starts through it: one pop-up, not two.
   Verified with stand-ins (fake Luna folder + fake game loading a DLL from it: fakegame\IkemenFakeHookedNovel.exe).
+- LIGHT THEME LOGO (owner, 2026-10-17): theme_colors("light") swaps logo_fill / logo_outline (dark fill, light
+  outline) - so the top-bar logo, stars, trash, bookmark button and window icon are inverted on the light theme
+  (before, every built-in theme used the original colours). discord_assets/logo.png + logo_light.png are the same
+  pair, 1024 px, from Icon.png (uploaded to the Discord application as art assets "logo" / "logo_light").
 - REMOVE: THIS DEVICE OR BOTH (owner, 2026-10-17; plan item 1): set up on the other device too -> "Are You Sure?"
   Cancel | Remove From Both Devices | Remove From This Device (confirm_remove returns "here" / "both"); otherwise
   Cancel | Confirm. Only here = Library.remove_here: this device's paths move into Game.removed_on[device] (END

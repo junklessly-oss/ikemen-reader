@@ -138,6 +138,7 @@ class LocalSettings:
     folder_place: str = "mixed"       # where folders go in the automatic sorts: one of FOLDER_PLACES
     last_sort: str = "hours"          # the automatic sort used last (My Arrangement's folder options use it)
     anki_path: str = ""               # anki.exe on this device (opened from the easter egg)
+    discord: bool = False             # Discord presence (Browsing / Reading / Tweaking / Away); per device, off at first
 
 
 def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSettings]:

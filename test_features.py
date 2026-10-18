@@ -3447,6 +3447,120 @@ class UndoRemove(unittest.TestCase):
                 app.wait_for_tasks(5)
 
 
+class DiscordPresence(unittest.TestCase):
+    """2026-10-17 (owner): Browsing / Reading <title> / Tweaking / Away (5 min), logo only (light theme: the light
+    one), hover = games in library, elapsed timer restarting only when reading starts / ends; off until turned on;
+    Discord trouble never reaches the window."""
+
+    def _fake_discord(self, fail_connect=False):
+        import types
+        calls = []
+
+        class RPC:
+            def __init__(self, cid):
+                calls.append(("new", cid))
+
+            def connect(self):
+                if fail_connect:
+                    raise ConnectionRefusedError("Discord isn't running")
+                calls.append(("connect",))
+
+            def update(self, **kw):
+                calls.append(("update", kw))
+
+            def clear(self):
+                calls.append(("clear",))
+
+            def close(self):
+                calls.append(("close",))
+        return types.SimpleNamespace(Presence=RPC), calls
+
+    def test_background_thread(self):
+        import presence
+        fake, calls = self._fake_discord()
+        p = presence.Presence("123")
+        p.rpc_class = fake.Presence                                       # (a stand-in for Discord)
+        p.show("Browsing...", start=1000.0, image="logo", image_text="3 Games in Library")
+        end = time.monotonic() + 2
+        while not any(c[0] == "update" for c in calls) and time.monotonic() < end:
+            time.sleep(0.02)
+        self.assertIn(("update", {"details": "Browsing...", "start": 1000, "large_image": "logo",
+                                  "large_text": "3 Games in Library"}), calls)
+        p.use_application("456")                                          # the language changed: the other name
+        end = time.monotonic() + 2
+        while ("new", "456") not in calls and time.monotonic() < end:
+            time.sleep(0.02)
+        time.sleep(0.2)
+        self.assertIn(("new", "456"), calls)
+        self.assertEqual([c[0] for c in calls if c[0] == "update"], ["update", "update"])   # shown again under it
+        self.assertEqual(presence.CLIENT_IDS["ja"] != presence.CLIENT_IDS["en"], True)
+        p.stop()
+        self.assertIn(("clear",), calls)                                 # nothing left on the profile
+        self.assertIn(("close",), calls)
+        fake, calls = self._fake_discord(fail_connect=True)              # Discord not running: no harm
+        p = presence.Presence("123")
+        p.rpc_class = fake.Presence
+        p.show("Reading...", "Sakura no Toki")
+        time.sleep(0.3)
+        p.stop()
+        self.assertFalse(any(c[0] == "update" for c in calls))
+        self.assertIsNone(presence.Presence("")._thread)                # (no application: nothing started)
+
+    def test_states(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            g = Library(cloud).add_game("Sakura no Toki", "PC", exe=r"C:\a\a.exe")
+            s = LocalSettings("PC", str(cloud))
+            w = app.MainWindow(s)
+            w.presence.stop()
+            w.presence = mock.Mock()                                      # (never the owner's real Discord)
+            try:
+                w.refresh()
+                self.assertIsNone(w._presence_look())                    # off until turned on
+                w.settings.discord = True
+                with mock.patch.object(app.outside, "foreground_pid", return_value=os.getpid()), \
+                        mock.patch.object(app.outside, "seconds_since_input", return_value=0.5):
+                    self.assertEqual(w._presence_look(), ("Browsing...", ""))
+                    d = app.NameDialog("x", "y", w)
+                    d.show()
+                    self.assertEqual(w._presence_look(), ("Tweaking...", ""))
+                    d.close()
+                    since = w._presence_since
+                    w.worker = SimpleNamespace(stop_pressed=threading.Event(), force_close=threading.Event())
+                    w.playing_id, w.play_phase = g.game_id, "playing"
+                    time.sleep(0.01)
+                    self.assertEqual(w._presence_look(), ("Reading...", "Sakura no Toki"))
+                    self.assertGreater(w._presence_since, since)        # the timer restarted with reading
+                with mock.patch.object(app.outside, "foreground_pid", return_value=1):   # another program
+                    w._last_active = time.monotonic() - 400
+                    self.assertEqual(w._presence_look()[0], "Reading...")    # reading wins, even "idle"
+                    w.worker, w.playing_id, w.play_phase = None, None, "done"
+                    self.assertEqual(w._presence_look(), ("Away", ""))
+                w.settings.theme = "light"
+                w._update_presence()
+                shown = w.presence.show.call_args.kwargs
+                self.assertEqual((shown["image"], shown["image_text"]), ("logo_light", "1 Games in Library"))
+                w.presence.use_application.assert_called_with(app.presence.CLIENT_IDS["en"])
+                app.i18n.set_language("ja")                               # Japanese: the イケメンリーダー application
+                try:
+                    w._update_presence()
+                    w.presence.use_application.assert_called_with(app.presence.CLIENT_IDS["ja"])
+                finally:
+                    app.i18n.set_language("en")
+            finally:
+                w.worker = None
+                w.close()
+                app.wait_for_tasks(5)
+
+
 class RemoveFromThisDevice(unittest.TestCase):
     """2026-10-17 (owner): removing a game set up on both devices asks: this device only, or both. Only here: hidden
     here, kept for the other device (which sees it as set up only there); set up here again = back with its save

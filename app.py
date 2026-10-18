@@ -45,6 +45,7 @@ import devsync
 import guide
 import luna
 import outside
+import presence
 import regsync
 import updater
 import vndb
@@ -129,6 +130,10 @@ def theme_colors(theme: str, custom: Optional[dict] = None) -> dict:
     base.update({f"light_{k}": v for k, v in BASE_LIGHTS.items()})
     base.update({f"mark_{k}": v for k, v in BASE_MARKS.items()})
     base.update(LOGO_ORIGINAL)
+    if theme == "light":
+        # the logo, star, trash, bookmark and window icon inverted - a dark fill with a light outline - so they stand
+        # out on the light bars (owner, 2026-10-17; the same pair as Discord's light picture)
+        base.update(logo_fill=LOGO_ORIGINAL["logo_outline"], logo_outline=LOGO_ORIGINAL["logo_fill"])
     if theme == "custom" and custom:
         base.update({k: v.upper() for k, v in custom.items() if k in base})
     return base
@@ -767,7 +772,9 @@ PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 LIGHT_FADE_S = 0.22                  # a light changing colour cross-fades this long (owner: 0.45 felt slow)
 BAR_XFADE_S = 0.2                    # the Read button's cross-fade, old look -> new look (BarFader)
 BAR_OUT_S, BAR_IN_S = 0.15, 0.2      # every other piece of the bar that changed: fades out, then in (BarFader)
-INSTANT_CLOSE_S = 5                  # a game that closes within this long of appearing "closed right after starting"
+PRESENCE_CHECK_MS = 2000             # Discord presence: what the window is doing, checked this often
+PRESENCE_AWAY_S = 300                # ...and "Away" after this long without using Ikemen Reader (owner: 5 minutes)
+INSTANT_CLOSE_S = 5                 # a game that closes within this long of appearing "closed right after starting"
 ICON_DIM = 0.4                     # the bar's icon buttons when greyed (trash) or off (bookmarks): one dimness
 BAR_WAKE_S = 0.22                    # nothing selected <-> selected: the whole bar blends as one, over this long
 ROLL_GAP = 5                         # px between the old and the new number as the time rolls up after a session
@@ -4132,6 +4139,9 @@ class EasterEgg(QWidget):
             w._update_anim()
 
     def _open_anki(self) -> None:
+        w = self.parent()
+        if w is not None:
+            w.anki_from_here = True                  # (Discord presence: Anki in front counts as Browsing)
         try:
             if outside.show_anki(self.anki_path):    # already open: just bring it forward (starting another
                 self.dismiss()                       # copy takes seconds before it hands over to the open one)
@@ -4991,11 +5001,14 @@ class SettingsDialog(FitsScreen, QDialog):
         self.vndb.setChecked(current.vndb if current else True)
         self.vndb_safe = self._tx(QCheckBox(), "settings.vndb_safe")
         self.vndb_safe.setChecked(current.vndb_safe_only if current else False)
+        self.discord = self._tx(QCheckBox(), "settings.discord")
+        self.discord.setChecked(current.discord if current else False)      # (off until turned on)
         lay.addWidget(self.pulse)
         lay.addWidget(self.startup)
         lay.addWidget(self.auto_update)
         lay.addWidget(self.vndb)
         lay.addWidget(self.vndb_safe)
+        lay.addWidget(self.discord)
 
         # Background, then Theme: Light / Dark / Custom (the one in use stays highlighted)
         self.bg_path = current.bg_image if current else ""
@@ -5320,7 +5333,8 @@ class SettingsDialog(FitsScreen, QDialog):
             last_sort=self.current.last_sort if self.current else "hours",
             anki_path=anki,
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
-            bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4))
+            bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4),
+            discord=self.discord.isChecked())
         save_local_settings(self.result_settings)
         self.accept()
 
@@ -6516,6 +6530,17 @@ class MainWindow(TaskOwner, QMainWindow):
         self._live_timer = QTimer(self)
         self._live_timer.setInterval(4000)
         self._live_timer.timeout.connect(self._live_poll)
+
+        # Discord presence (Settings checkbox, per device): what this window is doing, checked every 2 s
+        self.presence = presence.Presence()
+        self.anki_from_here = False                   # (Anki started / brought forward by the easter egg)
+        self._presence_since = time.time()            # the elapsed timer (restarts when reading starts / ends)
+        self._presence_reading = False
+        self._last_active = time.monotonic()          # last time the owner was using Ikemen Reader (or its Anki)
+        self._presence_timer = QTimer(self)
+        self._presence_timer.setInterval(PRESENCE_CHECK_MS)
+        self._presence_timer.timeout.connect(self._update_presence)
+        self._presence_timer.start()
         self.apply_settings(settings)
         self._run(warm_up, lambda _: None)          # makes the first Play react instantly
         self._live_timer.start()
@@ -9382,6 +9407,45 @@ class MainWindow(TaskOwner, QMainWindow):
         self._update_ready = None                    # (the helper is already waiting: not twice on closing)
         self.close()
 
+    # ------------------------------------------------------------------ Discord presence
+    def _presence_look(self) -> Optional[tuple[str, str]]:
+        """(first line, second line) for Discord right now, or None (off). Reading wins over everything; then Away
+        (5 minutes without using Ikemen Reader - its Anki in front counts as using it); then Tweaking (a settings
+        or edit window open); else Browsing."""
+        if not self.settings.discord:
+            return None
+        g = self.games.get(self.playing_id) if self.playing_id and self.play_phase == "playing" else None
+        reading = g is not None
+        if reading != self._presence_reading:          # (the timer restarts when reading starts or ends)
+            self._presence_reading = reading
+            self._presence_since = time.time()
+        if reading:
+            return tr("presence.reading"), g.title
+        now = time.monotonic()
+        front = outside.foreground_pid()
+        using = front == os.getpid() or (self.anki_from_here and front is not None
+                                         and outside.is_anki_pid(front, self.settings.anki_path))
+        if using and outside.seconds_since_input() < PRESENCE_CHECK_MS / 1000 + 1:
+            self._last_active = now
+        if now - self._last_active >= PRESENCE_AWAY_S:
+            return tr("presence.away"), ""
+        tweaking = any(isinstance(w, PRESENCE_TWEAKING) and w.isVisible() for w in QApplication.topLevelWidgets())
+        return tr("presence.tweaking" if tweaking else "presence.browsing"), ""
+
+    def _update_presence(self) -> None:
+        try:
+            look = self._presence_look()
+        except Exception:                               # noqa: BLE001 - never let Discord trouble the window
+            look = None
+        if look is None:
+            self.presence.clear()
+            return
+        # (the name Discord shows comes from the application: イケメンリーダー when the interface is Japanese)
+        self.presence.use_application(presence.CLIENT_IDS.get(i18n.language(), presence.CLIENT_ID))
+        self.presence.show(look[0], look[1], start=self._presence_since,
+                           image="logo_light" if self.settings.theme == "light" else "logo",
+                           image_text=tr("presence.games", n=len(self.games)))
+
     def closeEvent(self, e) -> None:
         if (self.worker and self.play_phase == "syncing") or self.syncer is not None:
             message(self, tr("close.syncing"))      # stopping mid-sync could leave saves half-uploaded
@@ -9395,7 +9459,9 @@ class MainWindow(TaskOwner, QMainWindow):
                        dismiss="cancel") != "continue":
                 e.ignore()
                 return
+            self.presence.stop()                  # (Discord: no "Reading" left behind)
             os._exit(0)  # the game keeps running; nothing of ours is mid-write while we only watch it
+        self.presence.stop()                      # Discord shows nothing once Ikemen Reader has closed
         if self.checker:
             self.checker.wait(5000)       # (it may be uploading saves made outside Ikemen Reader)
         if self._update_ready is not None and updater.FROZEN:
@@ -9405,6 +9471,11 @@ class MainWindow(TaskOwner, QMainWindow):
                 pass
         e.accept()                        # other background work: see wait_for_tasks() in main()
 
+
+# Discord presence says "Tweaking" while one of these is open (settings, edit and look windows; not the help guide
+# or pop-up messages - owner, 2026-10-17)
+PRESENCE_TWEAKING = (SettingsDialog, GameDialog, ThemeDialog, FontDialog, BackgroundDialog, VndbDialog,
+                     CoverPickerDialog, NameDialog)
 
 _DIAG: dict = {}
 

@@ -624,6 +624,13 @@ S: dict[str, tuple[str, str]] = {
     "settings.startup":         ("Launch Program on Startup", "Windowsの起動時に自動で起動"),
     "settings.pulse":           ("Pulsing Sync Lights", "同期ランプの点滅"),
     "settings.auto_update":     ("Install Updates Automatically", "アップデートを自動でインストール"),
+    "settings.discord":         ("Show Activity on Discord", "Discordにアクティビティを表示"),
+    # Discord presence (the status on the owner's Discord profile; owner, 2026-10-17)
+    "presence.browsing":        ("Browsing...", "ライブラリを閲覧中…"),
+    "presence.reading":         ("Reading...", "読書中…"),
+    "presence.tweaking":        ("Tweaking...", "設定中…"),
+    "presence.away":            ("Away", "離席中"),
+    "presence.games":           ("{n} Games in Library", "ライブラリに{n}ゲーム"),
     "update.available_title":   ("Update Available", "アップデートがあります"),
     "update.available":         ("Ikemen Reader {version} is available. You have {current}.",
                                  "イケメンリーダー {version} が利用できます（現在のバージョン：{current}）。"),

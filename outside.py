@@ -88,6 +88,43 @@ def _is_anki(proc, anki_exe: str) -> bool:
     return False
 
 
+def foreground_pid() -> Optional[int]:
+    """The program whose window is in front right now (None: none, or not Windows)."""
+    if sys.platform != "win32":
+        return None
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    return pid.value or None
+
+
+def seconds_since_input() -> float:
+    """How long ago the mouse or keyboard was last used, anywhere on this computer."""
+    if sys.platform != "win32":
+        return 0.0
+    from ctypes import wintypes
+
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+    info = LASTINPUTINFO(ctypes.sizeof(LASTINPUTINFO), 0)
+    if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+        return 0.0
+    return max(0.0, ((ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000.0)
+
+
+def is_anki_pid(pid: int, anki_exe: str) -> bool:
+    try:
+        import psutil
+        return _is_anki(psutil.Process(pid), anki_exe)
+    except Exception:           # (gone, or not ours to look at)
+        return False
+
+
 def anki_window(anki_exe: str) -> Optional[int]:
     """The main window of a running Anki (the frontmost one if several), or None if Anki isn't open."""
     if sys.platform != "win32":
