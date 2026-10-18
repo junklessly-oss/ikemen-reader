@@ -212,6 +212,12 @@ class Game:
     names: list[str] = field(default_factory=list)      # other names from VNDB (English title, aliases...): search
     names_for: str = ""                                 # the vndb_id those names belong to
     last_played_by: dict[str, float] = field(default_factory=dict)  # unix time per device (since 2026-10-17)
+    # devices that removed the game ("Remove From This Device") -> its setup there, kept for when it comes back; it
+    # stays in the shared library for the other device (which sees it as set up only there)
+    removed_on: dict[str, dict] = field(default_factory=dict)
+
+    def removed_here(self, machine: str) -> bool:
+        return machine in self.removed_on
 
     @property
     def total_playtime(self) -> float:
@@ -252,6 +258,9 @@ class Game:
                     rest["playtime"][m] = max(0.0, round(v, 3))
             except (TypeError, ValueError):
                 pass
+        gone = d.get("removed_on") if isinstance(d.get("removed_on"), dict) else {}
+        rest["removed_on"] = {m: {k: v for k, v in p.items() if k in ("exe", "save_dir") and isinstance(v, str)}
+                              for m, p in gone.items() if isinstance(m, str) and isinstance(p, dict)}
         by = d.get("last_played_by") if isinstance(d.get("last_played_by"), dict) else {}
         rest["last_played_by"] = {}
         for m, t in by.items():
@@ -378,6 +387,9 @@ class Library:
         if game is None:
             raise KeyError(game_id)
         p = game.paths_for(machine)
+        before = game.removed_on.pop(machine, None)      # set up here again after "Remove From This Device"
+        if before and not p.save_dir:
+            p.save_dir = before.get("save_dir", "")      # (its save folder from before comes back with it)
         if exe is not None:
             p.exe = exe
         if save_dir is not None:
@@ -443,9 +455,32 @@ class Library:
             self._drop_folder_if_empty(game.folder)
         return removed
 
+    def remove_here(self, game_id: str, machine: str) -> dict:
+        """Remove From This Device: the game leaves this device's library only. Its setup here is kept in removed_on
+        (for Undo, or when it's set up here again); the other device keeps it, now set up only there. If no other
+        device has it set up, it's simply removed (remove()). Returns what restore_removed needs for Undo."""
+        game = self.get(game_id)
+        if game is None:
+            raise KeyError(game_id)
+        if not any(p.exe for m, p in game.paths.items() if m != machine):
+            return self.remove(game_id)                  # (nobody else has it: gone for good, as before)
+        p = game.paths.pop(machine, None) or MachinePaths()
+        game.removed_on[machine] = {"exe": p.exe, "save_dir": p.save_dir}
+        self.save(game)
+        return {"id": game_id, "here": machine}
+
     def restore_removed(self, removed: dict) -> Optional[Game]:
-        """Undo remove(): the game file, its cover and (if it went with it) its folder come back as they were.
-        None if there's nothing to bring back or the game is already back (e.g. added again meanwhile)."""
+        """Undo remove() / remove_here(): the game comes back as it was (remove(): the game file, its cover and the
+        folder it emptied). None if there's nothing to bring back or the game is already back."""
+        if removed.get("here"):
+            game = self.get(removed.get("id", ""))
+            machine = removed["here"]
+            if game is None or machine not in game.removed_on:
+                return None
+            p = game.removed_on.pop(machine)
+            game.paths[machine] = MachinePaths(p.get("exe", ""), p.get("save_dir", ""))
+            self.save(game)
+            return game
         text = removed.get("game")
         gid = removed.get("id", "")
         if not text or not gid or self._file(gid).exists():

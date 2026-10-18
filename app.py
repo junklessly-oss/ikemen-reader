@@ -1087,13 +1087,24 @@ def guarded(fn):
     return run
 
 
-def confirm_remove(parent, title: str) -> bool:
-    """"Are You Sure?" before a game leaves the library: Cancel (the safe default, also Enter/closing) | Confirm."""
+def confirm_remove(parent, game: Game, machine: str) -> Optional[str]:
+    """"Are You Sure?" before a game leaves the library. Set up on the other device too: Cancel | Remove From Both
+    Devices | Remove From This Device (owner, 2026-10-17); otherwise Cancel | Confirm. Cancel is the safe default (also
+    Enter / closing). Returns "here", "both" or None."""
     import html
-    body = html.escape(tr("game.remove_confirm", title=title)).replace("\n", "<br>")
+    shared = any(p.exe for m, p in game.paths.items() if m != machine)
+    key = "game.remove_choose" if shared else "game.remove_confirm"
+    body = html.escape(tr(key, title=game.title)).replace("\n", "<br>")
     text = f'<span style="font-size:13pt; font-weight:600">{html.escape(tr("game.remove_sure"))}</span><br><br>{body}'
-    return message(parent, text, title=tr("game.remove_sure"),
-                   buttons=[("no", tr("game.cancel")), ("yes", tr("game.remove_yes"))], dismiss="no", rich=True) == "yes"
+    buttons = ([("here", tr("game.remove_here")), ("both", tr("game.remove_both")), ("no", tr("game.cancel"))]
+               if shared else [("here", tr("game.remove_yes")), ("no", tr("game.cancel"))])
+    choice = message(parent, text, title=tr("game.remove_sure"), buttons=buttons, dismiss="no", rich=True)
+    return None if choice == "no" else choice
+
+
+def remove_game_from(library: Library, game_id: str, machine: str, how: str) -> dict:
+    """Carry out confirm_remove's answer; returns what Undo needs."""
+    return library.remove(game_id) if how == "both" else library.remove_here(game_id, machine)
 
 
 # =========================================================================== background work
@@ -5593,7 +5604,8 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
         self.art_from = "user"
         self.remove_art = False
         self.vndb_id = game.vndb_id if game else ""
-        self.removed = False
+        self.removed = False                    # (removed: what Undo needs)
+        self.removed_how = "both"               # "here" / "both"
         self.saved_id: Optional[str] = None
         self.title_locked = game.title_locked if game else False
         self.manual_title = game.manual_title if game else ""      # restored when Automatic is turned off
@@ -5913,8 +5925,10 @@ class GameDialog(FitsScreen, TaskOwner, QDialog):
 
     @guarded
     def _remove(self):
-        if confirm_remove(self, self.game.title):
-            self.removed = self.library.remove(self.game.game_id)   # (what went: the library offers Undo)
+        how = confirm_remove(self, self.game, self.machine)
+        if how:
+            self.removed = remove_game_from(self.library, self.game.game_id, self.machine, how)   # (Undo needs it)
+            self.removed_how = how
             self.accept()
 
     def _save(self):
@@ -6780,7 +6794,8 @@ class MainWindow(TaskOwner, QMainWindow):
         """Everything refresh needs from the cloud folder (only reading: safe in the background)."""
         library = library or self.library
         out = {"cloud": Path(library.root).is_dir()}
-        out["games"] = library.list_games() if out["cloud"] else []
+        here = self.settings.machine_name                  # (games removed from this device only: not shown here)
+        out["games"] = [g for g in library.list_games() if not g.removed_here(here)] if out["cloud"] else []
         out["folders"] = library.list_folders() if out["games"] else {}
         try:
             out["meta"] = {fid: {"sort": v["sort"], "order": v["order"]} for fid, v in library._folders_raw().items()}
@@ -8808,7 +8823,7 @@ class MainWindow(TaskOwner, QMainWindow):
             if d.removed:                                   # the Edit window's Remove From Library
                 self.clear_selection()
                 self.refresh()
-                self._offer_undo(g.title, d.removed)
+                self._offer_undo(g.title, d.removed, d.removed_how)
                 return
             if mine(self.library.get(g.game_id)) != before:     # save folder set up / changed here: ask right away
                 self._ask_now.add(g.game_id)
@@ -9237,17 +9252,18 @@ class MainWindow(TaskOwner, QMainWindow):
         g = self.games.get(gid)
         if g is None or self.worker is not None:
             return
-        if confirm_remove(self, g.title):
+        how = confirm_remove(self, self.library.get(gid) or g, self.settings.machine_name)
+        if how:
             before = self._positions()
-            removed = self.library.remove(gid)
+            removed = remove_game_from(self.library, gid, self.settings.machine_name, how)
             self.clear_selection()
             self.refresh()
             self._slide_from(before)                     # the others close the gap
-            self._offer_undo(g.title, removed)
+            self._offer_undo(g.title, removed, how)
 
-    def _offer_undo(self, title: str, removed: dict) -> None:
+    def _offer_undo(self, title: str, removed: dict, how: str = "both") -> None:
         """'Removed X. Undo' on the status line for 10 s (owner, 2026-10-17): one click puts the game back - file,
-        cover, folder - where it was."""
+        cover, folder (or just its setup on this device) - where it was."""
         def undo() -> None:
             try:
                 g = self.library.restore_removed(removed)
@@ -9258,7 +9274,8 @@ class MainWindow(TaskOwner, QMainWindow):
             if g is not None:
                 self._select(g.game_id)
                 self.statusBar().showMessage(tr("status.restored", title=g.title), 6000)
-        self.statusBar().show_action(tr("status.removed", title=title), tr("status.undo"), undo, 10000)
+        key = "status.removed_here" if removed.get("here") else "status.removed"   # (only here / gone everywhere)
+        self.statusBar().show_action(tr(key, title=title), tr("status.undo"), undo, 10000)
 
     @guarded
     def _set_status(self, gid: str, status: str) -> None:

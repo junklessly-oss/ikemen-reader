@@ -3426,7 +3426,7 @@ class UndoRemove(unittest.TestCase):
                 w.resize(1200, 800)
                 w.show()
                 w.refresh()
-                with mock.patch.object(app, "confirm_remove", return_value=True):
+                with mock.patch.object(app, "confirm_remove", return_value="here"):
                     w.remove_game(g.game_id)
                 self.assertNotIn(g.game_id, w.games)
                 bar = w.statusBar()
@@ -3444,6 +3444,84 @@ class UndoRemove(unittest.TestCase):
                 self.assertGreater(click.x(), 0)
             finally:
                 w.close()
+                app.wait_for_tasks(5)
+
+
+class RemoveFromThisDevice(unittest.TestCase):
+    """2026-10-17 (owner): removing a game set up on both devices asks: this device only, or both. Only here: hidden
+    here, kept for the other device (which sees it as set up only there); set up here again = back with its save
+    folder; Undo works; removed on both = gone for good."""
+
+    def test_library(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Library(Path(tmp))
+            g = lib.add_game("Alpha", "PC", exe=r"C:\a\a.exe")
+            lib.set_paths(g.game_id, "PC", save_dir=r"C:\saves\a")
+            lib.set_paths(g.game_id, "Laptop", exe=r"D:\a\a.exe")
+            undo = lib.remove_here(g.game_id, "PC")
+            g = lib.get(g.game_id)
+            self.assertTrue(g.removed_here("PC"))
+            self.assertEqual(g.paths_for("PC").exe, "")                 # (the laptop sees it as only set up there)
+            self.assertEqual(g.paths_for("Laptop").exe, r"D:\a\a.exe")
+            self.assertEqual(lib.restore_removed(undo).paths_for("PC").save_dir, r"C:\saves\a")   # Undo
+            lib.remove_here(g.game_id, "PC")
+            back = lib.set_paths(g.game_id, "PC", exe=r"C:\a\a2.exe")   # set up here again
+            self.assertFalse(back.removed_here("PC"))
+            self.assertEqual(back.paths_for("PC").save_dir, r"C:\saves\a")   # (its save folder came back)
+            lib.remove_here(g.game_id, "Laptop")                           # removed on the laptop...
+            lib.remove_here(g.game_id, "PC")                               # ...and here: gone for good
+            self.assertIsNone(lib.get(g.game_id))
+            solo = lib.add_game("Beta", "PC", exe=r"C:\b\b.exe")          # only ever here: simply removed
+            lib.remove_here(solo.game_id, "PC")
+            self.assertIsNone(lib.get(solo.game_id))
+
+    def test_window_and_pop_up(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication, QDialog, QPushButton
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            g = lib.add_game("Alpha", "PC", exe=r"C:\a\a.exe")
+            lib.set_paths(g.game_id, "Laptop", exe=r"D:\a\a.exe")
+            only_here = lib.add_game("Beta", "PC", exe=r"C:\b\b.exe")
+            shown = {}
+
+            def fake_exec(d):
+                shown[len(shown)] = [b.text() for b in sorted(d.findChildren(QPushButton), key=lambda b: b.x())]
+                return 0
+            with mock.patch.object(QDialog, "exec", fake_exec):
+                app.confirm_remove(None, lib.get(g.game_id), "PC")
+                app.confirm_remove(None, lib.get(only_here.game_id), "PC")
+            self.assertEqual(shown[0], ["Cancel", "Remove From Both Devices", "Remove From This Device"])
+            self.assertEqual(shown[1], ["Cancel", "Confirm"])          # (nothing to choose)
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.resize(1200, 800)
+                w.show()
+                w.refresh()
+                with mock.patch.object(app, "confirm_remove", return_value="here"):
+                    w.remove_game(g.game_id)
+                self.assertNotIn(g.game_id, w.games)                    # gone here...
+                self.assertIsNotNone(lib.get(g.game_id))               # ...still in the shared library
+                self.assertEqual(w.statusBar().currentMessage(), 'Removed "Alpha" from this device.')
+                w.statusBar()._action[2]()                              # Undo
+                self.assertIn(g.game_id, w.games)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+            lib.remove_here(g.game_id, "PC")
+            other = app.MainWindow(LocalSettings("Laptop", str(cloud)))   # the other device
+            try:
+                other.refresh()
+                self.assertIn(g.game_id, other.games)
+                self.assertEqual(other.light_state(g.game_id) in ("solo", "checking", "empty", "detect"), True)
+                self.assertEqual(app.MainWindow.only_here(other, other.games[g.game_id]), True)
+            finally:
+                other.close()
                 app.wait_for_tasks(5)
 
 

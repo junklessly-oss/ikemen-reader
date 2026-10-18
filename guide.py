@@ -151,8 +151,11 @@ GUIDE = {
             "- Drag a game onto the trash can in the bottom-right corner, or select it and click the trash can.",
             "- You can also right-click it and choose Remove From Library, or use the red button in its Edit "
             "window.",
-            "- You'll always be asked first. The game is removed from the library on both devices, but its save "
-            "files are never deleted.",
+            "- You'll always be asked first. If the game is set up on both devices, you choose: remove it from this "
+            "device only (the other device keeps it), or from both. Its save files are never deleted.",
+            "- Changed your mind? Click Undo on the status line at the bottom, right after removing.",
+            "- To bring back a game you removed from this device, add it again: it comes back with its playtime, "
+            "cover and save folder.",
         ]),
         ("Making It Yours", [
             "In Settings:",
@@ -263,7 +266,10 @@ GUIDE = {
         ("ゲームの削除", [
             "- ゲームを右下のゴミ箱にドラッグするか、ゲームを選んでゴミ箱をクリックします。",
             "- 右クリックの「ライブラリから削除」や、編集画面の赤いボタンからも削除できます。",
-            "- 削除の前には必ず確認が表示されます。ゲームは両方の端末のライブラリから削除されますが、セーブファイルは削除されません。",
+            "- 削除の前には必ず確認が表示されます。両方の端末で設定されているゲームは、この端末だけから削除する（もう一方の端末には"
+            "残ります）か、両方から削除するかを選べます。セーブファイルは削除されません。",
+            "- 削除を取り消したいときは、削除した直後に下部のステータス行の「元に戻す」をクリックしてください。",
+            "- この端末から削除したゲームは、もう一度追加すると、プレイ時間・カバー・セーブフォルダーと一緒に戻ります。",
         ]),
         ("自分好みに", [
             "設定画面で：",

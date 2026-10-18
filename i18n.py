@@ -145,6 +145,7 @@ S: dict[str, tuple[str, str]] = {
     "status.detecting":         ("Game closed. Looking for its save files...", "ゲームを終了しました。セーブファイルを探しています…"),
     "status.played_for":        ("{msg}  Read for {time}.", "{msg}　読書時間：{time}"),
     "status.removed":           ('Removed "{title}".', "「{title}」を削除しました。"),
+    "status.removed_here":      ('Removed "{title}" from this device.', "「{title}」をこの端末から削除しました。"),
     "status.undo":              ("Undo", "元に戻す"),
     "status.restored":          ('"{title}" is back in the library.', "「{title}」をライブラリに戻しました。"),
     "status.closed_at_once":    ("The game closed right after starting.", "ゲームは起動直後に終了しました。"),
@@ -308,8 +309,15 @@ S: dict[str, tuple[str, str]] = {
     "bar.trash_tip":            ("Remove From Library (or drag a game here)", "ライブラリから削除（ゲームをここにドラッグしても削除できます）"),
     "game.remove_sure":         ("Are You Sure?", "よろしいですか？"),
     "game.remove_yes":          ("Confirm", "削除する"),
-    "game.remove_confirm":      ('Remove "{title}" from the library on both devices?\n\nYour save files won\'t be deleted, either on this device or in the cloud folder.',
-                                 '「{title}」を両方の端末のライブラリから削除しますか？\n\nセーブファイルは削除されません（この端末にもクラウドフォルダーにも残ります）。'),
+    "game.remove_confirm":      ('Remove "{title}" from the library?\n\nYour save files aren\'t touched.',
+                                 '「{title}」をライブラリから削除しますか？\n\nセーブファイルは削除されません。'),
+    # set up on the other device too: only here, or on both (owner, 2026-10-17)
+    "game.remove_choose":       ('Remove "{title}" from this device, or from both devices?\n\n'
+                                 "Your save files aren't touched either way.",
+                                 "「{title}」をこの端末から削除しますか？それとも両方の端末から削除しますか？\n\n"
+                                 "どちらの場合も、セーブファイルは削除されません。"),
+    "game.remove_here":         ("Remove From This Device", "この端末から削除"),
+    "game.remove_both":         ("Remove From Both Devices", "両方の端末から削除"),
     "game.save":                ("Save", "保存"),
     "game.cancel":              ("Cancel", "キャンセル"),
     "game.exe_missing":         ("This Device's .exe wasn't found:\n{path}", "この端末の .exe が見つかりません：\n{path}"),

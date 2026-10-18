@@ -777,6 +777,14 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   play.already_running_luna "When you close it, Luna closes too, and the game starts here." - and after the game
   closes (or Force Close), Luna is checked again (idle), closed, and the game starts through it: one pop-up, not two.
   Verified with stand-ins (fake Luna folder + fake game loading a DLL from it: fakegame\IkemenFakeHookedNovel.exe).
+- REMOVE: THIS DEVICE OR BOTH (owner, 2026-10-17; plan item 1): set up on the other device too -> "Are You Sure?"
+  Cancel | Remove From Both Devices | Remove From This Device (confirm_remove returns "here" / "both"); otherwise
+  Cancel | Confirm. Only here = Library.remove_here: this device's paths move into Game.removed_on[device] (END
+  field); hidden on this device (MainWindow._load_library filters removed_here) and so never synced here; the other
+  device sees it set up only there (lavender). Set up here again (add.existing -> set_paths) un-hides it and brings
+  its save folder back. Removed on every device that had it -> deleted (remove()). Undo for both kinds. Guide updated.
+  Mixed versions: 1.0.4 drops unknown fields when it saves a game, so a laptop on 1.0.4 can bring a removed-here game
+  back here as "Not Set Up on This Device Yet" until both run this version.
 - Undo for Remove From Library (owner, 2026-10-17): Library.remove returns what went (game file text, cover bytes,
   the folder entry if it emptied); restore_removed puts them back (None if the game is already back). Status line
   'Removed "X".' + "Undo" (FadingStatusBar.show_action: a clickable word after the message, COLORS["text"] like the
