@@ -1015,6 +1015,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Single instance: claim_instance() takes a Windows named mutex (Local\IkemenReader-<user>) at the very start of main();
   later copies wait (hand_over_when_ready, <= 8 s) for the first window and bring it forward. Before, the check came
   before the first copy's QLocalServer existed: spam-clicking opened 3 windows on the laptop (5 quick launches -> 1 now).
+- Opening flash (owner, 2026-10-18, "one millisecond of white"): measured from a separate process, every opening showed 1-2
+  frames of white ~180 ms in. MainWindow._cloak_until_drawn: cloaked (DWMWA_CLOAK) from its first Show until the
+  backdrop's first paint (DwmFlush, then uncloak; 600 ms fallback). 0 white frames in 8 openings; finished window
+  ~250 ms after creation (was ~290). Sampler: scratchpad openflash.py.
 - Gotcha: the Bash tool collapses double backslashes in inline heredocs - write scripts to files or use Edit.
 
 ## Ideas for later (owner interested, not scheduled)

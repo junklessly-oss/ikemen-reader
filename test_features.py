@@ -4391,3 +4391,30 @@ class AuditFixes(unittest.TestCase):
         finally:
             holder.kill()
             holder.wait()
+
+    def test_window_opens_without_a_white_frame_and_is_revealed(self):
+        # Windows showed the new main window white for a frame or two (owner, 2026-10-18): it's hidden ("cloaked") until
+        # its first picture is drawn - and must always be shown again
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            calls = []
+            real = app._dwm_flag
+            with mock.patch.object(app, "_dwm_flag", lambda w, attr, on: (calls.append((attr, on)), real(w, attr, on))):
+                w = app.MainWindow(LocalSettings("PC", str(cloud)))
+                try:
+                    w.show()
+                    end = time.time() + 2
+                    while time.time() < end and w._opening:
+                        QApplication.processEvents()
+                    if IS_WINDOWS:
+                        self.assertEqual([c for c in calls if c[0] == 13], [(13, True), (13, False)])   # hidden, then shown
+                    self.assertFalse(w._opening)
+                finally:
+                    w.close()
+                    app.wait_for_tasks(5)

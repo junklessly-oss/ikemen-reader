@@ -7479,6 +7479,31 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not self._start_fitted:
             self._start_fitted = True
             self._fit_start_height()
+            self._cloak_until_drawn()
+
+    _opening = False                               # hidden from the screen until its first picture is drawn
+
+    def _cloak_until_drawn(self) -> None:
+        """Opening: Windows puts a new window on screen before it's drawn and shows it WHITE for a frame or two
+        (owner, 2026-10-18; measured: every opening, ~180 ms in). Like every pop-up (PopupsToFront), the window is
+        hidden ("cloaked") until its first picture is drawn. (Show arrives before the window goes on screen.)"""
+        if sys.platform != "win32":
+            return
+        _dwm_flag(self, 13, True)                  # DWMWA_CLOAK
+        self._opening = True
+        self.backdrop.installEventFilter(self)     # (its first paint: the window's picture is on its way)
+        QTimer.singleShot(600, self._reveal_opening)   # (in case one never comes)
+
+    def _reveal_opening(self) -> None:
+        if not self._opening:
+            return
+        self._opening = False
+        self.backdrop.removeEventFilter(self)
+        try:
+            ctypes.windll.dwmapi.DwmFlush()        # (the frame holding the first picture: uncloaked just before it, the
+        except (OSError, AttributeError):          # window could still show empty for a frame)
+            pass
+        _dwm_flag(self, 13, False)
 
     def _fit_start_height(self) -> None:
         """Opening size: START_ROWS rows of covers with the same gap above, between and below them (the
@@ -8850,6 +8875,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     # ------------------------------------------------------------------ animation
     def eventFilter(self, obj: QObject, ev: QEvent) -> bool:
+        if self._opening and obj is self.backdrop and ev.type() == QEvent.Paint:
+            QTimer.singleShot(0, self._reveal_opening)   # (after this paint reaches the window)
         if not hasattr(self, "anim"):       # still building the window
             return False
         t = ev.type()
