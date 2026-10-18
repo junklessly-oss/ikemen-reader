@@ -37,8 +37,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 246 tests (2026-10-18, after the 1.1.0 audit), all pass on
-  the PC (Python 3.14, `py -m unittest`; ~3 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 249 tests (2026-10-18, after the laptop pass), all pass on
+  the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
   run it is copied from the old `%APPDATA%\VNLauncher` (old folder left as a safety copy).
@@ -1027,6 +1027,26 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Minimized: nothing animates (_update_anim checks isMinimized; changeEvent restarts it): 6-8 % of a core -> 0 %.
   Restore measured clean (0 white / black frames).
 - Gotcha: the Bash tool collapses double backslashes in inline heredocs - write scripts to files or use Edit.
+
+## Laptop pass (2026-10-18, Claude running ON the laptop: Windows 11, Ryzen 3 7320U, integrated Radeon, 60 Hz)
+- Checked, no change needed: zoom ignored (Qt sees 96 DPI, window 1200x833, bar 81 px - same as the PC); Windows 11
+  borders = band colour focused or not, Settings flush (+0 / +0, 310 px gaps both sides); title bar: 30 Settings /
+  pop-up open + close cycles = exactly 60 colour changes, no blink (Windows 11 fades the title bar itself); opening
+  filmed clean; minimise 0 % CPU, restore 0 white / black frames; idle ~20 % of one core (lights breathing, 60 Hz);
+  fuzz110 1,200 actions 0 errors; tests pass on Python 3.15.
+- Fixed: launch watch (psutil status() 13 ms + window titles 17 ms per look, every 30 ms: launch frames > 34 ms 2-5 ->
+  0; titles now sampled every TITLE_EVERY 0.5 s, votes weighted by time). Big library (240 games, scratch makebig.py):
+  scrolling drew the grid TWICE a frame (the scroll's full paint dropped the still picture, the lights frame remade
+  it) -> LibraryGrid.painted_all skips that lights frame; without a background picture Qt blits a scroll and the
+  still picture stayed put (stale squares round the lights) -> it scrolls too (QPixmap.scroll); covers beyond the
+  memory budget decoded while drawing -> MainWindow._prefetch_ahead (on scroll: view + a screenful each way, nearest
+  first) and CoverCache._trim_ready(evict_drawn) (only those push out covers drawn longest ago, never the last
+  KEEP_DRAWN 48; the broad start-up prefetch never does - it evicted covers a sort brought straight back).
+  Scroll frames > 50 ms 17-21 -> 0, folder open 300-420 ms -> < 33, sort worst 70-580 -> ~30-50 (rare system spikes).
+- Not changed (told the owner): Custom Theme's colour picker takes ~0.6 s to open on the laptop (LiveColour's three
+  restyles; 0.2 s on the PC), ~0.2 s to close; the drag itself keeps up with every step.
+- Tools (claude-tools): bigbench, sortbench, launchpaints, scanload, stillscroll, titleblink (sampler: one BitBlt per
+  refresh; GetPixel is ~25 ms on Windows 11), livebench, sizes, makebig, openwhite, showstacks.
 
 ## Ideas for later (owner interested, not scheduled)
 - PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows
