@@ -1012,6 +1012,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   the Edit window's button row follows: Remove under the fields, Save under Browse - measured).
 - Checks: fuzz110 (2 x 600 random actions incl. My Device switching, drags, rename, undo, other-device changes): 0
   errors; searchfuzz 1500: 0; real-window frame bench at 143 Hz: launch 0 late frames, worst 22 ms anywhere.
+- Single instance: claim_instance() takes a Windows named mutex (Local\IkemenReader-<user>) at the very start of main();
+  later copies wait (hand_over_when_ready, <= 8 s) for the first window and bring it forward. Before, the check came
+  before the first copy's QLocalServer existed: spam-clicking opened 3 windows on the laptop (5 quick launches -> 1 now).
 - Gotcha: the Bash tool collapses double backslashes in inline heredocs - write scripts to files or use Edit.
 
 ## Ideas for later (owner interested, not scheduled)

@@ -4371,3 +4371,23 @@ class AuditFixes(unittest.TestCase):
         import i18n
         i18n.set_language("en")
         self.assertEqual(i18n.tr("presence.games_one"), "1 Game in Library")
+
+    def test_quick_double_launch_opens_one_copy(self):
+        # clicking the icon several times quickly opened several windows (owner's laptop): a copy only answered once its
+        # window was built. Now the first copy holds a Windows lock from its very first moment
+        if not IS_WINDOWS:
+            self.skipTest("Windows only")
+        from unittest import mock
+        key = f"IkemenReader-test-{uuid.uuid4().hex[:8]}"
+        holder = subprocess.Popen([sys.executable, "-c", (
+            "import sys, time; sys.path.insert(0, r'" + str(Path(__file__).parent) + "'); import app; "
+            f"app.INSTANCE_KEY = '{key}'; print(app.claim_instance(), flush=True); time.sleep(20)")],
+            stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "True")          # the first copy: it's the only one
+            import app
+            with mock.patch.object(app, "INSTANCE_KEY", key):
+                self.assertFalse(app.claim_instance())                         # a second one is told it isn't
+        finally:
+            holder.kill()
+            holder.wait()

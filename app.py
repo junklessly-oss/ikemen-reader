@@ -10583,6 +10583,34 @@ def hand_over_to_running_copy() -> bool:
     return False
 
 
+_INSTANCE_LOCK: list = []          # the Windows lock this copy holds while it runs (see claim_instance)
+
+
+def claim_instance() -> bool:
+    """True if this is the only copy. Taken the moment the program starts, as a Windows named lock that only one
+    process can hold: hand_over_to_running_copy alone came too late - a copy only answers once its window is built,
+    so clicking the icon several times quickly opened several windows (owner's laptop, 2026-10-18)."""
+    if sys.platform != "win32":
+        return True
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)   # (its own copy: the error code read reliably below)
+    k32.CreateMutexW.restype = ctypes.c_void_p
+    k32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    handle = k32.CreateMutexW(None, 0, "Local\\" + INSTANCE_KEY)
+    already = ctypes.get_last_error() == 183                 # ERROR_ALREADY_EXISTS: another copy holds it
+    if handle:
+        _INSTANCE_LOCK.append(handle)                      # (kept for this copy's whole life; Windows frees it at exit)
+    return not already
+
+
+def hand_over_when_ready(seconds: float = 8.0) -> None:
+    """Another copy is running or still starting: bring its window to the front once it can answer."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if hand_over_to_running_copy():
+            return
+        time.sleep(0.2)
+
+
 def listen_for_second_copies(window: QWidget) -> None:
     """Answer hand_over_to_running_copy(): bring this window to the front."""
     from PySide6.QtNetwork import QLocalServer
@@ -10618,8 +10646,9 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Ikemen Reader")
     app.setEffectEnabled(Qt.UI_AnimateCombo, False)   # drop-downs slide open by themselves (ThemedCombo)
-    if hand_over_to_running_copy():
-        return                                  # already open: that window comes to the front instead
+    if not claim_instance():
+        hand_over_when_ready()                  # already open (or opening): that window comes to the front instead
+        return
     install_error_net()
     install_menu_lines(app)
     _install_stall_log()
