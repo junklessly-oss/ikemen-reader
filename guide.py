@@ -127,6 +127,9 @@ GUIDE = {
             "- Folders First / Folders Last / Folders Mixed (in the same menu) choose where folders go in Title, Most "
             "Played and Recently Played: grouped at the front or back, or among the games, always in that sort's order. "
             "Your choice stays until you pick another one. With no folders, they're greyed out.",
+            "§- The filter menu starts with This Device (games set up on this computer), Other Device (games set up only "
+            "on the other one) and Both Devices. It works together with the reading statuses below it: This Device and "
+            "Reading shows what you're reading that's ready here. Your choice stays until you pick another one.",
             "- My Arrangement is your own order: drag a cover into the gap between two others to move it there (a "
             "thin line shows where it will land). Doing that switches to My Arrangement, starting from exactly what "
             "you were looking at. It's kept when you switch to another sort: pick My Arrangement to get it back. New "
@@ -269,6 +272,7 @@ GUIDE = {
             "- タイトルで検索、「タイトル順」「プレイ時間が長い順」「最近プレイした順」「自分の並び」で並べ替え、プレイ状況で絞り込みができます。検索や絞り込みでは、フォルダーの中にある該当ゲームも表示されます。フォルダー名でも検索できます。VNDBからの自動取得がオンなら、英語タイトルやローマ字表記、略称などのVNDBに載っている別名でも検索できます。",
             "- 検索は、入力した文字がタイトルに沿っているものを表示します。英語・ローマ字は単語の先頭で一致し（「ind」でIndigo、「toki」でSakura no Toki）、複数の単語はその順番で一致します（「girls 1」など）。1文字だけのときは、その文字で始まる名前だけが表示されます。数字はその数そのものに一致します（「1」は1巻で、11は含みません）。かなはタイトルの先頭、漢字はタイトルのどこにあっても一致します。",
             "- 同じメニューの「フォルダーを先頭に」「フォルダーを末尾に」「フォルダーを混ぜる」で、タイトル順・プレイ時間順・最近プレイした順でのフォルダーの位置を選べます（先頭・末尾にまとめる、またはゲームの間に混ぜる。どれもその並び順で並びます）。別のものを選ぶまで保持されます。フォルダーがないときは選べません。",
+            "§- 絞り込みメニューの上には「この端末」（この端末で設定済みのゲーム）、「もう一方の端末」（もう一方の端末でのみ設定済みのゲーム）、「両方の端末」があります。下のプレイ状況と組み合わせて使えます。たとえば「この端末」と「プレイ中」で、この端末ですぐ読めるプレイ中のゲームが表示されます。別のものを選ぶまで保持されます。",
             "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。ドラッグ中にカバーを上端や下端に近づけるとスクロールします（端に近いほど速くなります）。",
             "- 「自分の並び」のときにフォルダーの配置を選ぶと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先頭に」「末尾に」はまとめて、「混ぜる」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではライブラリの並び順に合わせます。"

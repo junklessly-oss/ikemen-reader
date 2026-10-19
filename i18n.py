@@ -39,6 +39,9 @@ S: dict[str, tuple[str, str]] = {
     "status.now_custom":        ("Now showing My Arrangement: your own order. Drag covers between others to arrange them.",
                                  "「自分の並び」に切り替えました。カバーを他のカバーの間にドラッグすると並べ替えられます。"),
     "filter.all":               ("All Games", "すべてのゲーム"),
+    "filter.here":              ("This Device", "この端末"),
+    "filter.other":             ("Other Device", "もう一方の端末"),
+    "filter.both":              ("Both Devices", "両方の端末"),
 
     # ------------------------------------------------------------------ reading status
     "status.none":              ("No Status", "未設定"),

@@ -5906,7 +5906,8 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             anki_path=anki,
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
             bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4),
-            discord=self.discord.isChecked(), solo=solo)
+            discord=self.discord.isChecked(), solo=solo,
+            device_filter=self.current.device_filter if self.current else "both")
         save_local_settings(self.result_settings)
         self.accept()
 
@@ -7267,10 +7268,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         fm = self.sync_label.fontMetrics()
         self.sync_label.setFixedWidth(max(fm.horizontalAdvance(tr(k)) for k in ("top.synced", "top.syncing", "top.attention_one")) + 2)
         self._fill_sort()
+        self._fill_filter()
         for combo, items, current in (
                 (self.sort, None, None),
-                (self.filter, [(tr("filter.all"), "all")] + [(tr(f"status.{s}"), s) for s in STATUSES[1:]],
-                 self.settings.status_filter),
+                (self.filter, None, None),
                 (self.d_status, [(tr(f"status.{s or 'none'}"), s) for s in STATUSES], None)):
             combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)   # resize when the language changes
             if items is not None:
@@ -7294,6 +7295,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 texts = [combo.itemText(i) for i in range(combo.count())]
                 if combo is self.sort:                          # wide enough in and out of folders
                     texts = [c[0] for c in self._sort_choices(True) + self._sort_choices(False) if c]
+                else:                                           # (and in both modes)
+                    texts = [c[0] for c in self._filter_choices(False) if c]
                 longest = max(fm.horizontalAdvance(t) for t in texts)
                 combo.setFixedWidth(longest + chrome + 6)       # 6 px to spare
             else:
@@ -7439,6 +7442,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         the time + date fade out, then everything fades in together."""
         solo = self.settings.solo
         self.d_stats.solo = solo
+        self._fill_filter()                              # (the device group only with two devices)
         if self._mode_shown is None or not self.isVisible() or self._mode_shown == solo:
             self._mode_anim = None
             self._mode_final(solo)
@@ -7994,14 +7998,14 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 if fs == "custom" else sort_games(gs, fs)
         if self.current_folder and self.current_folder not in self.folder_games:
             self.current_folder = None                    # it was emptied or removed
-        flat = bool(q) or status != "all"
+        flat = bool(q) or self._filtering()
 
         def keep(g: Game) -> bool:
-            return matches_search(g, q) and (status == "all" or g.status == status)
+            return matches_search(g, q) and (status == "all" or g.status == status) and self._on_device(g)
 
         def keep_folder(fid: str) -> bool:              # searching: a folder whose name matches shows as itself
             return bool(q) and matches_names((self.folder_name(fid),), q) and \
-                    (status == "all" or any(g.status == status for g in self.folder_games[fid]))
+                    any((status == "all" or g.status == status) and self._on_device(g) for g in self.folder_games[fid])
 
         top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
         top += [("folder", fid) for fid in self.folder_games]
@@ -8233,6 +8237,50 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             if d and d.startswith("place:"):
                 c.model().item(i).setEnabled(has_folders)
         c.blockSignals(False)
+
+    def _filter_choices(self, solo: bool) -> list:
+        """(label, data) for the filter drop-down: with two devices, This Device / Other Device / Both Devices under
+        a divider above the reading statuses (owner, 2026-10-18); each group remembers its own pick."""
+        statuses = [(tr("filter.all"), "all")] + [(tr(f"status.{s}"), s) for s in STATUSES[1:]]
+        if solo:
+            return statuses
+        return [(tr(f"filter.{d}"), "dev:" + d) for d in ("here", "other", "both")] + [None] + statuses
+
+    def _fill_filter(self) -> None:
+        c = self.filter
+        c.blockSignals(True)
+        c.clear()
+        for choice in self._filter_choices(self.settings.solo):
+            if choice is None:
+                c.insertSeparator(c.count())
+            else:
+                c.addItem(*choice)
+        c.blockSignals(False)
+        self._mark_filter()
+
+    def _mark_filter(self) -> None:
+        """The box shows the device when one is picked, else the reading status (no ticks, like the sort's)."""
+        dev = self._device_filter()
+        c = self.filter
+        c.blockSignals(True)
+        c.setCurrentIndex(max(0, c.findData("dev:" + dev if dev != "both" else self.settings.status_filter)))
+        c.blockSignals(False)
+
+    def _device_filter(self) -> str:
+        return "both" if self.settings.solo else self.settings.device_filter
+
+    def _filtering(self) -> bool:
+        """A status or device filter is on (games inside folders then show directly, nothing can be rearranged)."""
+        return self.settings.status_filter != "all" or self._device_filter() != "both"
+
+    def _on_device(self, g: Game) -> bool:
+        """Does the device filter let this game through? here = set up on this device, other = only on the other."""
+        dev = self._device_filter()
+        if dev == "both":
+            return True
+        me = self.settings.machine_name
+        mine = bool(g.paths_for(me).exe)
+        return mine if dev == "here" else not mine and bool(g.paths_for(other_slot(me)).exe)
 
     def _place_folders(self, place: str) -> list[str]:
         """My Arrangement + a folder option: the folders re-placed, sorted by the automatic sort used last (games
@@ -8489,7 +8537,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def showing_no_results(self) -> bool:
         """Searching / filtering and nothing matches."""
-        flat = bool(self.search.text().strip()) or self.settings.status_filter != "all"
+        flat = bool(self.search.text().strip()) or self._filtering()
         return flat and self.grid.count() == 0 and bool(self.games)
 
     def _toggle_stats(self) -> None:
@@ -8567,9 +8615,15 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._fade_top_words(self.sort, was, self._apply_filter)   # (no reload or save check: only the order changed)
 
     def _filter_changed(self, _i: int) -> None:
-        self.settings.status_filter = self.filter.currentData() or "all"
+        d = self.filter.currentData() or "all"
+        was = self.filter.painted
+        if d.startswith("dev:"):
+            self.settings.device_filter = d[len("dev:"):]
+        else:
+            self.settings.status_filter = d
+        self._mark_filter()                              # (a status picked under a device: the box keeps the device)
         self._save_view_choice()
-        self._fade_top_words(self.filter, self.filter.painted, self._apply_filter)
+        self._fade_top_words(self.filter, was, self._apply_filter)
 
     def _fade_top_words(self, box: "ThemedCombo", was: str, change: Callable[[], None]) -> None:
         """A pick in the top bar's sort / status filter: the grid changes, and the box's words fade with the covers
@@ -8975,8 +9029,12 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     def _show_next_conflict(self, _link: str = "") -> None:
         """Select the next game whose saves need a decision (cycles through them on repeated clicks)."""
         self.search.clear()
-        if self.settings.status_filter != "all":
-            self.filter.setCurrentIndex(0)
+        if self._filtering():                    # (every game shown again)
+            was = self.filter.painted
+            self.settings.status_filter, self.settings.device_filter = "all", "both"
+            self._mark_filter()
+            self._save_view_choice()
+            self._fade_top_words(self.filter, was, self._apply_filter)
         from library import sort_games as _sort
         order = [g.game_id for g in _sort(list(self.games.values()), self.settings.sort)]
         conflicts = [gid for gid in order if self.sync_states.get(gid) == "conflict"]
@@ -9252,7 +9310,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         inside_cover = c.contains(QPointF(pos)) and c.left() + c.width() * 0.2 <= pos.x() <= c.right() - c.width() * 0.2
         if inside_cover and iid != dragged and not is_folder(dragged) and not self.current_folder:
             return ("onto", iid)
-        flat = bool(self.search.text().strip()) or self.settings.status_filter != "all"
+        flat = bool(self.search.text().strip()) or self._filtering()
         if flat or (inside_cover and iid == dragged):
             return None                                  # (searching / filtering: nothing to rearrange)
         before = pos.x() < c.center().x()
@@ -9863,7 +9921,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         g = self.games.get(gid)
         if g is not None:
             want = g.folder or None
-            if self.search.text().strip() == "" and self.settings.status_filter == "all" and want != self.current_folder:
+            if self.search.text().strip() == "" and not self._filtering() and want != self.current_folder:
                 self.current_folder = want
                 self._rebuild(select=gid)
         for i in range(self.grid.count()):

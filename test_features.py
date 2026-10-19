@@ -4581,3 +4581,57 @@ class LaptopSmoothness(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class DeviceFilter(unittest.TestCase):
+    """2026-10-18 (owner): the filter drop-down's device group - This Device / Other Device / Both Devices above the
+    reading statuses, each group remembering its own pick; the box shows the device when one is picked; no ticks."""
+
+    def test_device_group(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            here = lib.add_game("Here", "PC", exe=r"C:\a\a.exe")
+            both = lib.add_game("Both", "PC", exe=r"C:\b\b.exe")
+            lib.set_paths(both.game_id, "Laptop", exe=r"D:\b\b.exe")
+            there = lib.add_game("There", "Laptop", exe=r"D:\c\c.exe")
+            lib.update(both.game_id, status="reading")
+            lib.update(there.game_id, status="reading")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            shown = lambda: sorted(w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count()))
+            pick = lambda data: w.filter.setCurrentIndex(w.filter.findData(data))
+            try:
+                w.show()
+                w.refresh()
+                data = [w.filter.itemData(i) for i in range(w.filter.count())]
+                self.assertEqual(data[:3], ["dev:here", "dev:other", "dev:both"])
+                self.assertIsNone(data[3])                                   # the divider
+                self.assertEqual(data[4], "all")
+                self.assertEqual(w.filter.currentText(), "All Games")
+                pick("dev:here")
+                self.assertEqual(shown(), sorted([here.game_id, both.game_id]))
+                self.assertEqual(w.filter.currentText(), "This Device")
+                pick("reading")                                              # a status within the device
+                self.assertEqual(shown(), [both.game_id])
+                self.assertEqual(w.filter.currentText(), "This Device")      # the box keeps the device
+                pick("dev:other")                                            # only on the other device
+                self.assertEqual(shown(), [there.game_id])
+                pick("dev:both")
+                self.assertEqual(shown(), sorted([both.game_id, there.game_id]))   # still Reading
+                self.assertEqual(w.filter.currentText(), "Reading")
+                pick("all")
+                self.assertEqual(len(shown()), 3)
+                pick("dev:here")
+                w.settings.solo = True                                       # My Device: no device group
+                w._apply_mode()
+                self.assertNotIn("dev:here", [w.filter.itemData(i) for i in range(w.filter.count())])
+                self.assertEqual(w._device_filter(), "both")
+            finally:
+                w.close()
+                app.wait_for_tasks(5)

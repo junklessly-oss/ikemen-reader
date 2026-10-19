@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 250 tests (2026-10-18, after the laptop pass), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 251 tests (2026-10-18, after the device filter), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -1059,6 +1059,15 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   cover, covers loaded in the background first. First sorts 64 -> 17-20 ms, 0 decodes while drawing. Owner-sized
   library: folder open / close worst 14 ms at 143 Hz. Text 16 px + bar 81 px on BOTH machines (older "17 /
   83" notes were other conditions).
+
+## Device filter (2026-10-18, owner's design; in 1.1.1)
+- The top bar's filter drop-down, two devices only: This Device (set up here) / Other Device (set up ONLY on the other
+  one) / Both Devices, a divider, then All Games + the reading statuses. Each group remembers its own pick
+  (LocalSettings.device_filter, END field, per device, not shared by Ikemen Sync) and they combine (This Device +
+  Reading). NO ticks, like the sort drop-down; the box shows the device when one is picked, else the status
+  (_mark_filter). A device filter counts as filtering (_filtering: games inside folders show directly, no
+  rearranging; folders by name only if something inside matches). My Device: the group isn't listed and is ignored
+  (_device_filter -> both); _apply_mode refills the list. Guide (EN + JA, two-device only). Test: DeviceFilter.
 
 ## Ideas for later (owner interested, not scheduled)
 - PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows
