@@ -152,7 +152,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.3" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.5" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -921,6 +921,32 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   watched; uncloaked once they've been quiet PICKER_QUIET_S 0.05 (cap 0.6 s). A fixed 40 ms wait still showed white.
   Filmed (claude-tools pickfilm.py / pickhook.py): folder + file pickers appear dark in one frame. Only our own
   pickers - other programs' windows (games, Luna, Anki) and the UAC prompt are out of reach.
+
+## 1.1.5 launch pass (2026-10-19; owner: "close and launch 10 times, make sure beyond doubt")
+- LESSON: 1.1.3 shipped without running the BUILT program on the owner's PC; the opening flash was back there. Test
+  launch / window changes on the real build + the owner's setup (close their copy: claude-tools reopen.ps1).
+- Opening flash (regressed, built program only, 4-6 of 7 openings): the WM_SHOWWINDOW pre-paint into the still-hidden
+  window was often lost when it became visible. MainWindow.nativeEvent now paints at WM_SHOWWINDOW (picture kept,
+  paint_into_window returns it) and AGAIN at WM_WINDOWPOSCHANGED with SWP_SHOWWINDOW (visible, not yet composed;
+  _prepaint_left 2 -> 1 -> 0). GdiFlush alone did nothing (5/8 still flashed). IKEMEN_DEBUG_OPEN=1 -> open.log.
+- Open Game / Save Folder: ExplorerAppearsDrawn (see open_folder): WinEvent hook on EVENT_OBJECT_CREATE (out of
+  context, other processes) catches CabinetWClass while hidden: DWMWA_TRANSITIONS_FORCEDISABLED (works cross-process;
+  DWMWA_CLOAK is access denied) + WS_EX_LAYERED alpha 0; a thread reads it with PrintWindow(PW_RENDERFULLCONTENT)
+  every 25 ms and reveals once two readings match (dark mode: and not mostly white), cap 1.5 s; its own style and
+  fade put back. Live watchers are kept in _EXPLORER_WATCHES until stopped: a watcher garbage-collected while hooked
+  CRASHED the program on the next window created (found by the 10x check). An already-open folder window is just
+  brought forward by Windows (no create, nothing to do).
+- Window position: LocalSettings.window_pos (END field, [x, y] client top-left, per device, not shared) saved in
+  closeEvent (_remember_position; normalGeometry when max/minimised); main() -> place_at_last_position() before
+  show; only if that spot is on a screen (QApplication.screenAt), clamped into its usable area. Before: Windows put
+  it on the monitor the mouse was on (owner has two: DISPLAY2 left of the primary, x -1920..0).
+- Nothing active at launch: Qt gave the keyboard to the search box (first in tab order); showEvent's first-show
+  block sets focus on the window itself. IKEMEN_DEBUG_FOCUS=1 -> launch.log (focus / selection 3 s after opening).
+- Checks (claude-tools): launchcheck.py = 10 x close + launch of the built exe on the owner's setup with a black
+  backdrop (backdrop.py), first visible frame must hold the picture (least squares: picture share > 0.03), opened
+  exactly where closed (alternating screens, mouse left alone), nothing active: 10/10 all three. explcheck.py = 10 x
+  open_folder (NOHOOK=1 control: 2/3 flash) -> 10/10 clean. openseq.py (single opening), flashscore.py / strip.py.
+  Gotchas: the window may open on the other screen (old copies); a new copy waits for an old one still exiting.
 
 ## Solo mode ("My Device" / マイ端末, button "Dual Device" / デュアル端末 - owner renamed them 2026-10-18; plan item 3; building since 2026-10-18 - see memory next-features-plan.md)
 - LocalSettings.solo (END field); machine_name + cloud_root stay as they were (Dual Mode fills them in again).

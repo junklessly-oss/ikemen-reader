@@ -186,6 +186,8 @@ class LocalSettings:
                                       # kept as they were: going back to Dual fills them in again)
     device_filter: str = "here"       # the library view (two devices only): "here" = games set up on this device,
                                       # "other" = set up only on the other one, "both"; per device, not shared
+    window_pos: list = field(default_factory=list)   # [x, y] of the main window when last closed (its frame's
+                                      # top-left, screen pixels); [] = never closed yet; per device, not shared
 
     @property
     def library_root(self) -> str:
@@ -221,6 +223,10 @@ def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSetting
     if s.theme not in ("dark", "light", "custom"):
         s.theme = "dark"
     s.solo = s.solo is True
+    wp = s.window_pos
+    s.window_pos = ([int(wp[0]), int(wp[1])] if isinstance(wp, list) and len(wp) == 2
+                    and all(isinstance(v, (int, float)) and not isinstance(v, bool) and abs(v) < 100000 for v in wp)
+                    else [])
     import math
     fin = lambda v, d: v if math.isfinite(v) else d          # (a hand-edited "NaN" or "Infinity")
     s.bg_opacity = min(1.0, max(0.0, fin(s.bg_opacity, 0.35)))

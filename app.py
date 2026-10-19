@@ -91,7 +91,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.5"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -1059,10 +1059,180 @@ def certain_saves(settings: LocalSettings, games: list[Game]) -> dict[str, str]:
 
 def open_folder(path: str) -> None:
     if path and Path(path).exists():
+        watch = ExplorerAppearsDrawn.start()
         try:
             os.startfile(path)  # type: ignore[attr-defined]  (Windows only)
         except OSError:
-            pass                # Windows refused (no permission / no handler): nothing else to do
+            watch.stop()        # Windows refused (no permission / no handler): nothing else to do
+
+
+EXPLORER_WATCH_S = 3.0          # how long after asking for a folder a new Explorer window is looked for
+EXPLORER_WAIT_MAX_S = 1.5       # a hidden Explorer window is shown after this, whatever it looks like
+EXPLORER_SAMPLE_S = 0.025       # how often its picture is read while it's hidden
+_EXPLORER_WATCHES: set = set()  # watchers whose hook is live (see ExplorerAppearsDrawn.start)
+
+
+class ExplorerAppearsDrawn:
+    """Open Game Folder / Open Save Folder: Explorer's new window faded in half-drawn - a white box for ~100 ms
+    before its dark folder list (owner, 2026-10-19; filmed one screen read per refresh). It's another program's
+    window: Windows refuses to cloak it (access denied), but lets us switch off its fade and make it see-through.
+    A WinEvent hook (out of context: delivered to this thread's message loop) catches the window as it's CREATED,
+    still hidden: fade off + layered with alpha 0. A background thread then reads its picture (PrintWindow with
+    PW_RENDERFULLCONTENT works while it's see-through) and shows it once two readings in a row are identical (and,
+    in dark mode, not mostly white) - it appears at once, fully drawn. Measured here: white 92 % at show, dark and
+    still ~125 ms later. Its own style is put back afterwards (fade on again for closing, not layered)."""
+
+    def __init__(self):
+        self.hook = None
+        self.windows: dict = {}             # hwnd -> its extended style before we touched it
+
+    @classmethod
+    def start(cls) -> "ExplorerAppearsDrawn":
+        self = cls()
+        if sys.platform != "win32":
+            return self
+        try:
+            from ctypes import wintypes
+            u = ctypes.WinDLL("user32")      # (own function objects: argtypes set here touch nobody else's)
+            dwm = ctypes.WinDLL("dwmapi")
+            proc_type = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND, ctypes.c_long,
+                                           ctypes.c_long, wintypes.DWORD, wintypes.DWORD)
+            u.SetWinEventHook.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.HMODULE, proc_type,
+                                          wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+            u.SetWinEventHook.restype = wintypes.HANDLE
+            u.UnhookWinEvent.argtypes = [wintypes.HANDLE]
+            u.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            u.GetParent.argtypes = [wintypes.HWND]
+            u.GetParent.restype = wintypes.HWND
+            u.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+            u.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+            u.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF, ctypes.c_ubyte, wintypes.DWORD]
+            u.IsWindow.argtypes = [wintypes.HWND]
+            u.IsWindowVisible.argtypes = [wintypes.HWND]
+            u.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+            u.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+            self.u, self.dwm = u, dwm
+            dark = _apps_use_dark_mode()
+
+            def on_event(hook, event, hwnd, obj, child, thread, when):
+                if obj != 0 or not hwnd or hwnd in self.windows or u.GetParent(hwnd) or u.IsWindowVisible(hwnd):
+                    return
+                name = ctypes.create_unicode_buffer(32)
+                u.GetClassNameW(hwnd, name, 32)
+                if name.value != "CabinetWClass":
+                    return
+                style = u.GetWindowLongW(hwnd, -20)
+                self.windows[hwnd] = style
+                self._fade(hwnd, False)
+                u.SetWindowLongW(hwnd, -20, style | 0x00080000)               # WS_EX_LAYERED
+                u.SetLayeredWindowAttributes(hwnd, 0, 0, 2)                    # LWA_ALPHA, see-through
+                threading.Thread(target=self._reveal_when_drawn, args=(hwnd, dark), daemon=True).start()
+
+            self.proc = proc_type(on_event)                                    # (kept alive while hooked)
+            # EVENT_OBJECT_CREATE only, other programs only (WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS)
+            for older in list(_EXPLORER_WATCHES):        # (one at a time: a quick second click replaces the first)
+                older.stop()
+            self.hook = u.SetWinEventHook(0x8000, 0x8000, None, self.proc, 0, 0, 0x0002)
+            if self.hook:
+                # kept here until stopped: Windows calls self.proc for as long as the hook lives, and a watcher
+                # thrown away meanwhile crashed the program on the next window created (found 2026-10-19)
+                _EXPLORER_WATCHES.add(self)
+                QTimer.singleShot(int(EXPLORER_WATCH_S * 1000), self.stop)
+        except (OSError, AttributeError):
+            pass
+        return self
+
+    def stop(self) -> None:
+        if self.hook:
+            self.u.UnhookWinEvent(self.hook)
+            self.hook = None
+        _EXPLORER_WATCHES.discard(self)
+
+    def _fade(self, hwnd, on: bool) -> None:
+        value = ctypes.c_int(0 if on else 1)
+        self.dwm.DwmSetWindowAttribute(hwnd, 3, ctypes.byref(value), ctypes.sizeof(value))   # TRANSITIONS_FORCEDISABLED
+
+    def _reveal_when_drawn(self, hwnd, dark: bool) -> None:
+        start, last = time.perf_counter(), None
+        try:
+            while time.perf_counter() - start < EXPLORER_WAIT_MAX_S and self.u.IsWindow(hwnd):
+                time.sleep(EXPLORER_SAMPLE_S)
+                if not self.u.IsWindowVisible(hwnd):
+                    continue                    # (not shown yet: nothing drawn to read)
+                look = self._look(hwnd)
+                if look is not None and look == last and not (dark and look[0] > 0.5):
+                    break
+                last = look
+        finally:
+            if self.u.IsWindow(hwnd):
+                self.u.SetLayeredWindowAttributes(hwnd, 0, 255, 2)
+                self.u.SetWindowLongW(hwnd, -20, self.windows.get(hwnd, 0))   # its own style back (not layered)
+                self._fade(hwnd, True)
+
+    def _look(self, hwnd):
+        """(share of near-white points, a fingerprint of the picture) - read from the window itself, though it's
+        see-through - or None if it can't be read."""
+        from ctypes import wintypes
+        r = wintypes.RECT()
+        self.u.GetWindowRect(hwnd, ctypes.byref(r))
+        w, h = r.right - r.left, r.bottom - r.top
+        if w <= 20 or h <= 50:
+            return None
+        gdi =ctypes.WinDLL("gdi32")
+        gdi.CreateCompatibleDC.restype = wintypes.HDC
+        gdi.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi.CreateDIBSection.restype = wintypes.HBITMAP
+        gdi.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p),
+                                         wintypes.HANDLE, wintypes.DWORD]
+        gdi.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi.SelectObject.restype = wintypes.HGDIOBJ
+        gdi.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi.DeleteDC.argtypes = [wintypes.HDC]
+
+        class BIH(ctypes.Structure):
+            _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                        ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                        ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", ctypes.c_long),
+                        ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD),
+                        ("biClrImportant", wintypes.DWORD)]
+        head =BIH(ctypes.sizeof(BIH), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+        bits = ctypes.c_void_p()
+        dc = gdi.CreateCompatibleDC(None)
+        bmp = gdi.CreateDIBSection(dc, ctypes.byref(head), 0, ctypes.byref(bits), None, 0)
+        if not dc or not bmp or not bits.value:
+            if bmp:
+                gdi.DeleteObject(bmp)
+            if dc:
+                gdi.DeleteDC(dc)
+            return None
+        try:
+            gdi.SelectObject(dc, bmp)
+            if not self.u.PrintWindow(hwnd, dc, 2):                           # PW_RENDERFULLCONTENT
+                return None
+            data = ctypes.string_at(bits, w * h * 4)
+        finally:
+            gdi.DeleteObject(bmp)
+            gdi.DeleteDC(dc)
+        points = light = 0
+        for y in range(40, h - 10, 12):                                        # (below the title bar)
+            row = y * w * 4
+            for x in range(10, w - 10, 12):
+                i = row + x * 4
+                points += 1
+                light += data[i] > 200 and data[i + 1] > 200 and data[i + 2] > 200
+        return round(light / max(1, points), 3), zlib.crc32(data)
+
+
+def _apps_use_dark_mode() -> bool:
+    """Windows' own app colour setting (Settings > Personalisation > Colours): Explorer follows it."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except OSError:
+        return False
 
 
 _BACK_KEYS = ("cancel", "no", "later")          # "don't do it" buttons: always on the far left
@@ -2173,16 +2343,34 @@ def set_border(w: QWidget) -> None:
         pass
 
 
-def paint_into_window(w: QWidget) -> None:
-    """Draw the widget's whole picture straight into its native window (Windows only): used just before a window is
-    shown, so the first thing on screen is its real picture, not an empty white window (see MainWindow.nativeEvent)."""
+class _WINDOWPOS(ctypes.Structure):
+    _fields_ = [("hwnd", ctypes.c_void_p), ("hwndInsertAfter", ctypes.c_void_p), ("x", ctypes.c_int),
+                ("y", ctypes.c_int), ("cx", ctypes.c_int), ("cy", ctypes.c_int), ("flags", ctypes.c_uint)]
+
+
+def _open_log(text: str) -> None:
+    """IKEMEN_DEBUG_OPEN=1: what the opening did, in %APPDATA%\\IkemenReader\\open.log."""
+    if os.environ.get("IKEMEN_DEBUG_OPEN"):
+        try:
+            with open(default_app_dir() / "open.log", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%H:%M:%S')} {text}\n")
+        except OSError:
+            pass
+
+
+def paint_into_window(w: QWidget, img: Optional[QImage] = None) -> Optional[QImage]:
+    """Draw the widget's whole picture straight into its native window (Windows only): used as a window is shown, so
+    the first thing on screen is its real picture, not an empty white window (see MainWindow.nativeEvent). Returns
+    the picture, so it can be put in again without drawing it anew."""
     from ctypes import wintypes
-    for lay in (w.layout(), getattr(w.centralWidget(), "layout", lambda: None)() if hasattr(w, "centralWidget") else None):
-        if lay is not None:
-            lay.activate()                             # (its final size and places, not a stale layout)
-    img = w.grab().toImage().convertToFormat(QImage.Format_RGB32)
+    if img is None:
+        for lay in (w.layout(),
+                    getattr(w.centralWidget(), "layout", lambda: None)() if hasattr(w, "centralWidget") else None):
+            if lay is not None:
+                lay.activate()                         # (its final size and places, not a stale layout)
+        img = w.grab().toImage().convertToFormat(QImage.Format_RGB32)
     if img.isNull():
-        return
+        return None
 
     class BIH(ctypes.Structure):
         _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
@@ -2203,9 +2391,15 @@ def paint_into_window(w: QWidget) -> None:
     hdc = user32.GetDC(hwnd)
     if hdc:
         try:
-            gdi32.SetDIBitsToDevice(hdc, 0, 0, img.width(), img.height(), 0, 0, 0, img.height(), buf, ctypes.byref(head), 0)
+            lines = gdi32.SetDIBitsToDevice(hdc, 0, 0, img.width(), img.height(), 0, 0, 0, img.height(), buf,
+                                            ctypes.byref(head), 0)
+            gdi32.GdiFlush()
+            _open_log(f"drew {lines} of {img.height()} rows ({img.width()}x{img.height()} picture)")
         finally:
             user32.ReleaseDC(hwnd, hdc)
+    else:
+        _open_log("no window DC")
+    return img
 
 
 def no_open_animation(w: QWidget) -> None:
@@ -6368,7 +6562,8 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
             bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4),
             discord=self.discord.isChecked(), solo=solo,
-            device_filter=self.current.device_filter if self.current else "here")
+            device_filter=self.current.device_filter if self.current else "here",
+            window_pos=list(self.current.window_pos) if self.current else [])
         save_local_settings(self.result_settings)
         self.accept()
 
@@ -8004,13 +8199,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not self._start_fitted:
             self._start_fitted = True
             self._fit_start_height()
+            # nothing active at launch (owner, 2026-10-19): Qt hands the keyboard to the first box in the window,
+            # the search; the window itself holds it instead until something is clicked
+            self.setFocus(Qt.OtherFocusReason)
+            if os.environ.get("IKEMEN_DEBUG_FOCUS"):          # (launch checks: what's active a moment after opening)
+                QTimer.singleShot(3000, self._log_launch_focus)
 
     def changeEvent(self, ev) -> None:
         super().changeEvent(ev)
         if ev.type() == QEvent.WindowStateChange and hasattr(self, "anim"):
             self._update_anim()                    # (minimized: the animation clock stops; restored: it starts again)
 
-    _prepainted = False
+    _prepaint_left = 2                  # 2: paint at WM_SHOWWINDOW; 1: again once visible; 0: done
+    _prepainted: Optional[QImage] = None
 
     def nativeEvent(self, event_type, message):
         """Opening (owner, 2026-10-18): Windows' open animation fades and zooms in whatever the window shows - and a new
@@ -8019,16 +8220,31 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         in, the real picture popping in at the end. Now, the moment before Windows shows it (WM_SHOWWINDOW), the
         window's finished picture is drawn straight into it: the animation starts with the real window, like any
         native program's. (Settings and pop-ups still open at once: see no_open_animation / PopupsToFront.)"""
-        if not self._prepainted and sys.platform == "win32":
+        if self._prepaint_left and sys.platform == "win32":
             try:
                 from ctypes import wintypes
                 msg = wintypes.MSG.from_address(int(message))
-                if msg.message == 0x0018 and msg.wParam:          # WM_SHOWWINDOW: about to be shown
-                    self._prepainted = True
+                if msg.message == 0x0018 and msg.wParam and self._prepaint_left == 2:   # WM_SHOWWINDOW: about to show
+                    self._prepaint_left = 1
                     self.opened_at = time.monotonic()
-                    paint_into_window(self)
-            except (ValueError, TypeError, OSError, RuntimeError):
-                pass                                              # (then it opens as any Qt window would)
+                    t = time.perf_counter()
+                    self._prepainted = paint_into_window(self)
+                    _open_log(f"pre-painted {self.width()}x{self.height()} in {(time.perf_counter() - t) * 1000:.0f} ms")
+                elif msg.message == 0x0047 and self._prepaint_left == 1:                # WM_WINDOWPOSCHANGED
+                    pos = ctypes.cast(msg.lParam, ctypes.POINTER(_WINDOWPOS)).contents
+                    if pos.flags & 0x0040:                                              # SWP_SHOWWINDOW: now visible
+                        # Drawn into the still-hidden window, the picture sometimes didn't survive its becoming
+                        # visible (Windows sets up what's shown at that moment): the opening fade began with a white
+                        # window in 1 of 2 - 6 of 7 openings of the built program (owner, 2026-10-19; filmed). So the
+                        # same picture goes in again now - visible, but not yet composed on screen.
+                        self._prepaint_left = 0
+                        if self._prepainted is not None:
+                            paint_into_window(self, self._prepainted)
+                            _open_log("painted again as it became visible")
+                        self._prepainted = None
+            except Exception as e:                                # (then it opens as any Qt window would)
+                self._prepaint_left = 0
+                _open_log(f"pre-paint failed: {e!r}")
         return super().nativeEvent(event_type, message)
 
     def _fit_start_height(self) -> None:
@@ -11040,12 +11256,49 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                            image="logo_light" if dark_logo else "logo",
                            image_text=tr("presence.games_one") if len(self.games) == 1 else tr("presence.games", n=len(self.games)))
 
+    def _log_launch_focus(self) -> None:
+        f = QApplication.focusWidget()
+        try:
+            with open(default_app_dir() / "launch.log", "a", encoding="utf-8") as out:
+                out.write(f"{time.strftime('%H:%M:%S')} focus={type(f).__name__ if f else None} "
+                          f"search_focused={self.search.hasFocus()} selected={len(self.grid.selectedItems())} "
+                          f"current={self.grid.currentItem() is not None} bar={self.selected_id()}\n")
+        except OSError:
+            pass
+
+    def _remember_position(self) -> None:
+        """Where the window is now (its normal place even if minimized or maximized): it opens there next time
+        (owner, 2026-10-19 - Windows put it on whichever screen the mouse was on)."""
+        g = self.normalGeometry() if (self.isMaximized() or self.isMinimized()) else self.geometry()
+        if g.isValid() and [g.x(), g.y()] != self.settings.window_pos:
+            self.settings.window_pos = [g.x(), g.y()]
+            try:
+                save_local_settings(self.settings)
+            except OSError:
+                pass
+
+    def place_at_last_position(self) -> None:
+        """Before the first show: back where it was when last closed, if that's still on a screen (a screen
+        unplugged or rearranged since: Windows places it, as before). Kept inside that screen's usable area."""
+        if len(self.settings.window_pos) != 2:
+            return
+        x, y = self.settings.window_pos
+        screen = QApplication.screenAt(QPoint(x + 60, y + 10))           # (where its title bar would be)
+        if screen is None:
+            return
+        room = screen.availableGeometry()
+        frame = 32                                                        # (title bar above the client area)
+        x = max(room.left(), min(x, room.right() + 1 - self.width()))
+        y = max(room.top() + frame, min(y, room.bottom() + 1 - self.height()))
+        self.setGeometry(x, y, self.width(), self.height())
+
     def closeEvent(self, e) -> None:
         if (self.worker and self.play_phase == "syncing") or self.syncer is not None:
             message(self, tr("close.syncing"))      # stopping mid-sync could leave saves half-uploaded
             e.ignore()
             return
         self._flush_view_choice()                   # (a view choice made just now)
+        self._remember_position()
         if self.worker:
             g = self.games.get(self.playing_id)
             if message(self, tr("close.body", title=g.title if g else ""), tr("close.title"),
@@ -11371,6 +11624,7 @@ def main() -> None:
         settings = d.result_settings
     w = MainWindow(settings)
     listen_for_second_copies(w)
+    w.place_at_last_position()                  # (where it was when last closed)
     w.prepare_first_screen()                    # (its first picture ready the moment it appears)
     w.show()
     code = app.exec()
