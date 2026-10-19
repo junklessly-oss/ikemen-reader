@@ -152,7 +152,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.2" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.3" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -915,6 +915,12 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bits and ignored) and can be covered again afterwards. Verified over Notepad.
   QFileDialog is SKIPPED (2026-10-19, owner's screenshot): with Windows' native picker Qt's QFileDialog is an
   invisible stand-in, and cloaking / bring_to_front put it on screen as a small empty white "Choose t..." box.
+- Windows' file picker no longer flashes white (owner, 2026-10-19): its Explorer view is white until painted (~150
+  ms) and Windows' fade showed that. PickerAppearsDrawn (with ... around every pick_folder / pick_file / pick_files):
+  thread hooks while the picker is open - WM_SHOWWINDOW of #32770 -> no fade + cloaked; WM_PAINTs of its windows
+  watched; uncloaked once they've been quiet PICKER_QUIET_S 0.05 (cap 0.6 s). A fixed 40 ms wait still showed white.
+  Filmed (claude-tools pickfilm.py / pickhook.py): folder + file pickers appear dark in one frame. Only our own
+  pickers - other programs' windows (games, Luna, Anki) and the UAC prompt are out of reach.
 
 ## Solo mode ("My Device" / マイ端末, button "Dual Device" / デュアル端末 - owner renamed them 2026-10-18; plan item 3; building since 2026-10-18 - see memory next-features-plan.md)
 - LocalSettings.solo (END field); machine_name + cloud_root stay as they were (Dual Mode fills them in again).

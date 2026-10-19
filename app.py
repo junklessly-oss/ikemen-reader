@@ -91,7 +91,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -3489,18 +3489,109 @@ def browse_start(path: str = "", fallback: str = "") -> QUrl:
     return QUrl(THIS_PC) if sys.platform == "win32" else QUrl.fromLocalFile(str(Path.home()))
 
 
+PICKER_QUIET_S = 0.05          # the picker is shown once its windows have painted nothing for this long
+PICKER_WAIT_MAX_S = 0.6        # ... or after this, whatever it looks like
+
+
+class PickerAppearsDrawn:
+    """Windows' own file picker faded in half-drawn: its Explorer view is white until it has painted (~150 ms here),
+    and the fade showed that - a white / light-grey flash before the dark folder list (owner, 2026-10-19; filmed one
+    screen read per refresh). While a picker is open (with ...: around the QFileDialog call; the picker runs on our
+    thread), two thread hooks watch it: WM_SHOWWINDOW of its window (#32770) -> no fade + hidden (cloaked), and every
+    WM_PAINT of its windows; once they have painted nothing for PICKER_QUIET_S it's uncloaked - it appears at once,
+    fully drawn. (A fixed wait guessed wrong: 40 ms still showed white for ~110 ms.)"""
+
+    def __enter__(self):
+        self.hooks = []
+        if sys.platform != "win32":
+            return self
+        try:
+            from ctypes import wintypes
+            u = ctypes.WinDLL("user32")          # (own function objects: argtypes set here touch nobody else's)
+            proc_type = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+            u.SetWindowsHookExW.argtypes = [ctypes.c_int, proc_type, wintypes.HINSTANCE, wintypes.DWORD]
+            u.SetWindowsHookExW.restype = wintypes.HHOOK
+            u.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+            u.CallNextHookEx.restype = ctypes.c_ssize_t
+            u.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+            u.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            u.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            u.GetAncestor.restype = wintypes.HWND
+            dwm = ctypes.WinDLL("dwmapi")
+            dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+
+            class CWPSTRUCT(ctypes.Structure):
+                _fields_ = [("lParam", wintypes.LPARAM), ("wParam", wintypes.WPARAM), ("message", wintypes.UINT),
+                            ("hwnd", wintypes.HWND)]
+
+            def flag(hwnd, attribute, on):
+                value = ctypes.c_int(1 if on else 0)
+                dwm.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(value), ctypes.sizeof(value))
+
+            state = {"picker": None, "painted": None}
+
+            def reveal(hwnd, shown_at):
+                while True:
+                    time.sleep(0.005)
+                    now, painted = time.perf_counter(), state["painted"]
+                    if now - shown_at > PICKER_WAIT_MAX_S or (painted is not None and now - painted > PICKER_QUIET_S):
+                        break
+                dwm.DwmFlush()                  # (the last picture composed first)
+                flag(hwnd, 13, False)           # DWMWA_CLOAK off
+
+            def on_sent(code, wp, lp):
+                if code == 0 and state["picker"] is None:
+                    m = CWPSTRUCT.from_address(lp)
+                    if m.message == 0x0018 and m.wParam:                 # WM_SHOWWINDOW, appearing
+                        name = ctypes.create_unicode_buffer(16)
+                        u.GetClassNameW(m.hwnd, name, 16)
+                        if name.value == "#32770":
+                            state["picker"] = m.hwnd
+                            flag(m.hwnd, 3, True)                       # DWMWA_TRANSITIONS_FORCEDISABLED
+                            flag(m.hwnd, 13, True)                      # DWMWA_CLOAK
+                            threading.Thread(target=reveal, args=(m.hwnd, time.perf_counter()), daemon=True).start()
+                return u.CallNextHookEx(None, code, wp, lp)
+
+            def on_posted(code, wp, lp):
+                if code == 0 and state["picker"]:
+                    m = wintypes.MSG.from_address(lp)
+                    if m.message == 0x000F and m.hWnd and u.GetAncestor(m.hWnd, 2) == state["picker"]:   # WM_PAINT
+                        state["painted"] = time.perf_counter()
+                return u.CallNextHookEx(None, code, wp, lp)
+
+            self.u = u
+            self.procs = (proc_type(on_sent), proc_type(on_posted))     # (kept alive while hooked)
+            thread = ctypes.windll.kernel32.GetCurrentThreadId()
+            for kind, proc in ((4, self.procs[0]), (3, self.procs[1])):  # WH_CALLWNDPROC, WH_GETMESSAGE
+                hook = u.SetWindowsHookExW(kind, proc, None, thread)
+                if hook:
+                    self.hooks.append(hook)
+        except (OSError, AttributeError):
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        for hook in self.hooks:
+            self.u.UnhookWindowsHookEx(hook)
+        return False
+
+
 def pick_folder(parent, caption: str, path: str = "", fallback: str = "") -> str:
-    url = QFileDialog.getExistingDirectoryUrl(parent, caption, browse_start(path, fallback), supportedSchemes=["file"])
+    with PickerAppearsDrawn():
+        url = QFileDialog.getExistingDirectoryUrl(parent, caption, browse_start(path, fallback),
+                                                  supportedSchemes=["file"])
     return str(Path(url.toLocalFile())) if url.isValid() and url.toLocalFile() else ""
 
 
 def pick_file(parent, caption: str, path: str = "", filter: str = "") -> str:
-    url, _ = QFileDialog.getOpenFileUrl(parent, caption, browse_start(path), filter, supportedSchemes=["file"])
+    with PickerAppearsDrawn():
+        url, _ = QFileDialog.getOpenFileUrl(parent, caption, browse_start(path), filter, supportedSchemes=["file"])
     return url.toLocalFile() if url.isValid() else ""
 
 
 def pick_files(parent, caption: str, filter: str = "") -> list[str]:
-    urls, _ = QFileDialog.getOpenFileUrls(parent, caption, browse_start(), filter, supportedSchemes=["file"])
+    with PickerAppearsDrawn():
+        urls, _ = QFileDialog.getOpenFileUrls(parent, caption, browse_start(), filter, supportedSchemes=["file"])
     return [u.toLocalFile() for u in urls if u.isValid() and u.toLocalFile()]
 
 
