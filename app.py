@@ -1070,6 +1070,7 @@ EXPLORER_WATCH_S = 3.0          # how long after asking for a folder a new Explo
 EXPLORER_WAIT_MAX_S = 1.5       # a hidden Explorer window is shown after this, whatever it looks like
 EXPLORER_SAMPLE_S = 0.025       # how often its picture is read while it's hidden
 _EXPLORER_WATCHES: set = set()  # watchers whose hook is live (see ExplorerAppearsDrawn.start)
+_EXPLORER_HIDING: set = set()   # watchers with an Explorer window still hidden (show_hidden_explorer_windows)
 
 
 class ExplorerAppearsDrawn:
@@ -1084,7 +1085,8 @@ class ExplorerAppearsDrawn:
 
     def __init__(self):
         self.hook = None
-        self.windows: dict = {}             # hwnd -> its extended style before we touched it
+        self.windows: dict = {}             # hidden for now: hwnd -> its extended style before we touched it
+        self.lock = threading.Lock()
 
     @classmethod
     def start(cls) -> "ExplorerAppearsDrawn":
@@ -1123,7 +1125,9 @@ class ExplorerAppearsDrawn:
                 if name.value != "CabinetWClass":
                     return
                 style = u.GetWindowLongW(hwnd, -20)
-                self.windows[hwnd] = style
+                with self.lock:
+                    self.windows[hwnd] = style
+                    _EXPLORER_HIDING.add(self)
                 self._fade(hwnd, False)
                 u.SetWindowLongW(hwnd, -20, style | 0x00080000)               # WS_EX_LAYERED
                 u.SetLayeredWindowAttributes(hwnd, 0, 0, 2)                    # LWA_ALPHA, see-through
@@ -1165,10 +1169,19 @@ class ExplorerAppearsDrawn:
                     break
                 last = look
         finally:
-            if self.u.IsWindow(hwnd):
-                self.u.SetLayeredWindowAttributes(hwnd, 0, 255, 2)
-                self.u.SetWindowLongW(hwnd, -20, self.windows.get(hwnd, 0))   # its own style back (not layered)
-                self._fade(hwnd, True)
+            self._show(hwnd)
+
+    def _show(self, hwnd) -> None:
+        """Seen again, its own style back (not layered, its fade on for closing). Once only (the reveal thread, or
+        closing Ikemen Reader meanwhile)."""
+        with self.lock:
+            style = self.windows.pop(hwnd, None)
+            if not self.windows:
+                _EXPLORER_HIDING.discard(self)
+        if style is not None and self.u.IsWindow(hwnd):
+            self.u.SetLayeredWindowAttributes(hwnd, 0, 255, 2)
+            self.u.SetWindowLongW(hwnd, -20, style)
+            self._fade(hwnd, True)
 
     def _look(self, hwnd):
         """(share of near-white points, a fingerprint of the picture) - read from the window itself, though it's
@@ -1179,24 +1192,8 @@ class ExplorerAppearsDrawn:
         w, h = r.right - r.left, r.bottom - r.top
         if w <= 20 or h <= 50:
             return None
-        gdi =ctypes.WinDLL("gdi32")
-        gdi.CreateCompatibleDC.restype = wintypes.HDC
-        gdi.CreateCompatibleDC.argtypes = [wintypes.HDC]
-        gdi.CreateDIBSection.restype = wintypes.HBITMAP
-        gdi.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p),
-                                         wintypes.HANDLE, wintypes.DWORD]
-        gdi.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
-        gdi.SelectObject.restype = wintypes.HGDIOBJ
-        gdi.DeleteObject.argtypes = [wintypes.HGDIOBJ]
-        gdi.DeleteDC.argtypes = [wintypes.HDC]
-
-        class BIH(ctypes.Structure):
-            _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
-                        ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
-                        ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", ctypes.c_long),
-                        ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD),
-                        ("biClrImportant", wintypes.DWORD)]
-        head =BIH(ctypes.sizeof(BIH), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+        gdi, BIH = _explorer_gdi()
+        head = BIH(ctypes.sizeof(BIH), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
         bits = ctypes.c_void_p()
         dc = gdi.CreateCompatibleDC(None)
         bmp = gdi.CreateDIBSection(dc, ctypes.byref(head), 0, ctypes.byref(bits), None, 0)
@@ -1222,6 +1219,42 @@ class ExplorerAppearsDrawn:
                 points += 1
                 light += data[i] > 200 and data[i + 1] > 200 and data[i + 2] > 200
         return round(light / max(1, points), 3), zlib.crc32(data)
+
+
+_GDI: list = []
+
+
+def _explorer_gdi():
+    """gdi32 with the argument types ExplorerAppearsDrawn._look needs, and the bitmap header type - set up once."""
+    if not _GDI:
+        from ctypes import wintypes
+        gdi = ctypes.WinDLL("gdi32")         # (own function objects: argtypes set here touch nobody else's)
+        gdi.CreateCompatibleDC.restype = wintypes.HDC
+        gdi.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi.CreateDIBSection.restype = wintypes.HBITMAP
+        gdi.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p),
+                                         wintypes.HANDLE, wintypes.DWORD]
+        gdi.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi.SelectObject.restype = wintypes.HGDIOBJ
+        gdi.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi.DeleteDC.argtypes = [wintypes.HDC]
+
+        class BIH(ctypes.Structure):
+            _fields_ = [("biSize", wintypes.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
+                        ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                        ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", ctypes.c_long),
+                        ("biYPelsPerMeter", ctypes.c_long), ("biClrUsed", wintypes.DWORD),
+                        ("biClrImportant", wintypes.DWORD)]
+        _GDI[:] = [gdi, BIH]
+    return _GDI[0], _GDI[1]
+
+
+def show_hidden_explorer_windows() -> None:
+    """Closing: an Explorer window still hidden while it draws (a folder opened a moment before) is shown now -
+    the thread that would show it ends with the program, and the window would stay invisible."""
+    for watcher in list(_EXPLORER_HIDING):
+        for hwnd in list(watcher.windows):
+            watcher._show(hwnd)
 
 
 def _apps_use_dark_mode() -> bool:
@@ -5911,6 +5944,9 @@ class FitsScreen:
         """As tall as the contents need (with the hint texts wrapped at the real width), but never
         taller than the screen: then the contents scroll and Cancel / Save stay in view."""
         width = max(width, self.width(), self.minimumWidth())
+        scroll = self.findChild(QScrollArea)
+        if scroll is not None:
+            scroll.setViewportMargins(0, 0, 0, 0)            # (re-worked out once fitted: _no_half_rows)
         content = self._content.layout().totalHeightForWidth(width)
         buttons = self.layout().itemAt(1).sizeHint().height()
         room = self._screen_room(self)
@@ -5963,6 +5999,33 @@ class FitsScreen:
         if extra > 0 and self.height() < self._most:
             self._set_fit_height(self.width(), min(self.height() + extra, self._most))
             QTimer.singleShot(0, self._top_up)
+        else:
+            self._no_half_rows(scroll)
+
+    HALF_ROW_MAX = 60                   # a row taller than this cut at the edge is left as it is (a long hint text)
+
+    def _no_half_rows(self, scroll: QScrollArea) -> None:
+        """When the contents don't fit (Settings opens as tall as the main window), the visible part ended halfway
+        through a row: "Install Updates Automatically" showed only its top half (owner, 2026-10-19). The visible
+        part now stops just above whatever row the edge would slice, so it opens on whole rows; the rest is a scroll
+        away as before. Worked out at each fitting: language / My Device / Dual Device move the cut."""
+        scroll.setViewportMargins(0, 0, 0, 0)
+        if scroll.verticalScrollBar().maximum() <= 0:
+            return                                          # everything fits: nothing is cut
+        vp = scroll.viewport()
+        bottom = vp.height() + scroll.verticalScrollBar().value()        # (the contents' y at the visible edge)
+        content = scroll.widget()
+        cut_top = None
+        for w in content.findChildren(QWidget):
+            if not w.isVisibleTo(content) or w.height() > self.HALF_ROW_MAX:
+                continue
+            if any(c.isVisibleTo(content) for c in w.findChildren(QWidget)):
+                continue                                    # (rows themselves, not the boxes holding them)
+            top = w.mapTo(content, QPoint(0, 0)).y()
+            if top < bottom < top + w.height():
+                cut_top = top if cut_top is None else min(cut_top, top)
+        if cut_top is not None and bottom - cut_top <= self.HALF_ROW_MAX:
+            scroll.setViewportMargins(0, 0, 0, bottom - cut_top)
 
     def showEvent(self, ev) -> None:
         super().showEvent(ev)
@@ -11299,6 +11362,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return
         self._flush_view_choice()                   # (a view choice made just now)
         self._remember_position()
+        show_hidden_explorer_windows()
         if self.worker:
             g = self.games.get(self.playing_id)
             if message(self, tr("close.body", title=g.title if g else ""), tr("close.title"),

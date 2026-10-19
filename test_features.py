@@ -4736,3 +4736,117 @@ class DropDownShadow(unittest.TestCase):
         finally:
             combo.hidePopup()
             holder.close()
+
+
+class LaunchPass(unittest.TestCase):
+    """1.1.4 (owner, 2026-10-19): the window opens where it was last closed (not on the mouse's screen), nothing is
+    active at launch (the search box took the keyboard), and Settings never opens on a half-cut row."""
+
+    def test_window_pos_setting_is_checked(self):
+        from library import load_local_settings
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            for given, expected in (([100, -1700], [100, -1700]), ([1.5, 2], [1, 2]), ("x", []), ([1, 2, 3], []),
+                                    ([True, 1], []), ([1e9, 1], []), (None, [])):
+                data = {"machine_name": "PC", "cloud_root": str(d)}
+                if given is not None:
+                    data["window_pos"] = given
+                (d / "settings.json").write_text(json.dumps(data), "utf-8")
+                self.assertEqual(load_local_settings(d).window_pos, expected, given)
+
+    def _window(self, tmp, **kw):
+        import app
+        cloud = Path(tmp) / "cloud"
+        cloud.mkdir(exist_ok=True)
+        return app.MainWindow(LocalSettings("PC", str(cloud), **kw))
+
+    def test_opens_where_it_was_closed(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            from library import load_local_settings
+            QApplication.instance() or QApplication([])
+            room = QApplication.primaryScreen().availableGeometry()
+            spot = [room.left() + 40, room.top() + 50]
+            size = (min(400, room.width() - 80), min(520, room.height() - 60))   # (fits the test screen)
+            w = self._window(tmp)
+            try:
+                w.setGeometry(spot[0], spot[1], *size)
+                w._remember_position()
+                self.assertEqual(load_local_settings().window_pos, spot)
+            finally:
+                w.close()
+            w = self._window(tmp, window_pos=spot)
+            try:
+                w.resize(*size)
+                w.place_at_last_position()
+                self.assertEqual([w.geometry().x(), w.geometry().y()], spot)
+            finally:
+                w.close()
+            # a spot on no screen (a monitor unplugged since): left to Windows, as before
+            w = self._window(tmp, window_pos=[-90000, -90000])
+            try:
+                before = w.geometry()
+                w.place_at_last_position()
+                self.assertEqual(w.geometry(), before)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_nothing_active_at_launch(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            (Path(tmp) / "cloud").mkdir()
+            Library(Path(tmp) / "cloud").add_game("A Game", "PC", exe=r"C:\a\a.exe")    # (a cover to select)
+            w = self._window(tmp)
+            try:
+                w.show()
+                w.activateWindow()
+                for _ in range(20):
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+                self.assertFalse(w.search.hasFocus())
+                self.assertEqual(w.grid.selectedItems(), [])
+                self.assertIsNone(w.selected_id())
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_settings_opens_on_whole_rows(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication, QScrollArea, QWidget
+            from PySide6.QtCore import QPoint
+            import app
+            QApplication.instance() or QApplication([])
+            w = self._window(tmp)
+            try:
+                w.show()
+                w.resize(w.width(), 700)                 # (shorter than Settings needs: it scrolls)
+                QApplication.processEvents()
+                d = app.SettingsDialog(w.settings, w)
+                d.show()
+                for _ in range(30):
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+                scroll = d.findChild(QScrollArea)
+                self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
+                edge = scroll.viewport().height()
+                content = scroll.widget()
+                for wd in content.findChildren(QWidget):
+                    if not wd.isVisibleTo(content) or wd.height() > d.HALF_ROW_MAX or \
+                            any(c.isVisibleTo(content) for c in wd.findChildren(QWidget)):
+                        continue
+                    top = wd.mapTo(content, QPoint(0, 0)).y()
+                    self.assertFalse(top < edge < top + wd.height(), f"{type(wd).__name__} cut at the edge")
+                d.reject()
+            finally:
+                w.close()
+                app.wait_for_tasks(5)

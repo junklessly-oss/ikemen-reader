@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 254 tests (2026-10-19, after the drop-down / menu / Settings pass + sweep), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 258 tests (2026-10-19, after the 1.1.4 launch pass), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -947,6 +947,14 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   exactly where closed (alternating screens, mouse left alone), nothing active: 10/10 all three. explcheck.py = 10 x
   open_folder (NOHOOK=1 control: 2/3 flash) -> 10/10 clean. openseq.py (single opening), flashscore.py / strip.py.
   Gotchas: the window may open on the other screen (old copies); a new copy waits for an old one still exiting.
+- Closing Ikemen Reader while an Explorer window is still hidden: show_hidden_explorer_windows() (closeEvent) shows
+  it (_EXPLORER_HIDING; _show is once-only under a lock) - the reveal thread dies with the program.
+- Settings / Edit never open on a half-cut row (owner, 2026-10-19: "Install Updates Automatically" showed its top
+  half): FitsScreen._no_half_rows, after fitting, sets the scroll area's bottom viewport margin so the visible part
+  ends just above the row the edge would slice (rows <= HALF_ROW_MAX 60 px; leaf widgets only). Window height
+  unchanged (still flush with the main window). My Device: everything fits, nothing to do.
+- Tests: test_features.LaunchPass (window_pos validation, reopen spot + off-screen fallback, nothing active, whole
+  rows) -> 258 tests.
 
 ## Solo mode ("My Device" / マイ端末, button "Dual Device" / デュアル端末 - owner renamed them 2026-10-18; plan item 3; building since 2026-10-18 - see memory next-features-plan.md)
 - LocalSettings.solo (END field); machine_name + cloud_root stay as they were (Dual Mode fills them in again).
