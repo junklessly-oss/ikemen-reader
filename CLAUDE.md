@@ -1046,7 +1046,15 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Not changed (told the owner): Custom Theme's colour picker takes ~0.6 s to open on the laptop (LiveColour's three
   restyles; 0.2 s on the PC), ~0.2 s to close; the drag itself keeps up with every step.
 - Tools (claude-tools): bigbench, sortbench, launchpaints, scanload, stillscroll, titleblink (sampler: one BitBlt per
-  refresh; GetPixel is ~25 ms on Windows 11), livebench, sizes, makebig, openwhite, showstacks.
+  refresh; GetPixel is ~25 ms on Windows 11), livebench, sizes, makebig, openwhite, showstacks, eggbench, spikehunt.
+- Easter egg on the laptop: 60 fps (rocking frame ~8.5 ms); simulated weak PC (1-2 cores) 46-52 fps - the cost is
+  Qt rotating each cover (~0.5 ms each); cheaper only with jagged edges, left as is.
+- Rare sort spike (240 games, laptop only, ~1 in 10-20 sorts, 70-300 ms): caught during folder-mosaic drawing while a
+  background cover decode runs; not the GIL (decode releases it), not GC -> CPU scheduling on a weak machine. Left.
+- Back on the PC afterwards (same day): 249 tests pass; bench110 at 143 Hz launch worst 13-17 ms (was 22); 240-game
+  library smooth (96 sorts: no spike, one 64 ms first sort); Windows 10 title bar: 30 cycles = 60 changes, no blink;
+  Settings top +0 / bottom -1 (the Windows 10 rule) / centred. Text 16 px + bar 81 px on BOTH machines (older "17 /
+  83" notes were other conditions).
 
 ## Ideas for later (owner interested, not scheduled)
 - PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows
