@@ -4554,3 +4554,30 @@ class LaptopSmoothness(unittest.TestCase):
             c.accept([(Path(f"b{i}.png"), 1.0, (1.0, 0.5, 0.5), img)], ahead=True)
         self.assertGreaterEqual(len(c._cache), c.KEEP_DRAWN)                  # what's on screen is never dropped
         self.assertLessEqual(len(c._cache) + len(c._ready), c.MAX_COVERS)
+
+    def test_folder_whose_mosaic_changes_fades_instead_of_decoding_mid_frame(self):
+        # a sort that reorders a folder's games (it stays in place) changed its mosaic at once, its new covers decoded
+        # while drawing (a 64 ms frame on the PC): it now fades out and in like a cover that moved
+        from unittest import mock
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp, 0)
+            try:
+                lib = w.library
+                fid = lib.create_folder("Box")
+                for i, name in enumerate(["Alpha", "Bravo", "Charlie", "Delta", "Echo"]):
+                    g = lib.add_game(name, "PC", exe=rf"C:\f{i}\g.exe")
+                    lib.set_folder(g.game_id, fid)
+                    lib.record_session(g.game_id, "PC", 1000 * (5 - i) if i else 10, time.time())
+                w.refresh()
+                w.choose_sort("title")
+                self._run(0.6)
+                iid = app.FOLDER_PREFIX + fid
+                mosaic = lambda: [g.game_id for g in w.folder_games[fid][:4]]
+                before, place = mosaic(), w._positions()[iid]
+                w.choose_sort("hours")
+                self.assertNotEqual(mosaic(), before)                            # other covers...
+                self.assertEqual(w._positions()[iid], place)                     # ...in the same place
+                self.assertIn(iid, w.appearing)                                  # fades in afresh
+            finally:
+                w.close()
+                app.wait_for_tasks(5)

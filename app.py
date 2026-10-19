@@ -8427,8 +8427,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 it = self.grid.item(i)
                 iid = it.data(GAME_ID_ROLE)
                 rects[iid] = QRect(before[iid], self.grid.visualItemRect(it).size()).adjusted(-2, -2, 2, 2) & view
+        # a folder can keep its place while its mosaic changes (a sort reorders what's inside): its four covers then
+        # had to be decoded mid-frame (a 64 ms frame on the PC) - it fades out and in like a cover that moved instead,
+        # its new covers loaded in the background first
+        mosaics = {iid: self._mosaic_ids(iid) for iid in before if is_folder(iid)}
         self._search_pause.stop()                        # (called directly: no second run when the pause ends)
         self._rebuild(select)
+        restyled = {iid for iid, ids in mosaics.items() if self._mosaic_ids(iid) != ids}
         if after_rebuild is not None or select is not None:
             self.backdrop.layout() and self.backdrop.layout().activate()   # (the folder bar shows / hides)
         if after_rebuild is not None:
@@ -8438,8 +8443,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not animate and not self.showing_no_results():
             self.no_results = 0.0                        # (not on screen: nothing to fade)
         if animate:                                      # (also from an empty grid: "No Results Found" -> results)
-            moved = self._slide_from(before, appear=True)
-            kept = {self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
+            moved = self._slide_from(before, appear=True, restyled=restyled)
+            kept ={self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
             gone = []
             for iid, r in rects.items():
                 if (iid not in kept or iid in moved) and not r.isEmpty():
@@ -8448,6 +8453,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             if gone:
                 self._leaving = (self._leaving + [(snap, gone, time.monotonic(), shift)])[-MAX_LEAVING_GROUPS:]
         self._update_anim()                              # (also fades "No Results Found" in)
+
+    def _mosaic_ids(self, iid: str) -> tuple:
+        """The games whose covers a folder tile shows (its first four)."""
+        return tuple(g.game_id for g in self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4])
 
     def _grid_snapshot(self) -> Optional[QPixmap]:
         """The grid's covers as they are on screen now, without the background."""
@@ -9332,11 +9341,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             out[iid] = pos + off if off is not None else pos
         return out
 
-    def _slide_from(self, before: dict, skip: Optional[str] = None, appear: bool = False) -> set:
+    def _slide_from(self, before: dict, skip: Optional[str] = None, appear: bool = False,
+                    restyled: frozenset = frozenset()) -> set:
         """After the grid changed: every cover that moved slides from where it was to its new place.
         appear (search / filter): nothing slides. Covers that weren't there before, and covers whose place
-        changed, arrive (fade in) at their place one after another, after the covers leaving have faded out;
-        returns the ones whose place changed (the caller fades them out where they were)."""
+        changed (or whose picture did: restyled, a folder's mosaic), arrive (fade in) at their place one after
+        another, after the covers leaving have faded out; returns the ones whose place or picture changed (the
+        caller fades them out where they were)."""
         self.grid.doItemsLayout()
         now = {self.grid.item(i).data(GAME_ID_ROLE): self.grid.visualItemRect(self.grid.item(i)).topLeft()
                for i in range(self.grid.count())}             # (the new places themselves)
@@ -9349,7 +9360,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 old = before.get(iid)
                 if old is None:
                     arriving.append(iid)
-                elif old != p:
+                elif old != p or iid in restyled:
                     moved.add(iid)
                     arriving.append(iid)
             # still arriving in the same place from an earlier change: carry on; the rest queue up in grid order

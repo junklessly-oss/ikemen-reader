@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 249 tests (2026-10-18, after the laptop pass), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 250 tests (2026-10-18, after the laptop pass), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -1053,7 +1053,11 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   background cover decode runs; not the GIL (decode releases it), not GC -> CPU scheduling on a weak machine. Left.
 - Back on the PC afterwards (same day): 249 tests pass; bench110 at 143 Hz launch worst 13-17 ms (was 22); 240-game
   library smooth (96 sorts: no spike, one 64 ms first sort); Windows 10 title bar: 30 cycles = 60 changes, no blink;
-  Settings top +0 / bottom -1 (the Windows 10 rule) / centred. Text 16 px + bar 81 px on BOTH machines (older "17 /
+  Settings top +0 / bottom -1 (the Windows 10 rule) / centred. The one 64 ms first sort: a folder kept its place while
+  a sort reordered its games, so its new mosaic covers were decoded mid-frame -> _apply_filter compares each folder's
+  first four (_mosaic_ids) and passes changed ones to _slide_from(restyled=...): they fade out and in like a moved
+  cover, covers loaded in the background first. First sorts 64 -> 17-20 ms, 0 decodes while drawing. Owner-sized
+  library: folder open / close worst 14 ms at 143 Hz. Text 16 px + bar 81 px on BOTH machines (older "17 /
   83" notes were other conditions).
 
 ## Ideas for later (owner interested, not scheduled)
