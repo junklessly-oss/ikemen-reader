@@ -290,7 +290,7 @@ class Attacks(unittest.TestCase):
                     call()
 
     def test_a_file_the_game_holds_open_briefly_is_retried(self):
-        import threading, os
+        import os
         write(self.pc_saves, "slot1.sav", "1")
         self.pc.before_launch(GAME, self.pc_saves)
         self.laptop.before_launch(GAME, self.laptop_saves)

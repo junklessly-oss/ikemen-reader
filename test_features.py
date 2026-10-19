@@ -15,7 +15,7 @@ import detect
 import luna
 import regsync
 from launcher import finish_first_play, launch_plan, play
-from library import Library, LocalSettings, sort_games, title_sort_key
+from library import Library, LocalSettings, sort_games
 from sync_engine import Action, SyncEngine, is_cloud_duplicate
 from test_launcher import FakeGameFolder
 from titles import clean_title
@@ -244,7 +244,7 @@ class RegistrySaves(Base):
         self.pc.before_launch(GAME, self.pc_saves, registry_key=self.key)
         exported = regsync.loads((self.pc.cloud_dir(GAME) / "__registry__.json").read_text("utf-8"))
         self.set_value("progress", 9)                       # newer local progress
-        b = self.pc._backup_root(GAME)
+        self.pc._backup_root(GAME)
         self.pc._backup(GAME, self.pc._local_files(GAME, self.pc_saves, self.key), "local-before-pull")
         regsync.import_key(self.key, exported)              # something overwrote it with 5
         self.assertEqual(self.get_value("progress"), 5)
@@ -350,7 +350,7 @@ class DevicesAndLibrary(unittest.TestCase):
             lib = Library(tmp)
             a = lib.add_game("さくら", "PC")
             b = lib.add_game("Ever17", "PC")
-            c = lib.add_game("アオイ", "PC")
+            lib.add_game("アオイ", "PC")
             lib.record_session(a.game_id, "PC", 100, when=1000)
             lib.record_session(b.game_id, "PC", 5000, when=500)
             games = lib.list_games()
@@ -1542,7 +1542,6 @@ class ConflictWordingInTheWindow(unittest.TestCase):
             from PySide6.QtWidgets import QApplication
             import app
             import i18n
-            from launcher import PlayResult
             QApplication.instance() or QApplication([])
             i18n.set_language("en")
             cloud = Path(tmp) / "cloud"
@@ -1889,7 +1888,6 @@ class RegistryConfidence(unittest.TestCase):
         self.assertIsNone(detect.registry_confidence("Valve", "Steam", bst))
 
     def test_window_sections(self):
-        from unittest import mock
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PySide6.QtWidgets import QApplication
         import app
@@ -1939,7 +1937,6 @@ class SortingAndCustomOrder(unittest.TestCase):
         self.assertEqual(app.in_order(["n1", "b", "a", "n2"], lambda x: x, ["a", "gone", "b"]), ["a", "b", "n1", "n2"])
 
     def _window(self, tmp, titles, folder_titles=()):
-        from unittest import mock
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PySide6.QtWidgets import QApplication
         import app
@@ -1951,14 +1948,14 @@ class SortingAndCustomOrder(unittest.TestCase):
         lib = Library(cloud)
         ids = {}
         for i, t in enumerate(titles):
-            g = lib.add_game(t, "PC")
+            g = lib.add_game(t, "PC", exe=rf"C:\vn{i}\game.exe")   # (set up here: the default view, This Device)
             lib.update(g.game_id, last_played=1000 - i)               # first title = most recent
             ids[t] = g.game_id
         fid = None
         if folder_titles:
             fid = lib.create_folder("Series")
             for i, t in enumerate(folder_titles):
-                g = lib.add_game(t, "PC")
+                g = lib.add_game(t, "PC", exe=rf"C:\vf{i}\game.exe")
                 lib.update(g.game_id, last_played=500 - i)
                 lib.set_folder(g.game_id, fid)
                 ids[t] = g.game_id
@@ -2036,7 +2033,7 @@ class SortingAndCustomOrder(unittest.TestCase):
                 w.choose_sort("hours")
                 w.choose_sort("custom")                                            # your arrangement is back
                 self.assertEqual(shown(), [f, ids["C"], ids["A"], ids["B"]])
-                new = lib.add_game("New", "PC")
+                new = lib.add_game("New", "PC", exe=r"C:\new\game.exe")
                 w.refresh()
                 self.assertEqual(shown()[-1], new.game_id)                          # new games at the end
             finally:
@@ -2395,7 +2392,6 @@ class SmoothAnimations(unittest.TestCase):
                 app.wait_for_tasks(5)
 
     def test_prepared_covers_are_used_and_match(self):
-        from PySide6.QtCore import QRectF
         with tempfile.TemporaryDirectory() as tmp, __import__("unittest").mock.patch.dict(os.environ, {"APPDATA": tmp}):
             app, w, lib = self._window(tmp, n=6, art_every=1)
             try:
@@ -3425,7 +3421,6 @@ class UndoRemove(unittest.TestCase):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
             from PySide6.QtWidgets import QApplication
-            from PySide6.QtCore import QPointF
             import app
             QApplication.instance() or QApplication([])
             cloud = Path(tmp) / "cloud"
@@ -4056,7 +4051,7 @@ class DropDownWordFades(unittest.TestCase):
                 self.assertEqual(w.sort._words[2], max(w.arrive_wait, 0.05))   # new words come in with the first cover
                 w.filter.repaint()
                 old = w.filter.painted
-                w.filter.setCurrentIndex(w.filter.findData("reading"))
+                w.filter.setCurrentIndex(w.filter.findData("dev:other"))     # (a status keeps the box's words)
                 self.assertEqual(w.filter._words[0], old)
                 d = app.SettingsDialog(w.settings, w)
                 d.show()
@@ -4584,10 +4579,49 @@ class LaptopSmoothness(unittest.TestCase):
 
 
 class DeviceFilter(unittest.TestCase):
-    """2026-10-18 (owner): the filter drop-down's device group - This Device / Other Device / Both Devices above the
-    reading statuses, each group remembering its own pick; the box shows the device when one is picked; no ticks."""
+    """2026-10-18 (owner): the drop-down next to the sort picks the library view - This Device (default) / Other Device
+    (set up ONLY there) / Both Devices - a whole library, folders and all, in the sort in use. The reading statuses
+    below a divider filter within it as before; the box always shows the view; no ticks."""
 
-    def test_device_group(self):
+    def test_empty_view_says_so(self):
+        """An empty view (nothing searched / filtered) has its own words, not "No Results Found" (owner, 2026-10-19:
+        a new second computer opens on This Device with nothing set up yet)."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            g = lib.add_game("Everywhere", "Laptop", exe=r"D:\a\a.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            pick = lambda data: w.filter.setCurrentIndex(w.filter.findData(data))
+            try:
+                w.show()
+                w.refresh()
+                self.assertEqual(w.grid.count(), 0)                           # set up only on the other device
+                w._no_results_target()
+                self.assertEqual(w.no_results_key, "grid.empty_here")
+                search_now(w, "zzz")
+                w._no_results_target()
+                self.assertEqual(w.no_results_key, "grid.no_results")         # a search that finds nothing
+                search_now(w, "")
+                lib.set_paths(g.game_id, "PC", exe=r"C:\a\a.exe")             # now on both
+                w.refresh()
+                pick("dev:other")
+                end = time.monotonic() + 1.5                                  # (once the cover has faded out)
+                while time.monotonic() < end and (w._leaving or w._no_results_target() == 0):
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+                self.assertEqual(w.no_results_key, "grid.empty_other")
+                self.assertTrue(app.tr("grid.empty_here") and app.tr("grid.empty_other"))
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_library_views(self):
         from unittest import mock
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
@@ -4601,9 +4635,15 @@ class DeviceFilter(unittest.TestCase):
             both = lib.add_game("Both", "PC", exe=r"C:\b\b.exe")
             lib.set_paths(both.game_id, "Laptop", exe=r"D:\b\b.exe")
             there = lib.add_game("There", "Laptop", exe=r"D:\c\c.exe")
+            in_box = lib.add_game("Boxed", "PC", exe=r"C:\d\d.exe")
+            away = lib.add_game("Away", "Laptop", exe=r"D:\e\e.exe")
+            fid = lib.create_folder("Box")
+            lib.set_folder(in_box.game_id, fid)
+            lib.set_folder(away.game_id, fid)
             lib.update(both.game_id, status="reading")
             lib.update(there.game_id, status="reading")
             w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            folder = app.FOLDER_PREFIX + fid
             shown = lambda: sorted(w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count()))
             pick = lambda data: w.filter.setCurrentIndex(w.filter.findData(data))
             try:
@@ -4611,27 +4651,88 @@ class DeviceFilter(unittest.TestCase):
                 w.refresh()
                 data = [w.filter.itemData(i) for i in range(w.filter.count())]
                 self.assertEqual(data[:3], ["dev:here", "dev:other", "dev:both"])
-                self.assertIsNone(data[3])                                   # the divider
+                self.assertIsNone(data[3])                                    # the divider
                 self.assertEqual(data[4], "all")
-                self.assertEqual(w.filter.currentText(), "All Games")
-                pick("dev:here")
-                self.assertEqual(shown(), sorted([here.game_id, both.game_id]))
-                self.assertEqual(w.filter.currentText(), "This Device")
-                pick("reading")                                              # a status within the device
-                self.assertEqual(shown(), [both.game_id])
-                self.assertEqual(w.filter.currentText(), "This Device")      # the box keeps the device
-                pick("dev:other")                                            # only on the other device
+                self.assertEqual(w.filter.currentText(), "This Device")       # the default view
+                # This Device: its games, the folder stays a folder holding only this device's game
+                self.assertEqual(shown(), sorted([here.game_id, both.game_id, folder]))
+                self.assertEqual([g.game_id for g in w.folder_games[fid]], [in_box.game_id])
+                pick("dev:other")                                             # only set up on the other device
+                self.assertEqual(shown(), sorted([there.game_id, folder]))
+                self.assertEqual([g.game_id for g in w.folder_games[fid]], [away.game_id])
+                self.assertEqual(w.filter.currentText(), "Other Device")
+                pick("reading")                                               # a status within the view
                 self.assertEqual(shown(), [there.game_id])
-                pick("dev:both")
-                self.assertEqual(shown(), sorted([both.game_id, there.game_id]))   # still Reading
-                self.assertEqual(w.filter.currentText(), "Reading")
+                self.assertEqual(w.filter.currentText(), "Other Device")      # the box keeps the view
+                pick("dev:here")                                              # still Reading
+                self.assertEqual(shown(), [both.game_id])
                 pick("all")
-                self.assertEqual(len(shown()), 3)
+                pick("dev:both")
+                self.assertEqual(shown(), sorted([here.game_id, both.game_id, there.game_id, folder]))
+                self.assertEqual(len(w.folder_games[fid]), 2)
+                # rearranging in a view: the games it hides keep their places
                 pick("dev:here")
-                w.settings.solo = True                                       # My Device: no device group
+                order = [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+                full_before = app.merge_order(w.library_order + w._all_top_ids(), order)
+                w._move_to(order[-1], 0)
+                full = list(w.library_order)
+                hidden = [i for i in full_before if i not in order]
+                self.assertEqual([i for i in full if i in hidden], hidden)    # hidden ones: same order...
+                for h in hidden:                                              # ...and same places
+                    self.assertEqual(full.index(h), full_before.index(h))
+                w.settings.solo = True                                        # My Device: no views
                 w._apply_mode()
                 self.assertNotIn("dev:here", [w.filter.itemData(i) for i in range(w.filter.count())])
                 self.assertEqual(w._device_filter(), "both")
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+    def test_merge_order(self):
+        import app
+        self.assertEqual(app.merge_order(["a", "x", "b", "y", "c"], ["c", "a", "b"]), ["c", "x", "a", "y", "b"])
+        self.assertEqual(app.merge_order(["a"], ["b", "a"]), ["b", "a"])               # (new ones at the end of the slots)
+
+
+class DropDownShadow(unittest.TestCase):
+    """2026-10-18 (owner: drop-downs "flashing a little"): Windows' shadow lagged the slide-open; ours is drawn inside
+    the list's own window (Windows' one switched off), with Windows' measured look."""
+
+    def test_own_shadow(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor
+        import app
+        qa = QApplication.instance() or QApplication([])
+        holder = QWidget()
+        combo = app.ThemedCombo()
+        QVBoxLayout(holder).addWidget(combo)
+        for t in ("One", "Two", "Three"):
+            combo.addItem(t)
+        holder.show()
+        qa.processEvents()
+        try:
+            combo.showPopup()
+            qa.processEvents()
+            box, view = combo.view().parentWidget(), combo.view()
+            self.assertTrue(box.windowFlags() & Qt.NoDropShadowWindowHint)          # Windows' shadow off
+            self.assertTrue(box.windowFlags() & Qt.FramelessWindowHint)             # (else not see-through)
+            s = app._ListShadow.SIZE
+            v = view.geometry()                                                      # room right of / below the list
+            self.assertGreaterEqual(box.width() - v.right() - 1, s)
+            self.assertGreaterEqual(box.height() - v.bottom() - 1, s)
+            img = app.drop_shadow(view.width(), view.height())
+            mid = view.height() // 2
+            self.assertEqual([QColor.fromRgba(img.pixel(view.width() - 1 + d, mid)).alpha() for d in range(1, 6)],
+                             [113, 84, 43, 14, 3])                                  # Windows' measured profile
+            self.assertEqual(QColor.fromRgba(img.pixel(view.width() - 1 + 1, 2)).alpha(), 0)   # eases in at the top
+            combo.hidePopup()
+            combo.showPopup()                                                        # opened again: same size
+            qa.processEvents()
+            v = view.geometry()                                                      # room right of / below the list
+            self.assertGreaterEqual(box.width() - v.right() - 1, s)
+            self.assertGreaterEqual(box.height() - v.bottom() - 1, s)
+        finally:
+            combo.hidePopup()
+            holder.close()

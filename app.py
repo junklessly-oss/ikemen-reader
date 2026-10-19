@@ -24,10 +24,10 @@ import zlib
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import (QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
+from PySide6.QtCore import (QAbstractNativeEventFilter, QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
                             QTimer, QUrl, Signal)
 from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
-                           QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QRegion,
+                           QKeySequence, QLinearGradient, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap, QRegion,
                            QRadialGradient)
 from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QGraphicsOpacityEffect, QCheckBox, QComboBox,
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
@@ -106,7 +106,7 @@ COLORS = dict(DARK)
 LIGHTS = dict(BASE_LIGHTS)
 MARKS = dict(BASE_MARKS)
 LOGO = dict(LOGO_ORIGINAL)
-ICONS = {"check": "", "chevron": "", "chevron_up": ""}   # generated in the theme's colours (see _write_icons)
+ICONS = {"check": "", "chevron": "", "chevron_up": "", "chevron_right": "", "tick": ""}   # theme colours (_write_icons)
 
 # custom theme editor: the main colours always show; the rest sit behind "Show All Colours"
 THEME_MAIN = [
@@ -174,6 +174,16 @@ def _write_icons() -> None:
                        f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 7.5 '
                        f'L6 4 L9.5 7.5" fill="none" stroke="{arrow}" stroke-width="1.6" stroke-linecap="round" '
                        f'stroke-linejoin="round"/></svg>'),
+        # (the reading status in use, in the right-click menu: the check box's tick, in the menu's text colour)
+        "tick": (f"tick_{arrow[1:]}.svg",
+                 f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M3.5 8.5 '
+                 f'L6.5 11.5 L12.5 4.5" fill="none" stroke="{arrow}" stroke-width="2" stroke-linecap="round" '
+                 f'stroke-linejoin="round"/></svg>'),
+        # (a menu item that opens another menu: the same arrow, pointing the way it opens)
+        "chevron_right": (f"chevron_right_{arrow[1:]}.svg",
+                          f'<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12"><path d="M4.5 2.5 '
+                          f'L8 6 L4.5 9.5" fill="none" stroke="{arrow}" stroke-width="1.6" stroke-linecap="round" '
+                          f'stroke-linejoin="round"/></svg>'),
     }
     for key, (name, svg) in files.items():
         f = d / name
@@ -531,7 +541,12 @@ class LibraryGrid(QListWidget):
                 text = re.sub(r'"[^"]*"', lambda m: m.group(0).replace(" ", "\u00a0"), tr(self.w.no_results_key))
                 p.drawText(box, Qt.AlignCenter | Qt.TextWordWrap, text)
             p.end()
-        super().paintEvent(ev)
+        # Qt picks the covers to draw by where IT places them (GRID_TOP_SHIFT higher than they're drawn): asked about
+        # the same area shifted too, a strip at a cover's foot gets that cover (else only the background was drawn
+        # there - a dark box under a light when a cover below was selected; owner, 2026-10-18). The painting itself
+        # stays inside the real area.
+        region = ev.region()
+        super().paintEvent(QPaintEvent(region.united(region.translated(0, -GRID_TOP_SHIFT))))
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
@@ -567,7 +582,18 @@ class LibraryGrid(QListWidget):
         return r.translated(0, GRID_TOP_SHIFT) if r.isValid() else r
 
     def indexAt(self, pos: QPoint):
-        return super().indexAt(pos - QPoint(0, GRID_TOP_SHIFT))
+        """The cover under pos - the cover itself only, not the rest of its cell (the space below it and around it):
+        hovering or clicking under a cover counted as on it (owner, 2026-10-18). Hover, clicks, double-clicks and
+        right-clicks all ask here. (Its resting place: a lifted cover doesn't run away from the mouse.)"""
+        index = super().indexAt(pos - QPoint(0, GRID_TOP_SHIFT))
+        if index.isValid() and not CardDelegate.cover_rect(self.visualRect(index), 0).contains(QPointF(pos)):
+            return self.model().index(-1, 0)
+        return index
+
+    def setSelection(self, rect: QRect, flags) -> None:
+        # a click selects through here, by where Qt places the cells: shifted like indexAt, or a click near the foot
+        # of a cover chose the cell below it - a game in the row hidden under the bottom bar (owner, 2026-10-18)
+        super().setSelection(rect.translated(0, -GRID_TOP_SHIFT), flags)
 
     def updateGeometries(self) -> None:
         super().updateGeometries()
@@ -804,7 +830,19 @@ NO_RESULTS_RISE = 8                  # ... rising this many px into place ...
 NO_RESULTS_Y = 0.44                  # ... at this height of the library (the optical centre); it goes at once
 PULSE_CALM_S = 2.6                   # one breath when all is well
 PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
+# Settings' faint lines: px of room (above, below) the line itself, by line, language and My Device - so each has
+# exactly the same clear space above and below it, the same for every line (owner, 2026-10-18; measured on the screen:
+# the texts' own shapes differ by language and by what's shown in each mode)
+SETTINGS_RULES = {
+    "top":   {("en", False): (14, 7), ("ja", False): (14, 7), ("en", True): (14, 7), ("ja", True): (14, 8)},
+    "cloud": {("en", False): (14, 7), ("ja", False): (13, 8)},
+    "anki":  {("en", False): (14, 7), ("ja", False): (12, 7), ("en", True): (14, 7), ("ja", True): (12, 7)},
+}
+MENU_TICK, MENU_TICK_GAP = 14, 12     # the tick after the reading status in use (right-click menu): size, room before it
+SUBMENU_GAP = 3                      # px between a menu and its submenu (as LIST_GAP: the drop-down lists)
+MENU_SHADOW = 5                      # px right of / below a menu for its shadow (= _ListShadow.SIZE)
 LIGHT_FADE_S = 0.22                  # a light changing colour cross-fades this long (owner: 0.45 felt slow)
+OPEN_SETTLE_S = 0.35                 # lights keep their first look this long after the window appears (see _paint_light)
 BAR_XFADE_S = 0.2                    # the Read button's cross-fade, old look -> new look (BarFader)
 BAR_OUT_S, BAR_IN_S = 0.15, 0.2      # every other piece of the bar that changed: fades out, then in (BarFader)
 PRESENCE_CHECK_MS = 2000             # Discord presence: what the window is doing, checked this often
@@ -877,6 +915,7 @@ def build_style() -> str:
     check = Path(ICONS["check"]).as_posix()
     chevron = Path(ICONS["chevron"]).as_posix()
     chevron_up = Path(ICONS["chevron_up"] or ICONS["chevron"]).as_posix()
+    chevron_right = Path(ICONS["chevron_right"] or ICONS["chevron"]).as_posix()
     families = ", ".join('"' + f.replace('"', "") + '"' for f in ui_families())
     return f"""
 * {{ font-family: {families}; font-size: 10pt; color: {c['text']}; }}
@@ -887,7 +926,7 @@ QListWidget#library {{ background: transparent; }}
 QLineEdit, QComboBox {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px;
                        padding: 5px 8px; selection-background-color: {c['button_hover']}; }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {c['focus']}; }}
-QComboBox#fontpick QAbstractItemView::item {{ padding: 5px 8px; min-height: 22px; }}
+QComboBox#fontpick QAbstractItemView::item {{ padding: 5px 5px; min-height: 22px; }}
 QScrollArea#settings_scroll, QWidget#settings_content {{ background: transparent; }}
 QTextBrowser#guide {{ background: {c['bg']}; border: none; font-size: 10.5pt; }}
 QComboBox:disabled {{ color: {c['other_text']}; background: {c['other_bg']}; border-color: {c['other_bg']}; }}
@@ -902,11 +941,12 @@ QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; }}
 QComboBox::down-arrow:on {{ top: 1px; }}
 QComboBox[opens_up="true"]::down-arrow {{ image: url({chevron_up}); }}
 QComboBox[opens_up="true"]::down-arrow:on {{ top: -1px; }}
-QComboBoxPrivateContainer {{ background: {c['input']}; border: none; }}
+QComboBoxPrivateContainer {{ background: transparent; border: none; }}
 QProgressBar {{ background: {c['input']}; border: none; border-radius: 4px; }}
 QProgressBar::chunk {{ background: {c['play']}; border-radius: 4px; }}
-QComboBox QAbstractItemView {{ background: {c['input']}; border: 1px solid {c['border']};
-                               selection-background-color: {c['button_hover']}; outline: none; }}
+QComboBox QAbstractItemView {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px;
+                               padding: 4px 0px; selection-background-color: {c['button_hover']}; outline: none; }}
+QComboBox QAbstractItemView::item {{ padding: 1px 5px 3px 5px; }}   /* (the words start where the box's do) */
 QPushButton {{ background: {c['button']}; border: 1px solid {c['button']}; border-radius: 6px; padding: 6px 14px; }}
 QPushButton:hover {{ background: {c['button_hover']}; border-color: {c['button_hover']}; }}
 QPushButton:disabled {{ color: {c['other_text']}; background: {c['other_bg']}; border-color: {c['other_bg']}; }}
@@ -950,10 +990,13 @@ QCheckBox::indicator:checked {{ background: {c['select']}; border-color: {c['sel
 QRadioButton::indicator {{ border: 1px solid {c['border']}; border-radius: 9px; background: {c['input']}; }}
 QRadioButton::indicator:checked {{ border-color: {c['select']}; background: qradialgradient(cx:0.5, cy:0.5,
     radius:0.5, fx:0.5, fy:0.5, stop:0 {c['select']}, stop:0.42 {c['select']}, stop:0.5 {c['input']}, stop:1 {c['input']}); }}
-QMenu {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 4px; }}
+QMenu {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 4px;
+         margin: 0px {MENU_SHADOW}px {MENU_SHADOW}px 0px; }}
+QMenu::right-arrow {{ image: url({chevron_right}); width: 12px; height: 12px; right: 6px; }}
 QMenu::item {{ padding: 6px 20px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {c['button_hover']}; }}
 QMenu::item:disabled {{ color: {c['other_text']}; }}
+QMenu#ticks::item {{ padding: 6px {20 + MENU_TICK + MENU_TICK_GAP}px 6px 20px; }}
 QMenu::separator {{ height: 1px; background: transparent; margin: 4px 0px; }}
 QStatusBar {{ background: {c['band']}; color: {c['muted']}; }}
 QStatusBar::item {{ border: none; }}
@@ -1303,6 +1346,16 @@ def crop_rect(iw: int, ih: int, zoom: float, cx: float, cy: float,
     x = min(max(cx * iw - w / 2, 0), iw - w)
     y = min(max(cy * ih - h / 2, 0), ih - h)
     return QRectF(x, y, w, h), (x + w / 2) / iw, (y + h / 2) / ih
+
+
+def merge_order(full: list, shown: list) -> list:
+    """A view's new order put into the whole order: the items shown take the places shown items had (in their new
+    order); items the view hides keep theirs (rearranging This Device mustn't move the other device's games)."""
+    full = list(dict.fromkeys(full))
+    seen = set(shown)
+    full += [i for i in shown if i not in set(full)]
+    it = iter(shown)
+    return [next(it) if i in seen else i for i in full]
 
 
 class CoverCache:
@@ -3114,11 +3167,13 @@ class CardDelegate(QStyledItemDelegate):
             look = (colour_key, pulse)
             old, new, t0 = self._light_fx.get(gid, (look, look, 0.0))
             if new != look:
-                old, new, t0 = new, look, now
+                # (the first check's answers come within ~25 ms of opening - during Windows' opening animation and
+                # the uneven first frames: grey -> colour looked abrupt. They wait until the window has settled)
+                old, new, t0 = new, look, max(now, getattr(self.w, "opened_at", 0.0) + OPEN_SETTLE_S)
             self._light_fx[gid] = (old, new, t0)
             a = (now - t0) / LIGHT_FADE_S
             if old != new and a < 1:
-                a = ease(a)
+                a = ease(max(0.0, a))
                 paint_light(p, c, old[0], old[1], on, halo=1 - a)  # the old look underneath...
                 p.save()
                 p.setOpacity(a)                                    # ...the new one coming up over it
@@ -3519,11 +3574,41 @@ def crisp_line(p: QPainter, x: float, width: float, y: float, colour: QColor) ->
 
 class MenuLines(QObject):
     """Right-click menus draw their own divider lines (crisp_line), so they're all equally thick at any
-    Windows scaling; the style sheet's separator only keeps the space (transparent)."""
+    Windows scaling; the style sheet's separator only keeps the space (transparent). They're rounded like the
+    drop-down lists (owner, 2026-10-18): a see-through window without Windows' (square) shadow, ours drawn in the
+    style sheet's margin right of and below the menu."""
 
     def eventFilter(self, obj, ev) -> bool:
+        if ev.type() == QEvent.Polish and isinstance(obj, QMenu) and not obj.testAttribute(Qt.WA_WState_Created):
+            obj.setWindowFlags(obj.windowFlags() | Qt.NoDropShadowWindowHint | Qt.FramelessWindowHint)
+            obj.setAttribute(Qt.WA_TranslucentBackground, True)
+            obj.setContentsMargins(0, 0, MENU_SHADOW, MENU_SHADOW)   # (Qt frames a menu by its TOP padding on every side, so the shadow room ate the bottom / right padding)
+        if ev.type() in (QEvent.Show, QEvent.Hide) and isinstance(obj, QMenu) \
+                and not isinstance(obj.parentWidget(), QMenu) and sys.platform == "win32":
+            hand = getattr(QApplication.instance(), "_submenu_hand_over", None)
+            if hand is not None:                  # (the menu itself: SubmenuHandOver's stand-in opens / closes with it)
+                hand.menu_opened(obj) if ev.type() == QEvent.Show else hand.menu_closed()
+        if ev.type() in (QEvent.Show, QEvent.Move) and isinstance(obj, QMenu) \
+                and isinstance(obj.parentWidget(), QMenu) and obj.isVisible():
+            self._place_submenu(obj)        # (Qt moves it once more after showing it: put back, before it's drawn)
         if ev.type() == QEvent.Paint and isinstance(obj, QMenu):
+            if isinstance(obj.parentWidget(), QMenu):
+                hand = getattr(QApplication.instance(), "_submenu_hand_over", None)
+                if hand is not None:
+                    hand.submenu_drawn()
+            if obj.testAttribute(Qt.WA_TranslucentBackground):
+                p = QPainter(obj)                       # the shadow first (the menu's own background ends before it)
+                p.drawImage(0, 0, drop_shadow(obj.width() - MENU_SHADOW, obj.height() - MENU_SHADOW))
+                p.end()
             QMenu.paintEvent(obj, ev)                   # the menu as usual ...
+            if obj.objectName() == "ticks":            # the reading status in use: the app's tick, right of its name
+                p = QPainter(obj)
+                tick = self._tick()
+                for a in obj.actions():
+                    if a.data() == "current":
+                        r = obj.actionGeometry(a)            # (20 = the item's right padding beyond the tick's room)
+                        p.drawPixmap(r.right() - 20 - MENU_TICK + 1, r.center().y() - MENU_TICK // 2 + 1, tick)
+                p.end()
             seps = [a for a in obj.actions() if a.isSeparator() and a.isVisible()]
             if seps:
                 p = QPainter(obj)                       # ... then its dividers on top
@@ -3535,10 +3620,232 @@ class MenuLines(QObject):
             return True
         return False
 
+    _ticks: dict = {}
+
+    def _tick(self) -> QPixmap:
+        path = ICONS["tick"] or ICONS["check"]          # (a file per theme colour: _write_icons)
+        pm = self._ticks.get(path)
+        if pm is None:
+            pm = self._ticks[path] = QIcon(path).pixmap(MENU_TICK, MENU_TICK)
+        return pm
+
+    @staticmethod
+    def _place_submenu(sub: QMenu) -> None:
+        """A submenu floats SUBMENU_GAP px from its menu (like the drop-down lists from their box; owner, 2026-10-19 -
+        Qt overlapped them), its first item level with the item that opened it; on the left when Qt put it there
+        (no room on the right)."""
+        parent = sub.parentWidget()
+        act = next((a for a in parent.actions() if a.menu() is sub), None)
+        if act is None or not sub.actions():
+            return
+        pg = parent.mapToGlobal(QPoint(0, 0))
+        visible_w = sub.width() - (MENU_SHADOW if sub.testAttribute(Qt.WA_TranslucentBackground) else 0)
+        parent_w = parent.width() - (MENU_SHADOW if parent.testAttribute(Qt.WA_TranslucentBackground) else 0)
+        if sub.x() >= pg.x():                                  # (Qt's choice of side stands)
+            x = pg.x() + parent_w + SUBMENU_GAP
+        else:
+            x = pg.x() - SUBMENU_GAP - visible_w
+        first = next((a for a in sub.actions() if not a.isSeparator() and a.isVisible()), None)
+        y = pg.y() + parent.actionGeometry(act).top() - (sub.actionGeometry(first).top() if first else 0)
+        screen = (sub.screen() or QApplication.primaryScreen()).availableGeometry()
+        y = max(screen.top(), min(y, screen.bottom() + 1 - sub.height()))
+        if sub.pos() != QPoint(x, y):
+            sub.move(x, y)
+
+
+class _MenuStandIn(QWidget):
+    """A click-through window that's on the screen (empty) while a right-click menu is open: it shows a submenu's
+    last picture for the moment between Qt taking that submenu away and the next one appearing (SubmenuHandOver)."""
+
+    def __init__(self):
+        super().__init__(None, Qt.ToolTip | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint |
+                         Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.picture: Optional[QPixmap] = None
+
+    def paintEvent(self, _ev) -> None:
+        if self.picture is not None:
+            p = QPainter(self)
+            p.drawPixmap(0, 0, self.picture)
+            p.end()
+
+
+class SubmenuHandOver(QAbstractNativeEventFilter):
+    """Moving from one submenu item to another (Reading Status -> Add to Folder), Qt takes the old submenu away (its
+    window is destroyed) and opens the new one in a NEW window, which Windows only shows once its first picture has
+    arrived: for a frame neither was on the screen - a flash (owner, 2026-10-19; filmed, and the same before the
+    menus were restyled). Now, at the last moment before the old one goes (WM_WINDOWPOSCHANGING, "hide"), its picture
+    is put into a stand-in window that's already on the screen (_MenuStandIn, opened with the menu), which shows it
+    in the very frame the old one disappears, and clears once the new one has been drawn (a frame later, so they never
+    leave a gap between them; at the latest HOLD_MS). Only for a switch between two submenus of the same menu."""
+    HOLD_MS = 120
+    AFTER_NEW_MS = 16                                  # the new submenu drawn -> on the screen by the next frame
+
+    def __init__(self):
+        super().__init__()
+        self.stand_in: Optional[_MenuStandIn] = None
+        self._pos = None                               # the WINDOWPOS layout (made on first use)
+
+    def menu_opened(self, menu: QMenu) -> None:
+        if self.stand_in is None:
+            self.stand_in = _MenuStandIn()
+        self.stand_in.picture = None
+        self.stand_in.setGeometry(menu.x(), menu.y(), 1, 1)
+        self.stand_in.show()
+
+    def menu_closed(self) -> None:
+        if self.stand_in is not None:
+            self.stand_in.picture = None
+            self.stand_in.hide()
+
+    def nativeEventFilter(self, event_type, message):
+        if event_type != b"windows_generic_MSG" or sys.platform != "win32" or self.stand_in is None \
+                or not self.stand_in.isVisible():
+            return False, 0
+        try:
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message != 0x0046:                  # WM_WINDOWPOSCHANGING
+                return False, 0
+            if self._pos is None:
+                class WINDOWPOS(ctypes.Structure):
+                    _fields_ = [("hwnd", wintypes.HWND), ("after", wintypes.HWND), ("x", ctypes.c_int),
+                                ("y", ctypes.c_int), ("cx", ctypes.c_int), ("cy", ctypes.c_int), ("flags", wintypes.UINT)]
+                self._pos = WINDOWPOS
+            if not self._pos.from_address(int(msg.lParam)).flags & 0x0080:     # SWP_HIDEWINDOW
+                return False, 0
+            menu = QWidget.find(int(msg.hWnd))
+            parent = menu.parentWidget() if isinstance(menu, QMenu) else None
+            nxt = parent.activeAction() if isinstance(parent, QMenu) else None
+            if not (isinstance(parent, QMenu) and parent.isVisible() and nxt is not None and nxt.menu() is not None
+                    and nxt.menu() is not menu):
+                return False, 0
+            stand = self.stand_in
+            stand.picture = menu.grab()
+            stand.setGeometry(menu.geometry())
+            stand.repaint()                            # (on the screen now, before the old one goes)
+            QTimer.singleShot(self.HOLD_MS, self._clear)
+        except (ValueError, TypeError, OSError, RuntimeError):
+            pass
+        return False, 0
+
+    def submenu_drawn(self) -> None:
+        """The new submenu has drawn itself: the stand-in clears a frame later."""
+        if self.stand_in is not None and self.stand_in.picture is not None:
+            QTimer.singleShot(self.AFTER_NEW_MS, self._clear)
+
+    def _clear(self) -> None:
+        stand = self.stand_in
+        if stand is not None and stand.picture is not None:
+            stand.picture = None
+            stand.repaint()
+
 
 def install_menu_lines(app: QApplication) -> None:
     app._menu_lines = MenuLines(app)
     app.installEventFilter(app._menu_lines)
+    # menus appear at once, fully drawn (like the drop-downs): Qt follows Windows' "fade menus into view", and moving
+    # between Reading Status and Add to Folder restarted a submenu's fade-in from nothing each time - it flashed
+    # (owner, 2026-10-19; filmed: ~100 ms from see-through)
+    QApplication.setEffectEnabled(Qt.UI_FadeMenu, False)
+    QApplication.setEffectEnabled(Qt.UI_AnimateMenu, False)
+    app._submenu_hand_over = SubmenuHandOver()
+    app.installNativeEventFilter(app._submenu_hand_over)
+
+
+def _shadow_pixels(w: int, h: int) -> QImage:
+    """The shadow right of and below a w x h rounded box (radius _ListShadow.RADIUS), in a (w + SIZE) x (h + SIZE)
+    picture, worked out pixel by pixel: Windows' own shadow, measured on white, following the rounded corners."""
+    S, r, hw, hh = _ListShadow.SIZE, _ListShadow.RADIUS, w / 2, h / 2
+    across, start = _ListShadow.ACROSS, _ListShadow.START
+    img = QImage(w + S, h + S, QImage.Format_ARGB32_Premultiplied)
+    img.fill(Qt.transparent)
+    ease = lambda i: start[i] if i < len(start) else 1.0
+
+    def dark(e: float) -> float:                      # by distance out from the box's edge, between the measures
+        k = max(0.0, e - 0.5)
+        i = int(k)
+        if i >= len(across) - 1:
+            return 0.0
+        return across[i] + (across[i + 1] - across[i]) * (k - i)
+    for y in range(h + S):
+        # (only the strips right of and below the box's straight inside part can lie outside it)
+        xs = range(w + S) if y >= h - r - 1 else range(w - r - 1, w + S)
+        for x in xs:
+            qx = abs(x + 0.5 - hw) - (hw - r)         # distance out from the rounded rectangle (its edge = 0)
+            qy = abs(y + 0.5 - hh) - (hh - r)
+            e = math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
+            if e <= 0:
+                continue
+            a = round(dark(e) * ease(x) * ease(y))
+            if a > 0:
+                img.setPixel(x, y, a << 24)
+    return img
+
+
+def drop_shadow(w: int, h: int) -> QImage:
+    """The same shadow for any size, put together from pieces of one small model (made once): every pixel of it
+    depends only on how far it is from the nearest corner or edge, so the corners are copied and the straight parts
+    stretched - pixel-identical, and ~0.1 ms for any size instead of 3-8 ms (10-25 ms on the laptop) the first time
+    each list / menu size opened."""
+    key = (w, h)
+    img = _SHADOWS.get(key)
+    if img is not None:
+        return img
+    S, r, T = _ListShadow.SIZE, _ListShadow.RADIUS, len(_ListShadow.START)
+    edge = r + 1                                        # the corner's reach in from the right / bottom edge
+    if w < T + edge + 1 or h < T + edge + 1:
+        img = _shadow_pixels(w, h)                      # (too small for the pieces: the slow way)
+    else:
+        m = _SHADOWS.get("model")
+        if m is None:
+            m = _SHADOWS["model"] = _shadow_pixels(T + edge + 1, T + edge + 1)
+        mw = mh = T + edge + 1                           # the model's own box size
+        img = QImage(w + S, h + S, QImage.Format_ARGB32_Premultiplied)
+        img.fill(Qt.transparent)
+        p = QPainter(img)
+        p.setCompositionMode(QPainter.CompositionMode_Source)
+        right = w - edge                                # where the right strip starts (x)
+        bottom = h - edge                               # where the bottom strip starts (y)
+        cw, ch = edge + S, edge + S                     # a corner piece's size
+        p.drawImage(right, 0, m, mw - edge, 0, cw, T)                       # top of the right side (eases in)
+        p.drawImage(QRect(right, T, cw, bottom - T), m, QRect(mw - edge, T, cw, 1))       # its straight part
+        p.drawImage(right, bottom, m, mw - edge, mh - edge, cw, ch)         # the bottom-right corner
+        p.drawImage(0, bottom, m, 0, mh - edge, T, ch)                      # left end of the bottom (eases in)
+        p.drawImage(QRect(T, bottom, right - T, ch), m, QRect(T, mh - edge, 1, ch))       # its straight part
+        p.end()
+    if len(_SHADOWS) > 40:
+        _SHADOWS.clear()
+    _SHADOWS[key] = img
+    return img
+
+
+_SHADOWS: dict = {}
+
+
+class _ListShadow(QWidget):
+    """The drop shadow right of and below an open drop-down list, drawn by us inside the list's own window (Windows'
+    shadow is switched off). Windows redrew its shadow around however much of the list the slide-open showed, a
+    frame late: a dark line and band jumped down the growing edge (owner, 2026-10-18: "flashing a little"). Ours is
+    part of the window, so it unrolls with the list in the same frame. Windows' look (measured on white), following
+    the list's rounded corners (RADIUS, as the style sheet's)."""
+    SIZE = 5
+    RADIUS = 6
+    ACROSS = (113, 84, 43, 14, 3, 0)                     # darkness 0.5, 1.5 ... 5.5 px out from the list's edge (of 255)
+    START = (0, 0, 0, 0, 0, 0.115, 0.336, 0.664, 0.885, 0.982)   # eases in, from the top / left corner
+
+    def __init__(self, box: QWidget, combo: QComboBox):
+        super().__init__(box)
+        self.combo = combo
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, _ev) -> None:
+        v = self.combo.view().geometry()
+        p = QPainter(self)
+        p.drawImage(v.topLeft(), drop_shadow(v.width(), v.height()))
+        p.end()
 
 
 class _SeparatorDelegate(QStyledItemDelegate):
@@ -3578,11 +3885,14 @@ class ThemedCombo(QComboBox):
     which Windows only shows once it has been drawn, and the slide-open is done on that same window by
     revealing it top-down (or bottom-up, when the list opens above) with a growing mask."""
     SLIDE_S = 0.16
+    LIST_GAP = 3                                   # px between the box and its open list
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         QApplication.setEffectEnabled(Qt.UI_AnimateCombo, False)     # (Qt's slide: its extra window flashes)
         self._box().setAttribute(Qt.WA_TranslucentBackground, True)    # before its window first exists
+        self._shade = _ListShadow(self._box(), self)
+        self._shade.lower()
         self.view().setItemDelegate(_SeparatorDelegate(self.view().itemDelegate(), self))   # visible dividers
         self._t0 = 0.0
         self._down = True
@@ -3665,16 +3975,24 @@ class ThemedCombo(QComboBox):
         p.end()
 
     # -- the arrow points the way the list will open (up when there isn't room for it below on the screen)
-    def _opens_up(self) -> bool:
+    def _goes_up(self, need: int) -> bool:
+        """Which way a list `need` px tall (with its gap and shadow) opens: down while the screen has room for it
+        (past the program's edge too: owner, 2026-10-19), up only when it doesn't. Decided with the list's real
+        height - Qt's own choice left out the gap and shadow, and the list ran 2 px off the screen instead of
+        opening upwards."""
         screen = self.screen() or QApplication.primaryScreen()
         if screen is None or not self.isVisible():
             return False
         room = screen.availableGeometry()
         top = self.mapToGlobal(QPoint(0, 0)).y()
         bottom = top + self.height()
+        return bottom + need > room.bottom() + 1 and top - need >= room.top()
+
+    def _opens_up(self) -> bool:
+        """The arrow's guess before opening (the list's height from its rows, padding, frame, gap and shadow)."""
         rows = min(self.count(), self.maxVisibleItems())
-        need = sum(self.view().sizeHintForRow(i) for i in range(rows)) + 8     # (+ the list's frame)
-        return bottom + need > room.bottom() and top - need >= room.top()
+        need = sum(self.view().sizeHintForRow(i) for i in range(rows)) + 10 + self.LIST_GAP + _ListShadow.SIZE
+        return self._goes_up(need)
 
     def _update_arrow(self) -> None:
         up = self._opens_up()
@@ -3708,7 +4026,30 @@ class ThemedCombo(QComboBox):
     def showPopup(self) -> None:
         box = self._box()
         box.setMask(QRegion(0, 0, 1, 1))             # hidden until the slide reveals it
+        # opened before: its see-through window still holds the last picture (the whole list), which Windows showed
+        # for a frame before the slide's first one - kept hidden ("cloaked") until that first picture has gone out
+        cloak = box.testAttribute(Qt.WA_WState_Created) and sys.platform == "win32"
+        if cloak:
+            _dwm_flag(box, 13, True)
+        if not box.windowFlags() & Qt.NoDropShadowWindowHint:
+            # Windows' own shadow off (ours: _ListShadow). Set here, once: Qt sets the list window's flags itself
+            # after the drop-down is made, which dropped it when set any earlier
+            box.setWindowFlags(box.windowFlags() | Qt.NoDropShadowWindowHint | Qt.FramelessWindowHint)
+            box.setAttribute(Qt.WA_TranslucentBackground, True)
+        lay, s = box.layout(), _ListShadow.SIZE
+        lay.setContentsMargins(0, 0, 0, 0)           # Qt sizes and places the list as always...
         super().showPopup()
+        lay.setContentsMargins(0, 0, s, s)           # ...then its window grows by the shadow, right and down
+        box.resize(box.width() + s, box.height() + s)
+        self._shade.setGeometry(box.rect())
+        # it floats a little away from the box (rounded, like the box: their corners no longer meet), opening inside
+        # this window when it can (see _goes_up)
+        top = self.mapToGlobal(self.rect().topLeft()).y()
+        if self._goes_up(box.height() + self.LIST_GAP):
+            y = top - self.LIST_GAP - (box.height() - s)
+        else:
+            y = top + self.height() + self.LIST_GAP
+        box.move(box.x(), y - (box.mapToGlobal(QPoint(0, 0)).y() - box.y()))
         # nothing highlighted when it opens (the choice in use already shows in the box itself); the highlight
         # follows the mouse from there
         self.view().selectionModel().clearSelection()
@@ -3725,6 +4066,8 @@ class ThemedCombo(QComboBox):
         self._t0 = self._last = time.monotonic()
         self._slide()
         self._slide_timer.start()
+        if cloak:                                    # (after that first slide picture reaches its window)
+            QTimer.singleShot(0, lambda b=box: shiboken6.isValid(b) and _dwm_flag(b, 13, False))
 
     def hidePopup(self) -> None:
         self._slide_timer.stop()
@@ -5357,6 +5700,8 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
     def __init__(self, current: Optional[LocalSettings], parent=None, welcome: bool = False, solo: bool = False):
         super().__init__(parent)
         self._i18n: list[Callable] = []          # re-applies every text when the language is switched
+        self._rules: list = []                       # the faint lines (_rule)
+        self._i18n.append(self._place_rules)
         self._tx(self, "settings.welcome" if welcome else "settings.title", "setWindowTitle")
         self.setObjectName("settings_dialog")
         self.setMinimumWidth(580)
@@ -5424,9 +5769,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             col.addLayout(row)
             pair.addLayout(col, 1)
         lay.addLayout(pair)
-        lay.addSpacing(14)
-        lay.addLayout(self._divider())
-        lay.addSpacing(6)                      # + the heading's own top space = the same visible gap as above
+        self._rule(lay, "top")
 
         self._device_head = self._tx(section(""), "settings.device")
         lay.addWidget(self._device_head)
@@ -5446,6 +5789,10 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         self._device_hint = self._tx(hint(""), "settings.device_hint")
         lay.addWidget(self._device_hint)
 
+        # room for This Is's open list: it ended 10 px into the cloud folder box, across its top edge (owner,
+        # 2026-10-18: "not really clean") - now it ends just above it; Settings' usual faint line sits in the middle
+        # of that room (the owner's idea). A widget of its own, so My Device hides it with the cloud folder rows
+        self._cloud_gap = self._rule(lay, "cloud")
         self._cloud_head = self._tx(section(""), "settings.cloud")
         lay.addWidget(self._cloud_head)
         self.cloud = QLineEdit(current.cloud_root if current else "")
@@ -5480,9 +5827,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         lay.addWidget(self._tx(hint(""), "settings.anki_hint"))
 
         # a faint line: what follows is personalisation
-        lay.addSpacing(14)
-        lay.addLayout(self._divider())
-        lay.addSpacing(6)                      # + the heading's own top space = the same visible gap as above
+        self._rule(lay, "anki")
 
         lay.addWidget(self._tx(section(""), "settings.accessibility"))
         lay.addSpacing(4)
@@ -5594,11 +5939,13 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             x.setUpdatesEnabled(False)
         try:
             row = [self._cloud_row.itemAt(i).widget() for i in range(self._cloud_row.count())]
-            for w in (self._device_head, self.device, self._device_hint, self._cloud_head, self._cloud_hint, *row):
+            for w in (self._device_head, self.device, self._device_hint, self._cloud_gap, self._cloud_head,
+                      self._cloud_hint, *row):
                 if w is not None:
                     w.setVisible(not on)
             self._isync_btn.setVisible(not on)
             self._dual_btn.setVisible(on)
+            self._place_rules()                  # (what's beside the lines changed with the mode)
             if hasattr(self, "pulse"):
                 self.pulse.setVisible(not on)      # (no sync lights on My Device)
             self._isync_head.setText(tr("settings.mode" if on else "settings.isync"))
@@ -5735,6 +6082,25 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         if missing:
             note += "\n\n" + tr("isync.font_missing", fonts=", ".join(missing))
         message(self, note)
+
+    def _rule(self, lay: QVBoxLayout, key: str) -> QWidget:
+        """A faint line between groups, in a block of its own whose room above and below it comes from
+        SETTINGS_RULES (re-placed when the language or the mode changes: _place_rules)."""
+        block = QWidget()
+        inner = QVBoxLayout(block)
+        inner.setSpacing(0)
+        inner.addLayout(self._divider())
+        lay.addWidget(block)
+        self._rules.append((block, inner, key))
+        self._place_rules()
+        return block
+
+    def _place_rules(self) -> None:
+        mode = bool(getattr(self, "_solo", False))
+        for block, inner, key in getattr(self, "_rules", []):
+            table = SETTINGS_RULES[key]
+            above, below = table.get((i18n.language(), mode)) or table[(i18n.language(), False)]
+            inner.setContentsMargins(0, above, 0, below)
 
     @staticmethod
     def _divider() -> QHBoxLayout:
@@ -5907,7 +6273,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             bg_opacity=round(self.bg_opacity, 2), bg_zoom=round(self.bg_crop[0], 4),
             bg_x=round(self.bg_crop[1], 4), bg_y=round(self.bg_crop[2], 4),
             discord=self.discord.isChecked(), solo=solo,
-            device_filter=self.current.device_filter if self.current else "both")
+            device_filter=self.current.device_filter if self.current else "here")
         save_local_settings(self.result_settings)
         self.accept()
 
@@ -7564,6 +7930,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 msg = wintypes.MSG.from_address(int(message))
                 if msg.message == 0x0018 and msg.wParam:          # WM_SHOWWINDOW: about to be shown
                     self._prepainted = True
+                    self.opened_at = time.monotonic()
                     paint_into_window(self)
             except (ValueError, TypeError, OSError, RuntimeError):
                 pass                                              # (then it opens as any Qt window would)
@@ -7983,7 +8350,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """Fill the grid: the library (games + folder tiles), or the open folder's games. While
         searching or filtering, games inside folders are shown directly so nothing is hidden."""
         current = select or self.selected_id()
-        games = list(self.games.values())
+        games = [g for g in self.games.values() if self._on_device(g)]      # this library view's games
         q = self.search.text().strip()
         status = self.settings.status_filter
         sort = self.settings.sort
@@ -8001,11 +8368,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         flat = bool(q) or self._filtering()
 
         def keep(g: Game) -> bool:
-            return matches_search(g, q) and (status == "all" or g.status == status) and self._on_device(g)
+            return matches_search(g, q) and (status == "all" or g.status == status)
 
         def keep_folder(fid: str) -> bool:              # searching: a folder whose name matches shows as itself
             return bool(q) and matches_names((self.folder_name(fid),), q) and \
-                    any((status == "all" or g.status == status) and self._on_device(g) for g in self.folder_games[fid])
+                    (status == "all" or any(g.status == status for g in self.folder_games[fid]))
 
         top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
         top += [("folder", fid) for fid in self.folder_games]
@@ -8239,8 +8606,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         c.blockSignals(False)
 
     def _filter_choices(self, solo: bool) -> list:
-        """(label, data) for the filter drop-down: with two devices, This Device / Other Device / Both Devices under
-        a divider above the reading statuses (owner, 2026-10-18); each group remembers its own pick."""
+        """(label, data) for the filter drop-down: with two devices, the library views This Device / Other Device /
+        Both Devices, a divider, then the reading statuses (owner, 2026-10-18). The box shows the view; a status picked
+        filters within it, folder-option style (remembered, not shown in the box)."""
         statuses = [(tr("filter.all"), "all")] + [(tr(f"status.{s}"), s) for s in STATUSES[1:]]
         if solo:
             return statuses
@@ -8259,28 +8627,34 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._mark_filter()
 
     def _mark_filter(self) -> None:
-        """The box shows the device when one is picked, else the reading status (no ticks, like the sort's)."""
-        dev = self._device_filter()
+        """The box shows the library view (My Device: the reading status, as before). No ticks, like the sort's."""
         c = self.filter
         c.blockSignals(True)
-        c.setCurrentIndex(max(0, c.findData("dev:" + dev if dev != "both" else self.settings.status_filter)))
+        c.setCurrentIndex(max(0, c.findData(self.settings.status_filter if self.settings.solo
+                                            else "dev:" + self.settings.device_filter)))
         c.blockSignals(False)
 
     def _device_filter(self) -> str:
         return "both" if self.settings.solo else self.settings.device_filter
 
     def _filtering(self) -> bool:
-        """A status or device filter is on (games inside folders then show directly, nothing can be rearranged)."""
-        return self.settings.status_filter != "all" or self._device_filter() != "both"
+        """A status filter is on (games inside folders then show directly, nothing can be rearranged). The library
+        view isn't one: it's a library of its own, folders and all."""
+        return self.settings.status_filter != "all"
 
     def _on_device(self, g: Game) -> bool:
-        """Does the device filter let this game through? here = set up on this device, other = only on the other."""
+        """Is this game in the library view? here = set up on this device, other = set up only on the other one."""
         dev = self._device_filter()
         if dev == "both":
             return True
         me = self.settings.machine_name
         mine = bool(g.paths_for(me).exe)
         return mine if dev == "here" else not mine and bool(g.paths_for(other_slot(me)).exe)
+
+    def _all_top_ids(self) -> list[str]:
+        """Every main-page item of the whole library (all views): games not in a folder, and the folders."""
+        return [g.game_id for g in self.games.values() if not g.folder] + \
+            list(dict.fromkeys(FOLDER_PREFIX + g.folder for g in self.games.values() if g.folder))
 
     def _place_folders(self, place: str) -> list[str]:
         """My Arrangement + a folder option: the folders re-placed, sorted by the automatic sort used last (games
@@ -8537,7 +8911,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def showing_no_results(self) -> bool:
         """Searching / filtering and nothing matches."""
-        flat = bool(self.search.text().strip()) or self._filtering()
+        flat = bool(self.search.text().strip()) or self._filtering() or self._device_filter() != "both"
         return flat and self.grid.count() == 0 and bool(self.games)
 
     def _toggle_stats(self) -> None:
@@ -8595,7 +8969,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             place = d[len("place:"):]
             self.settings.folder_place = place
             if self.settings.sort == "custom" and not self.current_folder:
-                order = self._place_folders(place)
+                order = merge_order(self.library_order + self._all_top_ids(), self._place_folders(place))
                 self.library.set_library_order(order)
                 self.library_order = order
                 self._own_change()
@@ -9029,9 +9403,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     def _show_next_conflict(self, _link: str = "") -> None:
         """Select the next game whose saves need a decision (cycles through them on repeated clicks)."""
         self.search.clear()
-        if self._filtering():                    # (every game shown again)
+        if self._filtering() or self._device_filter() == "other":   # (they're all set up here)
             was = self.filter.painted
-            self.settings.status_filter, self.settings.device_filter = "all", "both"
+            self.settings.status_filter = "all"
+            if self.settings.device_filter == "other":
+                self.settings.device_filter = "here"
             self._mark_filter()
             self._save_view_choice()
             self._fade_top_words(self.filter, was, self._apply_filter)
@@ -9082,6 +9458,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 if it is None:                      # clicked the background, not a cover
                     self.clear_selection()
                     return True
+            elif t == QEvent.MouseButtonDblClick and self.grid.itemAt(ev.position().toPoint()) is None:
+                return True                         # (Qt treats it as a fresh click, and selected the cell's game)
             elif t == QEvent.MouseButtonRelease:
                 self._press = None
                 if self._ghost is not None:                     # let go of a dragged game
@@ -9512,6 +9890,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         switched = False
         if self.current_folder:
             fid = self.current_folder
+            ids = merge_order(self.folder_meta.get(fid, {}).get("order", []) +
+                              [g.game_id for g in self.games.values() if g.folder == fid], ids)
             self.library.set_folder_order(fid, ids)
             meta = self.folder_meta.setdefault(fid, {"sort": "", "order": []})
             meta["order"] = list(ids)
@@ -9520,6 +9900,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 meta["sort"] = "custom"
                 switched = True
         else:
+            ids = merge_order(self.library_order + self._all_top_ids(), ids)
             self.library.set_library_order(ids)
             self.library_order = list(ids)
             if self.settings.sort != "custom":           # My Arrangement, starting from what was on screen
@@ -9720,7 +10101,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.no_results_key = "grid.empty"
             return 1.0
         if self.showing_no_results():
-            self.no_results_key = "grid.no_results"
+            # the library view itself is empty (no search, no status): say so - "No Results Found" on a new second
+            # computer hid that the whole library is one drop-down away (owner, 2026-10-19)
+            view = self._device_filter()
+            plain = not self.search.text().strip() and not self._filtering() and not self.current_folder
+            self.no_results_key = f"grid.empty_{view}" if plain and view != "both" else "grid.no_results"
             return 1.0
         return 0.0
 
@@ -10348,12 +10733,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         a.setEnabled(self.play_btn.isEnabled() and self.worker is None)
         m.addAction(tr("menu.edit"), self.edit_selected)
         sm = m.addMenu(tr("menu.status"))
+        sm.setObjectName("ticks")       # (its words start where the other menus' do; the tick on the right: MenuLines)
         for s in STATUSES:
             act = sm.addAction(tr(f"status.{s or 'none'}"), lambda s=s: self._set_status(g.game_id, s))
-            act.setCheckable(True)
-            act.setChecked(g.status == s)
+            act.setData("current" if g.status == s else None)
         fm = m.addMenu(tr("menu.add_to_folder"))
-        others = sorted((f for f in self.folder_games if f != g.folder), key=lambda f: self.folder_name(f).lower())
+        others = sorted({x.folder for x in self.games.values() if x.folder and x.folder != g.folder},
+                        key=lambda f: self.folder_name(f).lower())
         for f in others:
             fm.addAction(self.folder_name(f), lambda f=f: self.move_to_folder(g.game_id, f))
         if others:

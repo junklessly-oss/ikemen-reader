@@ -42,7 +42,7 @@ SLOT_NUMBER = {"PC": 1, "Laptop": 2}
 STATUSES = ("", "reading", "finished", "dropped", "plan")   # also the order shown in every menu
 SORTS = ("recent", "hours", "title", "custom")       # custom = the owner's own order (dragged into place)
 FOLDER_PLACES = ("mixed", "first", "last")           # where folders go among the games on the main page
-DEVICE_FILTERS = ("both", "here", "other")           # which games the top bar's filter shows (two devices only)
+DEVICE_FILTERS = ("here", "other", "both")           # the library view the top bar's drop-down picks (two devices)
 
 
 def other_slot(slot: str) -> str:
@@ -184,8 +184,8 @@ class LocalSettings:
     discord: bool = False             # Discord presence (Browsing / Reading / Tweaking / Away); per device, off at first
     solo: bool = False                # A Solo Device: no syncing, its own library copy (machine_name / cloud_root are
                                       # kept as they were: going back to Dual fills them in again)
-    device_filter: str = "both"       # the filter's device group (two devices only): "both", "here" = set up on this
-                                      # device, "other" = set up only on the other one; per device, not shared
+    device_filter: str = "here"       # the library view (two devices only): "here" = games set up on this device,
+                                      # "other" = set up only on the other one, "both"; per device, not shared
 
     @property
     def library_root(self) -> str:
@@ -217,7 +217,7 @@ def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSetting
     if s.status_filter != "all" and s.status_filter not in STATUSES[1:]:
         s.status_filter = "all"
     if s.device_filter not in DEVICE_FILTERS:
-        s.device_filter = "both"
+        s.device_filter = "here"
     if s.theme not in ("dark", "light", "custom"):
         s.theme = "dark"
     s.solo = s.solo is True

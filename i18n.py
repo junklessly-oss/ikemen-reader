@@ -53,6 +53,8 @@ S: dict[str, tuple[str, str]] = {
     # ------------------------------------------------------------------ grid / bottom bar
     "grid.no_results":          ("No Results Found", "見つかりませんでした"),
     "grid.empty":               ("No Games Yet", "ゲームがまだありません"),
+    "grid.empty_here":          ("No Games Set Up on This Device Yet", "この端末で設定済みのゲームはまだありません"),
+    "grid.empty_other":         ("No Games Only on the Other Device", "もう一方の端末だけのゲームはありません"),
     "grid.no_cloud":            ("The cloud folder can't be found:\n{path}\n\nIs your cloud service's app running? "
                                  "You can change the folder in Settings.",
                                  "クラウドフォルダーが見つかりません：\n{path}\n\nクラウドサービスのアプリは起動していますか？"

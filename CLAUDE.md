@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 251 tests (2026-10-18, after the device filter), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 254 tests (2026-10-19, after the drop-down / menu / Settings pass + sweep), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -1060,14 +1060,68 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   library: folder open / close worst 14 ms at 143 Hz. Text 16 px + bar 81 px on BOTH machines (older "17 /
   83" notes were other conditions).
 
-## Device filter (2026-10-18, owner's design; in 1.1.1)
-- The top bar's filter drop-down, two devices only: This Device (set up here) / Other Device (set up ONLY on the other
-  one) / Both Devices, a divider, then All Games + the reading statuses. Each group remembers its own pick
-  (LocalSettings.device_filter, END field, per device, not shared by Ikemen Sync) and they combine (This Device +
-  Reading). NO ticks, like the sort drop-down; the box shows the device when one is picked, else the status
-  (_mark_filter). A device filter counts as filtering (_filtering: games inside folders show directly, no
-  rearranging; folders by name only if something inside matches). My Device: the group isn't listed and is ignored
-  (_device_filter -> both); _apply_mode refills the list. Guide (EN + JA, two-device only). Test: DeviceFilter.
+## Library views + drop-down shadow (2026-10-18, owner's design; in 1.1.1)
+- The drop-down next to the sort, two devices only: This Device (DEFAULT: set up here, incl. games on both) / Other
+  Device (set up ONLY on the other one) / Both Devices (the whole library), a divider, then All Games + the reading
+  statuses. A view is a whole LIBRARY: folders stay folders (holding only that view's games; hidden if none), the sort,
+  My Arrangement and the folder options apply as usual (MainWindow._rebuild filters self.games by _on_device first).
+  The statuses filter within the view exactly as before (flat, games out of folders) and are picked like the folder
+  options: remembered, never shown in the box - the box always shows the view (_mark_filter). No ticks.
+  LocalSettings.device_filter (END field, "here" default, per device, not shared). Rearranging in a view keeps the
+  hidden games' places (merge_order, _all_top_ids). Add to Folder lists every folder. An EMPTY view (no search / status /
+  folder) says so instead of "No Results Found" (owner, 2026-10-19, option A: a new second computer opened on an empty
+  This Device with the library hidden): grid.empty_here "No Games Set Up on This Device Yet" / grid.empty_other "No
+  Games Only on the Other Device" (_no_results_target). Test: DeviceFilter.test_empty_view_says_so. My Device: no views (the
+  group isn't listed, _device_filter -> both). First built WRONG (views pulled games out of folders, statuses shown
+  in the box, default Both) - owner corrected it. Guide (EN + JA, two-device only). Tests: DeviceFilter.
+- Drop-down lists: Windows' drop shadow redrew a frame late around the slide-open's growing mask (a dark line /
+  band jumping down the edge, sticking out right - owner: "flashing a little"). Now ours: _ListShadow, drawn inside
+  the list's own window (5 px right + below, Windows' shadow measured on white and matched to within 1/255), so it
+  unrolls with the list in the same frame. The list window gets NoDropShadowWindowHint | FramelessWindowHint when it
+  first opens (Qt resets its flags after __init__; without Frameless it was never really see-through: the margin
+  showed black) and grows by the shadow after Qt has sized it (layout margins 0 before showPopup, 5 after). Every
+  drop-down is a ThemedCombo, so all seven have it. Tools: ddfilm (one screen read per refresh, contact sheets),
+  shadowprofile / shadowcompare, ddtransparent, ddothers.
+
+## Lists, menus, clicks (2026-10-18 night, owner's checks; in 1.1.1)
+- Drop-down lists (all seven ThemedCombos) FLOAT 3 px from the box (LIST_GAP) with all four corners rounded (6 px, as
+  the box), padding 4 px top / bottom, rows padding 1 5 3 5 px (text starts exactly where the box's does - measured;
+  #fontpick rows 5 5) - room to breathe below the letters. Our shadow follows the rounded corners (drop_shadow(),
+  cached per size, put together from a small model's corners + stretched edges: pixel-identical to the per-pixel
+  _shadow_pixels, ~0.05-1.5 ms for any size instead of 3-8 ms). A reopened list's see-through window still held its
+  last picture (shown for a frame): cloaked until the slide's first picture is out. Direction = the SCREEN rule
+  (owner, 2026-10-19, after an inside-the-window rule was tried): down while the screen has room for the whole list
+  (gap + shadow included, past the program's edge too), up only when it doesn't; the arrow (_opens_up) matches.
+- Right-click menus: rounded + our shadow (MenuLines: on Polish -> NoDropShadow | Frameless + translucent; QSS
+  margin right / bottom MENU_SHADOW for the shadow, + setContentsMargins(0, 0, MENU_SHADOW, MENU_SHADOW): Qt frames a
+  menu by its TOP border + padding on every side, so the shadow room ate the bottom padding - "New Folder" sat on the
+  bottom edge; now 12 px above / 13 below the words like every row, measured: claude-tools menugaps.py); submenu
+  arrow = the drop-down chevron turned (chevron_right). Qt's menu fade is off (UI_FadeMenu / UI_AnimateMenu: it
+  restarted from see-through on every submenu switch). Submenus float SUBMENU_GAP 3 px from the menu, first item level
+  with the item that opened them (MenuLines._place_submenu, on Show + Move: Qt moves it once more after showing).
+  Reading Status submenu (#ticks): words start where every menu's do, the status in use gets the app's tick (ICONS
+  "tick", text colour) at the RIGHT end (drawn by MenuLines; QAction data "current", no checkable actions).
+  Submenu switch flash (Reading Status <-> Add to Folder): Qt destroys the old submenu's window and makes a new one,
+  shown only once drawn - 1-2 frames with no submenu on every switch (filmed). SubmenuHandOver (native filter): at
+  the old one's WM_WINDOWPOSCHANGING + SWP_HIDEWINDOW its grab() goes into _MenuStandIn (a click-through window
+  already on screen while the menu is open), cleared a frame after the new submenu paints (HOLD_MS 120 at most).
+  Filmed: 0 empty frames. (Stripping SWP_HIDEWINDOW / repaint at Show / SW_SHOWNA all failed: the window is
+  destroyed, not hidden.) Tools: menufilm, menuhold, menupos, menugaps.
+- Settings: a faint line (the owner's idea) between This Is's hint and Cloud Folder, so This Is's open list ends
+  well above the cloud folder box (it cut across its top edge - owner: "not clean"). EVERY Settings line is a
+  SettingsDialog._rule block whose room above / below comes from SETTINGS_RULES per line, language and My Device
+  (re-placed on language / mode switches): exactly 20 px clear above and below each line, measured on the screen
+  (scratch settingslines.py) - they were 20/19, 22/19, 15/15 before. The cloud line hides with the cloud rows.
+- Grid hit-testing: LibraryGrid.indexAt only counts the COVER (its resting rect), not the cell around / below it -
+  hover, clicks, right-clicks, double-clicks (MouseButtonDblClick on no cover is eaten: Qt turned it into a click).
+  setSelection is shifted by GRID_TOP_SHIFT like indexAt (a click near a cover's foot selected the hidden row
+  below it). paintEvent asks Qt about its region shifted up by GRID_TOP_SHIFT too, so a strip at a cover's foot
+  gets that cover (only the background was drawn there: a dark box under a light).
+- Launch: lights keep their first look until OPEN_SETTLE_S (0.35 s) after the window appears (opened_at, set at
+  WM_SHOWWINDOW): the first check's answers came within ~25 ms, during Windows' opening animation and the uneven
+  first frames - grey -> colour looked abrupt. Then the usual 0.22 s cross-fade on steady frames.
+- Tools: clickgap, blackbox / blackclick (OLD=1 = without the click fix), ddupward, ddalign, fontalign, menushot,
+  devlist, lightlaunch, ddcloak.
 
 ## Ideas for later (owner interested, not scheduled)
 - PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows
@@ -1092,7 +1146,12 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   wine, save paths inside the Wine prefix + translation between devices), Wine registry for registry saves,
   LE/Luna don't apply, startup/.lnk/window titles/playtime need equivalents, build per OS (Mac signing ~$99/yr).
   Can't be tested from the owner's Windows machines.
-- Cover size changer (Ctrl+wheel and/or slider in Settings → Display).
+- Cover size changer (Ctrl+wheel and/or slider in Settings → Display). Owner, 2026-10-18: a slider, today's size =
+  the MAX, smaller = more covers per row ("add to idea pile"). Assessed: the core is small - _fit_grid already
+  picks the columns at the smallest cover width (COVER_W) and stretches covers to fill the row (GRID["cover_w"],
+  drawing is already width-aware); the slider lowers that minimum (~60 % floor). Work: check hover title /
+  stats, bookmarks, lights, folder mosaics at small sizes; Settings slider with live preview; END field (Ikemen
+  Sync shared or not - ask); guide EN + JA; tests. Estimate 1-1.5 h.
 - Theme editor (low priority): Settings → "Customise Theme..." window listing every colour in COLORS/LIGHTS
   under friendly grouped names, swatch + hex box each, Qt colour picker (styled), live preview through
   apply_theme, start from Dark/Light, per-colour + full reset, optional "Simple" mode (3-4 base colours →
