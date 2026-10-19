@@ -152,7 +152,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.5" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.4" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -922,7 +922,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   Filmed (claude-tools pickfilm.py / pickhook.py): folder + file pickers appear dark in one frame. Only our own
   pickers - other programs' windows (games, Luna, Anki) and the UAC prompt are out of reach.
 
-## 1.1.5 launch pass (2026-10-19; owner: "close and launch 10 times, make sure beyond doubt")
+## 1.1.4 launch pass (2026-10-19; owner: "close and launch 10 times, make sure beyond doubt")
 - LESSON: 1.1.3 shipped without running the BUILT program on the owner's PC; the opening flash was back there. Test
   launch / window changes on the real build + the owner's setup (close their copy: claude-tools reopen.ps1).
 - Opening flash (regressed, built program only, 4-6 of 7 openings): the WM_SHOWWINDOW pre-paint into the still-hidden
