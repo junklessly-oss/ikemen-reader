@@ -152,7 +152,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.1" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.2" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -913,6 +913,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Pop-ups to the front: PopupsToFront (app event filter): every QDialog that opens is put above all windows once
   (bring_to_front: SetWindowPos TOPMOST then NOTOPMOST, with wintypes.HWND argtypes - without them -1/-2 are cut to 32
   bits and ignored) and can be covered again afterwards. Verified over Notepad.
+  QFileDialog is SKIPPED (2026-10-19, owner's screenshot): with Windows' native picker Qt's QFileDialog is an
+  invisible stand-in, and cloaking / bring_to_front put it on screen as a small empty white "Choose t..." box.
 
 ## Solo mode ("My Device" / マイ端末, button "Dual Device" / デュアル端末 - owner renamed them 2026-10-18; plan item 3; building since 2026-10-18 - see memory next-features-plan.md)
 - LocalSettings.solo (END field); machine_name + cloud_root stay as they were (Dual Mode fills them in again).
@@ -1124,6 +1126,18 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   devlist, lightlaunch, ddcloak.
 
 ## Ideas for later (owner interested, not scheduled)
+- Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +
+  Custom edits; restyle_all / MainWindow.restyle -> app_icon()), and an unpinned taskbar button shows it (owner
+  confirmed). A PINNED button (owner's: `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\
+  Ikemen Reader.lnk`) always shows the shortcut's icon = the .exe's build-time icon, and re-pinning takes the .exe's
+  icon again. Two parts, both wanted together: (1) on every theme change write the themed icon to an .ico in
+  %APPDATA%\IkemenReader and point the pinned .lnk's icon at it (icon only; SHChangeNotify to refresh Windows' icon
+  cache, which can be stubborn - test with a real pinned button); (2) set the window's
+  PKEY_AppUserModel_RelaunchIconResource (+ RelaunchCommand / DisplayName, same AppUserModelID "IkemenReader.App")
+  so pinning takes the current themed icon (only as it was at that moment - hence (1)).
+  Desktop shortcuts too (owner, 2026-10-19): same rule (a .lnk shows the .exe's icon unless it has its own), so (1)
+  should also update any Ikemen Reader .lnk on the desktop (user + Public). The program makes none itself; the owner's
+  desktop has none today (only an "Ikemen Reader" folder/item, no .lnk). The .exe file's own icon stays the build-time one.
 - PINNED (owner, 2026-10-17: "we'll come back to it"): adaptive performance. Measure real frame times (+ Windows
   power status / battery saver) and pick a level: Full (screen rate) / Balanced (cap 60, lights 30) / Light (lights
   <= 30, rest 60 if possible), with hysteresis; optional Display setting Automatic / Always Full / Battery Saver;
