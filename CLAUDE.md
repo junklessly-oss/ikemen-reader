@@ -1205,9 +1205,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - Settings: the This Is list (3 rows since My Device) cut into the "Cloud Folder" heading (list bottom 435, heading
   426). SETTINGS_RULES "cloud" +11 px above and below (31 / 31 clear instead of 20 / 20): heading at 448, list + its
   shadow clear of it.
-- Zoom note: both of the owner's PC screens were at 125 % on 2026-10-19 (a test of mine changed the main one, then my
-  session crashed; owner kept it). SPI_GETLOGICALDPIOVERRIDE is RELATIVE to Windows' recommended size (0 = 125 % on
-  these screens) - measure with GetDpiForMonitor. Never change the zoom from the session again: it killed it.
+- Zoom note: the owner's PC screens are at 100 % (a zoom test of mine on 2026-10-19 briefly left them at 125 %).
+  SPI_GETLOGICALDPIOVERRIDE is RELATIVE to Windows' recommended size - measure with GetDpiForMonitor. Never change the
+  zoom from the session again: it killed it. Test tools should stay zoom-aware anyway (launchcheck / explcheck /
+  backdrop are).
 
 ## Laptop smoothness check (2026-10-19 evening, owner: "check scroll and animation smoothness on laptop")
 - claude-tools (paths updated to the project's new home Desktop\Utility\Ikemen): bench110.py (owner's look, 22-game
@@ -1268,7 +1269,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   tall, EN + JA, both modes (scratch barcheck.py); shots.py set reviewed.
 - Built 1.1.5 on the owner's setup: launchcheck 10/10 clean opening / same place / nothing active; explcheck 10/10
   (now watches the whole screen: Explorer cascades new windows); taskbar filmed during start-up: the title-bar
-  warm-up window never shows a button. Tools made zoom-aware (the owner's PC screens are at 125 % now): launchcheck,
+  warm-up window never shows a button. Tools made zoom-aware (the PC was briefly at 125 %): launchcheck,
   explcheck (SetProcessDpiAwarenessContext -4), backdrop.py (QT_ENABLE_HIGHDPI_SCALING=0).
 
 ## Drag fixes (2026-10-19 late, owner: "it'll snap back" + "the white drop line flickers like crazy")
