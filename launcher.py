@@ -32,7 +32,7 @@ import detect
 import luna
 import outside
 from library import Game, Library, LocalSettings
-from sync_engine import Action, ConflictResolver, SyncEngine, save_folder_problem
+from sync_engine import Action, ConflictResolver, SyncEngine, all_made_since, save_folder_problem
 from titles import clean_title, session_title, shared_part, usable_window_title
 
 
@@ -828,10 +828,18 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: Optional
 
 def finish_first_play(game: Game, settings: LocalSettings, library: Library, engine: SyncEngine,
                       save_dir: str, registry_key: str = "",
-                      on_conflict: Optional[ConflictResolver] = None):
+                      on_conflict: Optional[ConflictResolver] = None, started_at: float = 0.0):
     """The owner confirmed where this game saves: store it and do the first sync. If the other
-    device already uploaded saves, this asks which to keep (nothing is lost either way)."""
+    device already uploaded saves, this asks which to keep (nothing is lost either way).
+    started_at: when the session that found the folder began. If every save file was made in it, their
+    fingerprint is kept (Game.setup_saves) so "which to keep" can say what they are."""
     library.set_paths(game.game_id, settings.machine_name, save_dir=save_dir)
     if registry_key:
         library.update(game.game_id, registry_key=registry_key)
+    # (not with a registry part: a key has no creation time, it may hold progress from before)
+    if started_at and not registry_key and all_made_since(save_dir, started_at - 2):
+        fp = engine.fingerprint_now(game.game_id, save_dir)
+        current = library.get(game.game_id)
+        if fp and current is not None:
+            library.update(game.game_id, setup_saves={**current.setup_saves, settings.machine_name: fp})
     return engine.before_launch(game.game_id, save_dir, on_conflict, registry_key)

@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 258 tests (2026-10-19, after the 1.1.4 launch pass), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 265 tests (2026-10-19, 1.1.5), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -152,7 +152,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.4" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.5" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -361,7 +361,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
    show time doesn't reach the screen). Sort picks only move marks (_mark_sort; list rebuilt only for folder
    in/out + language); the tick moves on view.pressed (Qt blinks + closes before activated), without moving
    the highlight (Qt picks the highlighted row on release). Diagnostics: IKEMEN_DEBUG_STALLS=1 writes freezes
-   > 0.5 s (all threads' stacks) to %APPDATA%\IkemenReader\stalls.log; diag(text) adds lines there.
+   > 0.5 s (all threads' stacks) to %APPDATA%\IkemenReader\stalls.log.
 
 - Folder open/close (2026-10-16, owner chose cohesion over the old zoom): the SAME fade as search. open_folder /
   close_folder -> _apply_filter(select, after_rebuild): library fades out, then the folder's games fade in (and
@@ -1164,6 +1164,112 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   first frames - grey -> colour looked abrupt. Then the usual 0.22 s cross-fade on steady frames.
 - Tools: clickgap, blackbox / blackclick (OLD=1 = without the click fix), ddupward, ddalign, fontalign, menushot,
   devlist, lightlaunch, ddcloak.
+
+## Saves the game made by starting (2026-10-19, owner's report "newer saves that aren't newer")
+- "Newer" on the lights / status words = changed since the last sync (fingerprints, no dates). Only the "which saves to
+  keep" window (ConflictDialog) uses dates: newest file mtime per side -> "(Newer)". After "Find It While Reading" the
+  game had rewritten its files just by starting, so that copy was "(Newer)" against real progress on the other device.
+- Game.setup_saves {device: fingerprint} (END field): finish_first_play(started_at=PlayResult.started_at) records this
+  device's saves when EVERY file in the folder was created in that session (sync_engine.all_made_since, creation time;
+  not with a registry key: no creation time). ConflictInfo carries local_fp / cloud_fp; a side still equal to a
+  recorded fingerprint shows "Made When the Game Was First Opened on This Device / the Other Device" (conflict.setup_*),
+  never "(Newer)"; Enter = the other side. Nothing chosen automatically (owner's no-guess rule). Once the files change
+  the label goes. Guide (EN + JA). Tests: SetupSavesLabelled.
+- Known small bug, not fixed: a registry game's local date = when the export stage was rewritten (e.g. right after a
+  pull), not when it was played. None of the owner's games use registry saves.
+- Library views + folders (owner's note 3): checked with a copy of the real library, every view keeps folders whole -
+  owner: "If it works fine, then all is well."
+- Windows 11 cold start (owner's note 2): only during the opening animation, only the first opening after a restart,
+  the top bar looked much LARGER for a moment. Not reproducible on the PC at 125 % (filmed: top bar normal from the
+  first frame; open.log: window 1200x833 at 120 dpi = picture 1200x833). Safety check added to paint_into_window:
+  the pre-painted picture is drawn only if it is exactly the window's client size (GetClientRect) at that moment;
+  open.log now records window size, GetDpiForWindow and picture size. UNCONFIRMED as the fix - check on the laptop
+  after a restart (IKEMEN_DEBUG_OPEN=1, read open.log). Not started at login (owner: Launch on Startup is off) - it's
+  opened by hand, the first run after a restart (cold disk / font caches: the slow first opening).
+  Noticed while filming: the first ~0.1 s of the opening shows the top bar without the logo / "Search..." text.
+  LAPTOP (same evening): owner's detail = "a dark band with nothing loaded on it". Ruled out on the laptop: the
+  pre-painted picture (saved in debug mode: complete), sizes (match), inner native windows (none), cold file cache /
+  no prefetch / busy CPU (claude-tools coldsim.py: fresh unbuffered copy in a new folder + half the cores busy; the
+  INSTALLED 1.1.4 opened clean too). Owner + I: most likely Windows' OWN title bar on its first use after a login
+  (text / icon / buttons not loaded yet) stacked on our dark top bar. Workaround (owner picked it over cloaking the
+  window, which loses the opening animation): warm_title_bar() in main() before MainWindow - a 200x100 QWidget with a
+  normal title bar, CLOAKED before show (never on screen / taskbar: watched every window per refresh), frame redrawn
+  (RDW_FRAME + UPDATENOW), DwmFlush, hidden; ~0.12 s. Opening filmed clean after it. UNCONFIRMED until the owner's
+  next restart on the laptop. Debug mode (IKEMEN_DEBUG_OPEN=1) also saves the pre-painted picture
+  (%APPDATA%\IkemenReader\open_picture_*.png) - AFTER drawing it: saving first made the opening WHITE (the second
+  paint happens with the window already visible; ~0.1 s of delay there = white frames). Never add work before that
+  second paint.
+- My Device: the bar's folder button is Open Game Folder (the .exe's folder; MainWindow._folder_key / _bar_folder),
+  with two devices Open Save Folder (owner, 2026-10-19). Right-click menu keeps both. Guide (¤ paragraph). Test:
+  BarFolderButton.
+- Settings: the This Is list (3 rows since My Device) cut into the "Cloud Folder" heading (list bottom 435, heading
+  426). SETTINGS_RULES "cloud" +11 px above and below (31 / 31 clear instead of 20 / 20): heading at 448, list + its
+  shadow clear of it.
+- Zoom note: both of the owner's PC screens were at 125 % on 2026-10-19 (a test of mine changed the main one, then my
+  session crashed; owner kept it). SPI_GETLOGICALDPIOVERRIDE is RELATIVE to Windows' recommended size (0 = 125 % on
+  these screens) - measure with GetDpiForMonitor. Never change the zoom from the session again: it killed it.
+
+## Laptop smoothness check (2026-10-19 evening, owner: "check scroll and animation smoothness on laptop")
+- claude-tools (paths updated to the project's new home Desktop\Utility\Ikemen): bench110.py (owner's look, 22-game
+  copy, stand-in game; now also counts >25 / >34 ms frames - its old "late" rule was max(20, 2.5 x median) = ~45 ms),
+  bigbench.py <appdata> (BIG_PROFILE=paints / stats / scroll, BIG_NOCACHE=1), makebig.py; scratch ad_small / ad_big
+  = the owner's laptop settings pointed at the copies. Run with py -u (os._exit at the end skips flushing).
+  GOTCHA: a probe that saved pulse=False into a test copy's settings made the clock idle between actions -> fake
+  0.2-0.6 s "freezes" and "no frames" (the gap between ticks). Reset the copy before comparing.
+- Everyday use (22 games): idle / hover / search / sort / launch / close all smooth at 60 Hz (a couple of single
+  skipped refreshes).
+- 240 games: a scroll repaint took ~11 ms of 16.7 (every cover resampled + cut to its rounded edge each frame);
+  ~1 frame in 15 skipped. No file access on the main thread while scrolling (checked: 0 os.stat calls).
+  FIX: CardDelegate._clipped(key=...) keeps the finished rounded tile of a STILL cover / folder mosaic (_flat, LRU
+  FLAT_TILES 64, ~15 MB) and repaints copy it (cover_rect is whole pixels). Key = what it depends on: game -> the
+  cover / placeholder pixmap's cacheKey; folder -> its first four covers' cacheKeys + statuses, bookmarks on/off,
+  button + placeholder colours (none while the bookmarks fade); + size + dpr. Hovered tiles draw live as before.
+  Repaint 11 -> 7 ms; hitches scroll 20+23 -> 2+2, folder open/close 11 -> 5, three sorts 41 -> 3.
+  Pixel check (scratch samepix.py): identical within 1/255 except folder MINI-bookmarks, which can sit 1 px apart:
+  paint_bookmark rounds positions (banker's rounding of x.5) and the old still path used screen coordinates while
+  the hover layer always used tile coordinates - the cache matches the hover path (no 1 px nudge on hover now).
+- MOUSE-WHEEL GLIDE (owner, 2026-10-19, after asking whether Steam's library glides - it does: Chromium; browsers and
+  Windows' newer apps too, File Explorer jumps). Built on the LAPTOP first (owner: weaker machine first).
+  LibraryGrid.wheelEvent: a whole notch (angleDelta multiple of 120, no modifier) moves _glide_to by
+  wheelScrollLines x singleStep (72 px, the old jump), clamped to the range; _glide_step on a VsyncClock closes
+  1 - exp(-dt / WHEEL_GLIDE_TAU 0.05) of the way each refresh (~0.15 s to arrive, more notches = one continuous glide),
+  ends within 0.5 px. Anything else changing the scroll bar's value (_scrolled_elsewhere: scroll bar, keyboard
+  scrollTo, rebuilds, drag edge-scroll) ends it on the spot. Touchpads / free-spinning wheels (deltas not a multiple
+  of 120), sideways, with a key held: Qt's own scrolling as before. Measured on the laptop, 240 games, bursts of 3
+  notches down and up (bigbench BIG_PROFILE=wheel): ~1,070 glide frames, 2 over 25 ms (worst 29), never backwards,
+  ends exactly at top / bottom. Test: WheelGlide.
+
+## 1.1.5 pass on the PC (2026-10-19 night; owner: "all tests on the new build... hone performance... build, push,
+## pack it up")
+- Hand-over back from the laptop landed identical (8 files; G:\My Drive\Claude hand-over 2026-10-19 laptop to PC).
+- Code scan: pyflakes clean on every file; dead-code scan (names defined once, Qt overrides skipped) found only diag()
+  (unused since the stall log stopped timing sort picks) -> removed, stall-log docstring fixed. No unused i18n keys.
+- ConflictDialog's setup label: _conflict_choice(fresh=True) re-reads the game file ONLY right after a save folder was
+  found (finish_first_play just wrote setup_saves); otherwise the in-memory game - a cloud read on the window's thread
+  can stall while Google Drive is busy.
+- Hover follows the scroll: MainWindow.scrolled() makes the cover under the pointer the hovered one on every scroll step
+  (it only followed mouse moves: with the wheel's glide the lifted cover slid away under a still pointer).
+- HOVER FRAMES (PC, 143 Hz): a hover frame redrew every cover (Qt redraws all items in the box around everything that
+  changed; the breathing lights span the grid) - 4.5 ms. Now _tick builds a "live" region (the moving tiles, plus any
+  light square touching them, repeated until nothing new joins) and LibraryGrid.paintEvent copies the still picture
+  for the rest, draws the other lights, then _paint_part(QPaintEvent(live part)) - the very same routine a normal
+  repaint uses (an own copy of it missed covers Qt picks by its GRID_TOP_SHIFT-higher rects). prepare_still(skip=live)
+  leaves the live part dirty (patched once the hover settles). Paint 4.5 -> 1.3 ms; hover tick median 8.1 -> 7.1 ms.
+  Pixel check vs a full redraw (scratch hovercheck.py, frozen clock): identical or <= 5 edge pixels <= 32/255.
+  Test: HoverFrames.
+- Text caches: fit_title() remembers (title, font.key(), width, lines) -> (font, lines) (_FITTED), advance() remembers
+  text widths (_ADVANCES; runs_width / draw_runs); both cleared past a few thousand entries. Scroll repaint (240 games,
+  pointer over the grid) 3.9 -> 3.4 ms median, slowest tenth 6 -> 5 ms.
+- Measured at 143 Hz (claude-tools bench110 now also counts "missed" = > 1.5 x median): idle / search / sort / launch
+  / close medians 7.0 ms, ~1-2 % single missed refreshes; 240 games: scroll, folders, search, sorts no frame > 25 ms
+  after the first pass; wheel glide 0-1 frames > 25 ms per run.
+- Stress (fuzz110 + wheel notches; FUZZ_WHEEL=1 = wheel-heavy): 2 x 800 + 700 actions, 0 errors.
+- Visual: Settings lines 20/20 (31/31 at the cloud line) EN + JA, Dual + My Device; bottom bar 25 px both edges, 81 px
+  tall, EN + JA, both modes (scratch barcheck.py); shots.py set reviewed.
+- Built 1.1.5 on the owner's setup: launchcheck 10/10 clean opening / same place / nothing active; explcheck 10/10
+  (now watches the whole screen: Explorer cascades new windows); taskbar filmed during start-up: the title-bar
+  warm-up window never shows a button. Tools made zoom-aware (the owner's PC screens are at 125 % now): launchcheck,
+  explcheck (SetProcessDpiAwarenessContext -4), backdrop.py (QT_ENABLE_HIGHDPI_SCALING=0).
 
 ## Ideas for later (owner interested, not scheduled)
 - Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +

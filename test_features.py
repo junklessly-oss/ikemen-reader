@@ -4850,3 +4850,281 @@ class LaunchPass(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class SetupSavesLabelled(unittest.TestCase):
+    """2026-10-19 (owner): "Find It While Reading" - the game wrote its files just by starting, so that copy had the
+    newest date and was marked "(Newer)" against the other device's real progress. Saves made in that session are
+    remembered (Game.setup_saves) and the "which to keep" window names them instead of calling them newer."""
+
+    def test_recorded_only_when_every_file_is_new(self):
+        from sync_engine import all_made_since
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            saves = Path(tmp) / "saves"
+            self.assertFalse(all_made_since(saves, 0))                    # (no folder)
+            saves.mkdir()
+            self.assertFalse(all_made_since(saves, 0))                    # (no files)
+            (saves / "system.dat").write_bytes(b"x")
+            self.assertTrue(all_made_since(saves, time.time() - 60))
+            self.assertFalse(all_made_since(saves, time.time() + 60))     # a file from before the session
+
+    def _two_devices(self, tmp: str):
+        root = Path(tmp)
+        cloud = root / "cloud"
+        cloud.mkdir()
+        lib = Library(cloud)
+        g = lib.add_game("Game", "PC", exe=str(root / "pc" / "g.exe"))
+        lib.set_paths(g.game_id, "Laptop", exe=str(root / "lap" / "g.exe"))
+        pc_saves = root / "pc_saves"
+        pc_saves.mkdir()
+        (pc_saves / "save01.dat").write_bytes(b"hours of progress")
+        lib.set_paths(g.game_id, "PC", save_dir=str(pc_saves))
+        pc = SyncEngine(cloud, root / "pc_state")
+        self.assertEqual(pc.before_launch(g.game_id, pc_saves).action, Action.PUSHED)
+        lap_saves = root / "lap_saves"
+        lap_saves.mkdir()
+        old = time.time() - 3600                                         # the cloud copy's dates: an hour ago
+        for f in (cloud / "saves" / g.game_id).rglob("*"):
+            os.utime(f, (old, old))
+        return root, cloud, lib, g, pc, lap_saves
+
+    def test_first_play_records_and_the_window_names_it(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QPushButton
+        import app
+        import i18n
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root, cloud, lib, g, pc, lap_saves = self._two_devices(tmp)
+            started = time.time()
+            (lap_saves / "config.dat").write_bytes(b"made by starting")  # the game opened on the laptop
+            lap = SyncEngine(cloud, root / "lap_state")
+            seen = []
+            res = finish_first_play(lib.get(g.game_id), LocalSettings("Laptop", str(cloud)), lib, lap, str(lap_saves),
+                                    on_conflict=lambda info: seen.append(info) or None, started_at=started)
+            self.assertEqual(res.action, Action.CONFLICT)
+            info = seen[0]
+            setup = lib.get(g.game_id).setup_saves
+            self.assertEqual(setup, {"Laptop": info.local_fp})
+            self.assertGreater(info.local_mtime, info.cloud_mtime)        # by date the laptop's copy IS newer
+            texts = lambda d: [b.text() for b in d.findChildren(QPushButton)]
+            for lang in ("en", "ja"):
+                i18n.set_language(lang)
+                try:
+                    d = app.ConflictDialog("Game", info, first_sync=True, setup=setup, machine="Laptop")
+                    local, cloud_b = texts(d)[:2]
+                    self.assertIn(i18n.tr("conflict.setup_here"), local)
+                    self.assertNotIn(i18n.tr("conflict.newer"), local)
+                    self.assertNotIn(i18n.tr("conflict.setup_here"), cloud_b)
+                    self.assertTrue(d.findChildren(QPushButton)[1].isDefault())   # Enter = the real saves
+                    d.deleteLater()
+                    # the same copy seen from the PC (the laptop kept it and uploaded): "the Other Device"
+                    flipped = type(info)(info.game_id, info.cloud_mtime, info.local_mtime, info.cloud_fp, info.local_fp)
+                    d = app.ConflictDialog("Game", flipped, setup=setup, machine="PC")
+                    self.assertIn(i18n.tr("conflict.setup_other"), texts(d)[1])
+                    self.assertNotIn(i18n.tr("conflict.newer"), texts(d)[1])
+                    d.deleteLater()
+                    # no setup record: as before
+                    d = app.ConflictDialog("Game", info, first_sync=True)
+                    self.assertIn(i18n.tr("conflict.newer"), texts(d)[0])
+                    d.deleteLater()
+                finally:
+                    i18n.set_language("en")
+            # read on the laptop after that: the files changed, the label goes
+            (lap_saves / "save01.dat").write_bytes(b"real progress here")
+            later = []
+            lap.before_launch(g.game_id, lap_saves, lambda i: later.append(i) or None)
+            self.assertNotEqual(later[0].local_fp, setup["Laptop"])
+
+    def test_not_recorded_for_older_saves_or_registry(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root, cloud, lib, g, pc, lap_saves = self._two_devices(tmp)
+            (lap_saves / "save01.dat").write_bytes(b"played before, outside Ikemen Reader")
+            lap = SyncEngine(cloud, root / "lap_state")
+            finish_first_play(lib.get(g.game_id), LocalSettings("Laptop", str(cloud)), lib, lap, str(lap_saves),
+                              on_conflict=lambda info: None, started_at=time.time() + 60)
+            self.assertEqual(lib.get(g.game_id).setup_saves, {})
+            finish_first_play(lib.get(g.game_id), LocalSettings("Laptop", str(cloud)), lib, lap, str(lap_saves),
+                              on_conflict=lambda info: None)                 # (no session time: nothing)
+            self.assertEqual(lib.get(g.game_id).setup_saves, {})
+
+    def test_damaged_field_is_ignored(self):
+        from library import Game
+        g = Game.from_json(json.dumps({"game_id": "g", "title": "G", "setup_saves": {"PC": 5, "Laptop": "ab", "Old": ""}}))
+        self.assertEqual(g.setup_saves, {"Laptop": "ab"})
+        self.assertEqual(Game.from_json(json.dumps({"game_id": "g", "title": "G", "setup_saves": []})).setup_saves, {})
+
+
+class BarFolderButton(unittest.TestCase):
+    """2026-10-19 (owner): on My Device nothing syncs, so the bar's folder button opens the GAME's folder (the one
+    with the .exe); with two devices it stays Open Save Folder. The right-click menu keeps both either way."""
+
+    def test_follows_the_mode(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            game_dir, saves = Path(tmp) / "game", Path(tmp) / "saves"
+            game_dir.mkdir(); saves.mkdir()
+            lib = Library(cloud)
+            g = lib.add_game("Game", "PC", exe=str(game_dir / "g.exe"))
+            lib.set_paths(g.game_id, "PC", save_dir=str(saves))
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            opened = []
+            try:
+                w.show()
+                w.refresh()
+                w._select(g.game_id)
+                with mock.patch.object(app, "open_folder", lambda p: opened.append(p)):
+                    self.assertEqual(w.saves_btn.text(), app.tr("bar.open_saves"))
+                    w.saves_btn.click()
+                    w.settings.solo = True
+                    w._apply_mode()
+                    end = time.monotonic() + 2                              # (the switch fades: done at its end)
+                    while time.monotonic() < end and w._mode_anim is not None:
+                        QApplication.processEvents()
+                        time.sleep(0.01)
+                    self.assertEqual(w.saves_btn.text(), app.tr("bar.open_game"))
+                    self.assertTrue(w.saves_btn.isEnabled())
+                    w.saves_btn.click()
+                self.assertEqual([Path(p) for p in opened], [saves, game_dir])
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class WheelGlide(unittest.TestCase):
+    """2026-10-19 (owner): a mouse-wheel notch glides (it jumped 72 px); more notches extend the same glide; the scroll
+    bar / keyboard / anything else moving the view takes over at once; touchpads (small steps) scroll directly."""
+
+    def test_glide(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtGui import QWheelEvent
+            from PySide6.QtCore import QPoint, QPointF, Qt
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            for i in range(40):
+                lib.add_game(f"Game {i}", "PC", exe=str(Path(tmp) / f"g{i}" / "g.exe"))
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.show()
+                w.refresh()
+                vp, sb = w.grid.viewport(), w.grid.verticalScrollBar()
+                self.assertGreater(sb.maximum(), 400)
+
+                def wheel(dy):
+                    c = QPointF(vp.width() / 2, vp.height() / 2)
+                    QApplication.sendEvent(vp, QWheelEvent(c, c, QPoint(0, 0), QPoint(0, dy), Qt.NoButton,
+                                                           Qt.NoModifier, Qt.NoScrollPhase, False))
+
+                def settle(sec=1.0):
+                    end = time.monotonic() + sec
+                    while time.monotonic() < end and w.grid._glide_to is not None:
+                        QApplication.processEvents()
+                        time.sleep(0.005)
+
+                step = QApplication.wheelScrollLines() * sb.singleStep()
+                sb.setValue(0)
+                wheel(-120)
+                self.assertLess(sb.value(), step)                 # not there at once: it glides
+                wheel(-120)                                        # a second notch extends the same glide
+                settle()
+                self.assertEqual(sb.value(), 2 * step)
+                wheel(-120)
+                QApplication.processEvents()
+                sb.setValue(10)                                    # the scroll bar takes over mid-glide
+                settle(0.3)
+                self.assertEqual(sb.value(), 10)
+                self.assertIsNone(w.grid._glide_to)
+                wheel(-40)                                         # a touchpad's small step: straight away, no glide
+                self.assertIsNone(w.grid._glide_to)
+                self.assertGreater(sb.value(), 10)
+                sb.setValue(0)
+                wheel(120)                                         # already at the top: stays there
+                settle()
+                self.assertEqual(sb.value(), 0)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class HoverFrames(unittest.TestCase):
+    """2026-10-19 (PC, 143 Hz): a hover frame redrew every cover (~4.5 ms); now the still picture + the lights, and
+    only the moving part drawn the usual way (~1.3 ms). It must look like a full redraw."""
+
+    def test_hover_frame_looks_like_a_full_redraw(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            from PySide6.QtGui import QPixmap, QRegion
+            from PySide6.QtCore import QPoint, QRect
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            for i in range(12):
+                lib.add_game(f"Game {i}", "PC", exe=str(Path(tmp) / f"g{i}" / "g.exe"))
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            real = time.monotonic
+            try:
+                w.show()
+                w.refresh()
+                end = real() + 1.0
+                while real() < end:
+                    QApplication.processEvents()
+                    time.sleep(0.005)
+                grid, vp = w.grid, w.grid.viewport()
+                items = [grid.item(i) for i in grid.visible_range()]
+                target = items[min(6, len(items) - 1)].data(app.GAME_ID_ROLE)
+                w._update_anim = lambda: None
+                frozen = real()
+                with mock.patch.object(app.time, "monotonic", lambda: frozen):
+                    w.hover, w.hovered = {target: 0.2}, target
+                    grid._still, grid._still_dirty = None, None
+                    grid.prepare_still()
+                    w.hover = {target: 0.6}
+                    region, live, lights = QRegion(), QRegion(), []
+                    for it in items:                       # (as MainWindow._tick builds a hover frame)
+                        r = grid.visualItemRect(it)
+                        iid = it.data(app.GAME_ID_ROLE)
+                        if iid == target:
+                            region += r.adjusted(-30, -30, 30, 36)
+                            live += r.adjusted(-30, -30, 30, 36)
+                        else:
+                            c = app.CardDelegate.light_center(app.CardDelegate.cover_rect(r, 0.0))
+                            rad = int(app.LIGHT_R * 2.9) + 2
+                            sq = QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
+                            region += sq
+                            lights.append((c, iid, sq))
+                    lights = [(c, iid) for c, iid, sq in lights if not live.intersects(sq)]
+                    grid._still_dirty = QRegion(live)
+                    self.assertTrue(grid.prepare_still(skip=live))
+                    grid.light_frame = {"region": region, "lights": lights, "live": live}
+                    mixed = QPixmap(vp.size())
+                    mixed.fill()
+                    vp.render(mixed, QPoint(0, 0), region)
+                    self.assertIsNone(grid.light_frame)     # (the hover frame was drawn)
+                    full = QPixmap(vp.size())
+                    full.fill()
+                    vp.render(full, QPoint(0, 0), region)
+                a, b = mixed.toImage(), full.toImage()
+                off = [max(abs(((pa >> k) & 255) - ((pb >> k) & 255)) for k in (0, 8, 16))
+                       for rr in region for y in range(rr.top(), rr.bottom() + 1) for x in range(rr.left(), rr.right() + 1)
+                       if (pa := a.pixel(x, y)) != (pb := b.pixel(x, y))]
+                self.assertLessEqual(len(off), 60)                 # (a few anti-aliased edge pixels at most)
+                self.assertLessEqual(max(off, default=0), 40)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)

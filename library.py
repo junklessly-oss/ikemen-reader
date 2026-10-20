@@ -356,6 +356,10 @@ class Game:
     # devices that removed the game ("Remove From This Device") -> its setup there, kept for when it comes back; it
     # stays in the shared library for the other device (which sees it as set up only there)
     removed_on: dict[str, dict] = field(default_factory=dict)
+    # device -> fingerprint of the saves the game made in the session that found its save folder ("Find It While
+    # Reading"; only when every file was new in that session). A side of a conflict still holding exactly those
+    # saves is named as such, not "(Newer)": the game wrote them by starting, they may hold no progress (owner)
+    setup_saves: dict[str, str] = field(default_factory=dict)
 
     def removed_here(self, machine: str) -> bool:
         return machine in self.removed_on
@@ -411,6 +415,8 @@ class Game:
                     rest["last_played_by"][m] = v
             except (TypeError, ValueError):
                 pass
+        setup = d.get("setup_saves") if isinstance(d.get("setup_saves"), dict) else {}
+        rest["setup_saves"] = {m: fp for m, fp in setup.items() if isinstance(m, str) and isinstance(fp, str) and fp}
         names = rest.get("names")
         rest["names"] = [n for n in names if isinstance(n, str) and n][:40] if isinstance(names, list) else []
         if rest.get("status") not in STATUSES:

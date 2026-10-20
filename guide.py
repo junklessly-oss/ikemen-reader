@@ -59,7 +59,8 @@ GUIDE = {
             "folder that already holds saves). Otherwise it stays a suggestion for you to check.",
             "- Browse opens where its box points. With the box empty, the save folder's Browse opens the game's folder; "
             "the others open This PC.",
-            "¤- This Device holds the game's .exe and, if you like, its save folder, so Open Save Folder can take you there.",
+            "¤- This Device holds the game's .exe and, if you like, its save folder. Open Game Folder at the bottom opens the "
+            "folder with the .exe; right-click a game for Open Save Folder.",
             "- Launch With Luna and Launch With Locale Emulator start the game through those programs (set their "
             "locations in Settings first).",
         ]),
@@ -82,7 +83,8 @@ GUIDE = {
             "other device's saves are downloaded if this one has none yet. If both have saves, you choose which "
             "to keep; the newer ones are marked, and the others are backed up first. (Some games create a save "
             "or settings file as soon as they're installed or first opened, so you may be asked even on a fresh "
-            "setup. Choose the device you actually played on.)",
+            "setup. Choose the device you actually played on. Saves a game made in the session that found its save "
+            "folder are labelled as such instead of being marked newer, as long as nothing has changed them since.)",
             "§- If the saves changed on both devices since they last synced (for example, you read on both without "
             "syncing in between), you'll be asked which ones to keep. Ikemen Reader asks as soon as it notices "
             "(choose now, or Later), and again when you press Read; the game starts once you've chosen. "
@@ -232,7 +234,8 @@ GUIDE = {
             "§- もう一方の端末でセーブフォルダーが設定され、この端末ではまだ空欄の場合、場所が確実なとき（ゲームフォルダーの中、"
             "またはユーザーフォルダー内の同じ場所にすでにセーブがあるとき）に限り、自動で入力されます。それ以外は提案として表示されるので、確認してください。",
             "- 「参照」は、入力欄に書かれた場所から開きます。空欄の場合、セーブフォルダーの「参照」はゲームのフォルダーを、それ以外は「PC」を開きます。",
-            "¤- 「この端末」には、ゲームの .exe と、必要ならセーブフォルダーを入力します。セーブフォルダーを入れておくと、「セーブフォルダーを開く」でそこを開けます。",
+            "¤- 「この端末」には、ゲームの .exe と、必要ならセーブフォルダーを入力します。下の「ゲームフォルダーを開く」で .exe のあるフォルダーを開けます。"
+            "セーブフォルダーは、ゲームを右クリックして「セーブフォルダーを開く」から開けます。",
             "- 「Lunaで起動」「Locale Emulatorで起動」を使うと、それぞれのプログラムを通してゲームを起動します（先に設定で場所を指定してください）。",
         ]),
         ("プレイ", [
@@ -247,7 +250,8 @@ GUIDE = {
             "イケメンリーダーを使わずにこの端末で作ったセーブはアップロードされます。イケメンリーダー以外から開いているゲームは、ダウンロードした内容を上書きされないよう、閉じるまでそのままにします。",
             "§- どちらの端末で先にゲームを追加したかは関係ありません。ある端末で初めて同期するとき、その端末にセーブがなければ、もう一方の端末のセーブがダウンロードされます。両方にセーブがある場合は、"
             "どちらを残すか選びます（新しい方に印が付き、もう片方は先にバックアップされます）。"
-            "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。）",
+            "（インストール直後や初回起動時にセーブや設定ファイルを作るゲームもあるため、新しく設定した場合でも尋ねられることがあります。実際に遊んだ端末を選んでください。"
+            "セーブフォルダーを見つけるために読んだときにゲームが作ったセーブは、その後変更されていなければ、新しい方の印の代わりにそのことが表示されます。）",
             "§- 前回の同期以降に両方の端末でセーブが変更されていた場合（例：同期しないまま両方で読んだとき）は、どちらを残すか尋ねます。気づいた時点で尋ね（今すぐ選ぶ／後で）、「読む」を押したときにも尋ねます。選ぶとゲームが起動します。セーブフォルダーをご自身で設定し、クラウドのセーブと違っていた場合は、その場ですぐに尋ねます。置き換えられる方は先にバックアップされます。",
             "§- 1台の端末でしか設定していないゲームでも起こることがあります（例：セーブファイルを手動で移動・復元したとき）。その場合は、この端末のセーブと、以前この端末からクラウドにアップロードしたコピーとの比較になり、メッセージにもそう表示されます。",
             "§- ゲームを右クリックして「今すぐ同期」を選ぶと、すぐに同期できます。",

@@ -91,7 +91,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -367,6 +367,64 @@ class LibraryGrid(QListWidget):
 
     bare = False              # True while taking a snapshot of the covers alone (folder animation)
 
+    # Mouse-wheel scrolling glides (owner, 2026-10-19: Steam's library and browsers do; a notch jumped 72 px). A
+    # notch moves a TARGET; the view follows it every screen refresh, closing WHEEL_GLIDE_TAU's share of the way
+    # (exponential: more notches just move the target - one continuous glide). Touchpads / free-spinning wheels
+    # send small steps, not whole notches: those scroll directly as before. Anything else moving the view (scroll
+    # bar, keyboard, a rebuild, dragging a game to the edge) ends the glide on the spot.
+    _glide_to: Optional[float] = None
+    _glide_at = 0.0
+    _glide_last = 0.0
+    _gliding = False          # (True while the glide itself moves the scroll bar)
+
+    def wheelEvent(self, ev) -> None:
+        d = ev.angleDelta().y()
+        if not d or ev.angleDelta().x() or ev.modifiers() or d % 120:
+            self._end_glide()
+            super().wheelEvent(ev)             # touchpad / fine wheel / sideways / with a key held: as before
+            return
+        sb = self.verticalScrollBar()
+        step = QApplication.wheelScrollLines() * sb.singleStep()      # (72 px: as far as a notch went before)
+        base = self._glide_to if self._glide_to is not None else float(sb.value())
+        target = min(float(sb.maximum()), max(float(sb.minimum()), base - d / 120 * step))
+        if self._glide_to is None:
+            self._glide_at = float(sb.value())
+            if not hasattr(self, "_glide_clock"):
+                self._glide_clock = VsyncClock(self)
+                self._glide_clock.timeout.connect(self._glide_step)
+                sb.valueChanged.connect(self._scrolled_elsewhere)
+            self._glide_last = time.perf_counter()
+            self._glide_clock.start()
+        self._glide_to = target
+        ev.accept()
+
+    def _glide_step(self) -> None:
+        if self._glide_to is None:
+            self._glide_clock.stop()
+            return
+        now = time.perf_counter()
+        dt, self._glide_last = min(0.1, now - self._glide_last), now
+        sb = self.verticalScrollBar()
+        target = min(float(sb.maximum()), max(float(sb.minimum()), self._glide_to))   # (the range may have changed)
+        self._glide_at += (target - self._glide_at) * (1 - math.exp(-dt / WHEEL_GLIDE_TAU))
+        done = abs(target - self._glide_at) < 0.5
+        self._gliding = True
+        try:
+            sb.setValue(round(target if done else self._glide_at))
+        finally:
+            self._gliding = False
+        if done:
+            self._end_glide()
+
+    def _scrolled_elsewhere(self, _value: int) -> None:
+        if not self._gliding:
+            self._end_glide()
+
+    def _end_glide(self) -> None:
+        if self._glide_to is not None:
+            self._glide_to = None
+            self._glide_clock.stop()
+
     def visible_range(self) -> range:
         """The items in view. They're laid out in reading order, so two binary searches find them: the
         animations ask every frame, and walking all of a big library each time cost ~4 ms at 600 games."""
@@ -385,7 +443,7 @@ class LibraryGrid(QListWidget):
     # Lights-only frames (the breathing sync lights, ~60 a second): the covers don't change, so they're copied
     # from a picture of the grid made without its lights, and only the lights are drawn on top. Redrawing the
     # covers every frame cost ~6-9 ms a frame on the owner's PC, which games starting / closing tipped into hitches.
-    light_frame: Optional[dict] = None   # set by MainWindow._tick: {"region": QRegion, "lights": [...]}
+    light_frame: Optional[dict] = None   # set by MainWindow._tick: {"region": QRegion, "lights": [...], "live": QRegion}
     painted_all = False                  # most of the grid was just drawn the usual way (lights included)
     _still: Optional[QPixmap] = None     # the grid without lights (made when first needed)
     _still_dirty = None                  # QRegion of it that's out of date (redrawn there, only there, when next used)
@@ -414,17 +472,20 @@ class LibraryGrid(QListWidget):
         # remade every frame)
         return QSize(max(1, math.floor(vp.width() * dpr + 0.5)), max(1, math.floor(vp.height() * dpr + 0.5)))
 
-    def prepare_still(self) -> bool:
+    def prepare_still(self, skip=None) -> bool:
         """Bring the still picture up to date. Called BEFORE a lights-only frame is asked for, never while
         painting: render() inside paintEvent loses that frame's drawing (the lights froze, and under the
-        easter egg's dark cover each lost frame darkened their squares again until they were black)."""
+        easter egg's dark cover each lost frame darkened their squares again until they were black).
+        skip: a part that frame draws live anyway (a hover moving): left out of date for now."""
         if self.bare or not self.isVisible():
             return False
         if self._still is None or self._still.size() != self._still_size():
             self._still, self._still_dirty = self._make_still(), None
         elif self._still_dirty is not None and not self._still_dirty.isEmpty():
-            self._patch_still(self._still_dirty)  # (only what changed since: a hover, a cover loading...)
-            self._still_dirty = None
+            todo = self._still_dirty.subtracted(skip) if skip is not None else self._still_dirty
+            if not todo.isEmpty():
+                self._patch_still(todo)          # (only what changed since: a hover, a cover loading...)
+            self._still_dirty = self._still_dirty.intersected(skip) if skip is not None else None
         return True
 
     def _make_still(self) -> Optional[QPixmap]:
@@ -445,14 +506,16 @@ class LibraryGrid(QListWidget):
 
     def paintEvent(self, ev) -> None:
         frame, self.light_frame = self.light_frame, None
+        live = frame.get("live") if frame is not None else None
         if frame is not None and not getattr(self, "_making_still", False) and not self.bare \
                 and self._still is not None and self._still.size() == self._still_size() \
-                and (self._still_dirty is None or self._still_dirty.isEmpty()) \
+                and (self._still_dirty is None or (self._still_dirty.subtracted(live) if live is not None
+                                                   else self._still_dirty).isEmpty()) \
                 and ev.region().subtracted(frame["region"]).isEmpty():
             p = QPainter(self.viewport())
             p.setRenderHint(QPainter.Antialiasing)
             k = self._still.devicePixelRatio()
-            for r in ev.region():
+            for r in (ev.region().subtracted(live) if live is not None else ev.region()):
                 p.drawPixmap(QRectF(r), self._still, QRectF(r.x() * k, r.y() * k, r.width() * k, r.height() * k))
             delegate = self.itemDelegate()
             for centre, iid in frame["lights"]:
@@ -461,6 +524,15 @@ class LibraryGrid(QListWidget):
                 else:
                     delegate._paint_light(p, centre, self.w.light_state(iid), iid)
             p.end()
+            if live is not None:
+                # A hover moving: just that part drawn the usual way (_paint_part, the very same drawing as a normal
+                # repaint - Qt picks which covers to draw there). Qt redraws every cover inside the box around
+                # everything that changed: with the lights spread over the grid that was all of them, ~4.5 ms a
+                # hover frame at 143 Hz (owner's PC, 2026-10-19). Its part of the still picture is out of date now.
+                part = ev.region().intersected(live)
+                if not part.isEmpty():
+                    self._paint_part(QPaintEvent(part))
+                    self._still_dirty = (self._still_dirty or QRegion()) | part
             return
         if not getattr(self, "_making_still", False):
             r = ev.region().boundingRect()
@@ -807,6 +879,8 @@ GRID_END_EXTRA = GRID_TOP_SHIFT + ROW_GAP - (CARD_PAD_BOTTOM + GRID_SPACING)
 GRID = {"cover_w": float(COVER_W), "cover_h": float(COVER_H)}
 HOVER_LIFT = 6                       # px the cover rises on hover
 HOVER_GROW = 0.03                    # 3% bigger on hover
+WHEEL_GLIDE_TAU = 0.05               # mouse-wheel glide: closes 1 - 1/e of the way each 0.05 s (~0.15 s to arrive)
+FLAT_TILES = 64                      # finished (rounded) covers kept ready for repaints (CardDelegate._flat; ~15 MB)
 HOVER_MS = 150                       # ease in/out time
 SLIDE_S = 0.22                       # covers sliding aside into their new places after a drop
 # search / filter: nothing slides. A cover whose place changes fades out where it was (with the ones taken away)
@@ -835,7 +909,7 @@ PULSE_BUSY_S = 1.0                   # quicker while checking/syncing
 # the texts' own shapes differ by language and by what's shown in each mode)
 SETTINGS_RULES = {
     "top":   {("en", False): (14, 7), ("ja", False): (14, 7), ("en", True): (14, 7), ("ja", True): (14, 8)},
-    "cloud": {("en", False): (14, 7), ("ja", False): (13, 8)},
+    "cloud": {("en", False): (25, 18), ("ja", False): (24, 19)},   # (+11 each side: room for the open This Is list)
     "anki":  {("en", False): (14, 7), ("ja", False): (12, 7), ("en", True): (14, 7), ("ja", True): (12, 7)},
 }
 MENU_TICK, MENU_TICK_GAP = 14, 12     # the tick after the reading status in use (right-click menu): size, room before it
@@ -1824,9 +1898,36 @@ def wrap_title(text: str, fm: QFontMetrics, width: float, max_lines: int) -> lis
     return lines
 
 
+_FITTED: dict = {}      # fit_title's answers: (title, font, width, lines) -> (font, lines)
+_ADVANCES: dict = {}    # text widths: (text, font) -> px
+
+
 def fit_title(text: str, font: QFont, width: float, max_lines: int) -> tuple[QFont, list[str]]:
-    """The title's font and lines. A Japanese title whose last line would hold only one or two characters
-    is set one size smaller when that saves the line (a big jump in size would look odd, so only one)."""
+    """The title's font and lines (remembered: a hovered cover asked every frame, measuring each word again -
+    most of a scroll frame's text work at 143 Hz, owner's PC, 2026-10-19)."""
+    key = (text, font.key(), width, max_lines)
+    hit = _FITTED.get(key)
+    if hit is None:
+        if len(_FITTED) > 2000:
+            _FITTED.clear()
+        hit = _FITTED[key] = _fit_title(text, font, width, max_lines)
+    return hit
+
+
+def advance(font: QFont, text: str) -> float:
+    """How wide this text is in this font (remembered, like fit_title)."""
+    key = (text, font.key())
+    w = _ADVANCES.get(key)
+    if w is None:
+        if len(_ADVANCES) > 4000:
+            _ADVANCES.clear()
+        w = _ADVANCES[key] = QFontMetricsF(font).horizontalAdvance(text)
+    return w
+
+
+def _fit_title(text: str, font: QFont, width: float, max_lines: int) -> tuple[QFont, list[str]]:
+    """A Japanese title whose last line would hold only one or two characters is set one size smaller when that
+    saves the line (a big jump in size would look odd, so only one)."""
     fm = QFontMetrics(font)
     lines = wrap_title(text, fm, width, max_lines)
     if has_japanese(text):
@@ -1895,7 +1996,7 @@ def runs_width(runs: list) -> float:
     w = 0.0
     for r in runs:
         if r[0] == "t":
-            w += QFontMetricsF(r[2]).horizontalAdvance(r[1])
+            w += advance(r[2], r[1])
         elif r[0] == "i":
             w += r[3]
         else:
@@ -1911,7 +2012,7 @@ def draw_runs(p: QPainter, x: float, baseline: float, runs: list, mid: float) ->
             p.setFont(r[2])
             p.setPen(QColor(r[3]))
             p.drawText(QPointF(x, baseline), r[1])
-            x += QFontMetricsF(r[2]).horizontalAdvance(r[1])
+            x += advance(r[2], r[1])
         elif r[0] == "i":
             size = r[3]
             p.drawPixmap(QRectF(x, mid - size / 2, size, size),
@@ -2417,10 +2518,26 @@ def paint_into_window(w: QWidget, img: Optional[QImage] = None) -> Optional[QIma
     gdi32.SetDIBitsToDevice.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD, wintypes.DWORD,
                                         ctypes.c_int, ctypes.c_int, wintypes.UINT, wintypes.UINT, ctypes.c_void_p,
                                         ctypes.c_void_p, wintypes.UINT]
+    hwnd = wintypes.HWND(int(w.winId()))
+    # Owner, 2026-10-19 (Windows 11 laptop at 125 %, only the first opening after a restart): the opening animation
+    # showed a much larger top bar for a moment. The picture must be exactly the window's size as Windows sees it right
+    # now; when it isn't (Windows still has the window at another size or zoom), it's left out - Qt's own first
+    # paint follows a moment later.
+    client = wintypes.RECT()
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetClientRect(hwnd, ctypes.byref(client))
+    try:
+        user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+        dpi = user32.GetDpiForWindow(hwnd)
+    except AttributeError:
+        dpi = 0
+    _open_log(f"window {client.right}x{client.bottom} at {dpi} dpi, picture {img.width()}x{img.height()}")
+    if (client.right, client.bottom) != (img.width(), img.height()):
+        _open_log("sizes differ: not drawn")
+        return img
     data = bytes(img.constBits())[: img.sizeInBytes()]
     buf = ctypes.create_string_buffer(data, len(data))
     head = BIH(ctypes.sizeof(BIH), img.width(), -img.height(), 1, 32, 0, 0, 0, 0, 0, 0)   # (top-down rows)
-    hwnd = wintypes.HWND(int(w.winId()))
     hdc = user32.GetDC(hwnd)
     if hdc:
         try:
@@ -2430,9 +2547,48 @@ def paint_into_window(w: QWidget, img: Optional[QImage] = None) -> Optional[QIma
             _open_log(f"drew {lines} of {img.height()} rows ({img.width()}x{img.height()} picture)")
         finally:
             user32.ReleaseDC(hwnd, hdc)
+        if os.environ.get("IKEMEN_DEBUG_OPEN") and not getattr(w, "_picture_saved", False):
+            # the picture itself, to see what the opening starts with - AFTER drawing it: saving takes ~0.1 s, and
+            # the second time round the window is already on screen (it sat white meanwhile)
+            w._picture_saved = True
+            try:
+                img.save(str(default_app_dir() / f"open_picture_{time.strftime('%H%M%S')}.png"))
+            except OSError:
+                pass
     else:
         _open_log("no window DC")
     return img
+
+
+def warm_title_bar() -> None:
+    """Owner, 2026-10-19 (Windows 11 laptop): on the first opening after a restart the opening animation showed a tall
+    EMPTY dark band at the top - most likely Windows' own title bar, its text / icon / buttons not loaded yet the first
+    time a window has one after logging in (Ikemen Reader's own picture was complete, its sizes right). So before the
+    real window: a small window with a normal title bar, cloaked (never on screen, nor on the taskbar), shown and its
+    frame drawn once, then closed - the real window's title bar is ready when it appears. ~0.1 s."""
+    if sys.platform != "win32":
+        return
+    t = time.perf_counter()
+    try:
+        from ctypes import wintypes
+        w = QWidget()
+        w.setWindowTitle("Ikemen Reader")
+        w.setAttribute(Qt.WA_ShowWithoutActivating)
+        w.resize(200, 100)
+        _dwm_flag(w, 13, True)                     # DWMWA_CLOAK: before it's shown - never on screen
+        _dwm_flag(w, 3, True)                      # DWMWA_TRANSITIONS_FORCEDISABLED
+        w.show()
+        user32 = ctypes.windll.user32
+        user32.RedrawWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT]
+        user32.RedrawWindow(wintypes.HWND(int(w.winId())), None, None, 0x0401 | 0x0100)  # INVALIDATE|FRAME, UPDATENOW
+        QApplication.processEvents()
+        ctypes.windll.dwmapi.DwmFlush()
+        w.hide()
+        w.deleteLater()
+    except (OSError, AttributeError, RuntimeError) as e:
+        _open_log(f"title bar warm-up failed: {e!r}")
+        return
+    _open_log(f"title bar warmed up in {(time.perf_counter() - t) * 1000:.0f} ms")
 
 
 def no_open_animation(w: QWidget) -> None:
@@ -3038,6 +3194,8 @@ class CardDelegate(QStyledItemDelegate):
         self.w = window
         self.shadow = make_shadow(COVER_W, COVER_H)
         self._tiles: dict = {}             # rumbling (easter egg): each tile drawn upright once, then only turned
+        from collections import OrderedDict
+        self._flat: "OrderedDict[tuple, QPixmap]" = OrderedDict()   # still covers, finished (see _clipped)
         self._skip_light = False           # (the lights stay live on top, so they keep breathing)
         self._light_fx: dict = {}          # game id -> (old look, new look, since): lights cross-fading
 
@@ -3165,11 +3323,40 @@ class CardDelegate(QStyledItemDelegate):
             self._placeholders[key] = pm
         return pm
 
-    def _clipped(self, p: QPainter, cover: QRectF, e: float, draw) -> None:
+    def _clipped(self, p: QPainter, cover: QRectF, e: float, draw, key: Optional[tuple] = None) -> None:
         """Draw a tile's contents (draw(painter, rect)) inside its rounded outline. While it's hovered,
         the contents (cover + dark fade + text) are first painted together on a separate layer and then
         cut out once: cutting out each piece separately leaves faint light pixels along the rounded
-        corners, where every piece is softened on its own."""
+        corners, where every piece is softened on its own.
+        key (a still tile: what its contents depend on): the finished, rounded tile is kept (_flat) and later
+        repaints only copy it into place. Laptop, 2026-10-19 (owner: "check scroll smoothness"): a scroll repaint of
+        the 240-game library took ~11 ms of the 16.7 ms frame - each cover resampled and cut to its rounded edge
+        again, every frame - and ~1 frame in 15 missed the screen's refresh."""
+        if key is not None and e <= 0.01:
+            dev = p.device()
+            dpr = dev.devicePixelRatioF() if dev is not None else 1.0
+            key = key + (int(cover.width()), int(cover.height()), dpr)
+            tile = self._flat.get(key)
+            if tile is None:
+                tile = QPixmap(max(1, math.ceil(cover.width() * dpr)), max(1, math.ceil(cover.height() * dpr)))
+                tile.setDevicePixelRatio(dpr)
+                tile.fill(Qt.transparent)
+                tp = QPainter(tile)
+                tp.setRenderHint(QPainter.Antialiasing)
+                tp.setRenderHint(QPainter.SmoothPixmapTransform)
+                own = QRectF(0, 0, cover.width(), cover.height())
+                outline = QPainterPath()
+                outline.addRoundedRect(own, 8, 8)
+                tp.setClipPath(outline)
+                draw(tp, own)
+                tp.end()
+                self._flat[key] = tile
+                while len(self._flat) > FLAT_TILES:
+                    self._flat.popitem(last=False)
+            else:
+                self._flat.move_to_end(key)
+            p.drawPixmap(cover.topLeft(), tile)        # (whole pixels: cover_rect) - a plain copy
+            return
         clip = QPainterPath()
         clip.addRoundedRect(cover, 8, 8)
         p.save()
@@ -3233,7 +3420,12 @@ class CardDelegate(QStyledItemDelegate):
                 line = cover_stat_groups(option.font, total, 0, count) if self.w.settings.show_stats else count
                 self._overlay(q, option, rect, e, self.w.folder_name(fid), line)
 
-        self._clipped(p, cover, e, draw)
+        ba = self.w.bookmark_alpha
+        key = None if 0 < ba < 1 else (                 # (not while the bookmarks fade in / out)
+            "f", ba > 0, COLORS["button"], COLORS["placeholder_top"], COLORS["placeholder_bottom"],
+            tuple((pm.cacheKey() if (pm := self.w.covers.get(self.w.art(g), (g.crop_zoom, g.crop_x, g.crop_y)))
+                   else 0, g.status) for g in games[:4]))
+        self._clipped(p, cover, e, draw, key)
         if option.state & QStyle.State_Selected:
             self._ring(p, cover)
         # one slice per colour inside, all breathing calmly together
@@ -3343,13 +3535,10 @@ class CardDelegate(QStyledItemDelegate):
         cover = self.cover_rect(option.rect, self.w.hover.get(gid, 0.0))
         self._shadow(p, cover, e)
         pm = self.w.covers.get(self.w.art(game), (game.crop_zoom, game.crop_x, game.crop_y))
+        src = pm if pm else self._placeholder(game.title, option.font)
 
         def draw(q: QPainter, rect: QRectF) -> None:
-            if pm:
-                q.drawPixmap(rect, pm, QRectF(pm.rect()))
-            else:
-                ph = self._placeholder(game.title, option.font)
-                q.drawPixmap(rect, ph, QRectF(ph.rect()))
+            q.drawPixmap(rect, src, QRectF(src.rect()))
             # hover overlay: title + playtime fade in at the bottom (Steam style)
             if e > 0.01:
                 if self.w.quiet(gid):
@@ -3361,7 +3550,7 @@ class CardDelegate(QStyledItemDelegate):
                 # placeholders already show the title in the middle
                 self._overlay(q, option, rect, e, game.title if pm else "", play_line)
 
-        self._clipped(p, cover, e, draw)
+        self._clipped(p, cover, e, draw, ("g", src.cacheKey()))
         if self.w.bookmark_alpha > 0:                    # (fades when the bookmark button is pressed)
             p.setOpacity(ease(self.w.bookmark_alpha))
             paint_bookmark(p, cover, game.status, width=GRID["cover_w"])
@@ -7328,11 +7517,14 @@ class NameDialog(QDialog):
 
 
 class ConflictDialog(QDialog):
-    def __init__(self, title: str, info: ConflictInfo, parent=None, other_set_up: bool = True, first_sync: bool = False):
+    def __init__(self, title: str, info: ConflictInfo, parent=None, other_set_up: bool = True, first_sync: bool = False,
+                 setup: Optional[dict] = None, machine: str = ""):
         """other_set_up: the game is set up on the other device. If it isn't, the cloud copy was uploaded from this
         device earlier (e.g. after this device's sync record was lost), and the window says so.
         first_sync: this device has never synced the game: it already had files of its own (the game may have made
-        them when installed or first opened); the cloud has the other device's saves."""
+        them when installed or first opened); the cloud has the other device's saves.
+        setup: Game.setup_saves - a side still holding exactly the saves the game made in the session that found its
+        save folder says so instead of "(Newer)" (the game wrote them by starting: newest, maybe no progress - owner)."""
         super().__init__(parent)
         self.setWindowTitle(tr("conflict.title"))
         self.setMinimumWidth(480)
@@ -7343,14 +7535,21 @@ class ConflictDialog(QDialog):
                          else "conflict.body", title=html.escape(title)))
         body.setWordWrap(True)
         lay.addWidget(body)
+        notes = {key: next((("conflict.setup_here" if m == machine else "conflict.setup_other")
+                            for m, s in (setup or {}).items() if fp and s == fp), None)
+                 for key, fp in (("local", info.local_fp), ("cloud", info.cloud_fp))}
         newer = "local" if (info.local_mtime or 0) >= (info.cloud_mtime or 0) else "cloud"
+        if notes[newer]:
+            newer = None                     # (its date is when the game was opened: not worth calling newer)
+        default = newer or next((k for k in ("local", "cloud") if not notes[k]), None)
         for key, label, t in (("local", tr("conflict.local"), info.local_mtime),
                               ("cloud", tr("conflict.cloud" if other_set_up else "conflict.cloud_solo"), info.cloud_mtime)):
             when = i18n.datetime_str(t) if t else tr("conflict.none")
             b = QPushButton(f"{label}\n{tr('conflict.last_saved', date=when)}" +
-                            (f"   {tr('conflict.newer')}" if key == newer else ""))
+                            (f"   {tr('conflict.newer')}" if key == newer else "") +
+                            (f"\n{tr(notes[key])}" if notes[key] else ""))
             b.setStyleSheet("text-align: left; padding: 10px 14px;")
-            if key == newer:
+            if key == default:
                 b.setDefault(True)
             b.clicked.connect(lambda _=False, k=key: self._pick(k))
             lay.addWidget(b)
@@ -7975,7 +8174,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.add_btn.setText(tr("top.add"))
         self.settings_btn.setText(tr("top.settings"))
         self.play_btn.setText(tr("bar.play"))
-        self.saves_btn.setText(tr("bar.open_saves"))
+        self.saves_btn.setText(tr(self._folder_key()))
         self.edit_btn.setText(tr("bar.edit"))
         self.back_btn.setText(tr("folder.back"))
         self.back_btn.setToolTip(tr("folder.back_tip"))
@@ -8896,7 +9095,14 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     _ahead_pending = False
 
     def scrolled(self) -> None:
-        """The grid scrolled: get the covers around the view ready (once per moment, not per scroll step)."""
+        """The grid scrolled: get the covers around the view ready (once per moment, not per scroll step), and the
+        cover now under the pointer is the hovered one (it only followed mouse moves: with the wheel's glide, the
+        lifted cover slid away under a still pointer - browsers and Steam follow the scroll too)."""
+        if self._ghost is None:                         # (a game being dragged sets its own target)
+            vp = self.grid.viewport()
+            pos = vp.mapFromGlobal(QCursor.pos())
+            it = self.grid.itemAt(pos) if vp.rect().contains(pos) and vp.underMouse() else None
+            self._set_hovered(it.data(GAME_ID_ROLE) if it else None)
         if not self._ahead_pending:
             self._ahead_pending = True
             QTimer.singleShot(30, self._prefetch_ahead)
@@ -9624,7 +9830,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         else:
             self.play_btn.setText(tr("bar.play"))
             self.play_btn.setEnabled(ready and not busy)
-        self.saves_btn.setEnabled(bool(mine.save_dir) and Path(mine.save_dir).is_dir())
+        self.saves_btn.setText(tr(self._folder_key()))
+        folder = self._bar_folder(g)
+        self.saves_btn.setEnabled(bool(folder) and Path(folder).is_dir())
         self.play_btn.setToolTip(tr("bar.tip_stop") if running else
                                  tr("bar.tip_busy") if busy else ("" if ready else tr("bar.tip_no_exe")))
 
@@ -10532,20 +10740,36 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         region = QRegion()
         view = self.grid.viewport().rect()
         lights = []                                       # (centre, id) of the lights redrawn on their own
+        live = QRegion()                                  # what moves (hovers): drawn the usual way (see LibraryGrid.paintEvent)
         breathing = self._lights_moving()                 # (pulsing, or settling after being switched off)
-        lights_only = not moving and self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0) \
-                and self._ghost is None and self._landing is None and not self.rumble
+        quiet = self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0) \
+            and self._ghost is None and self._landing is None and not self.rumble
+        lights_only = quiet and not moving
         for i in self.grid.visible_range():
             it = self.grid.item(i)
             r = self.grid.visualItemRect(it)
             iid = it.data(GAME_ID_ROLE)
             if iid in moving:
                 region += r.adjusted(-30, -30, 30, 36)
+                live += r.adjusted(-30, -30, 30, 36)
             elif breathing:
                 c = CardDelegate.light_center(CardDelegate.cover_rect(r, self.hover.get(iid, 0.0)))
                 rad = int(LIGHT_R * 2.9) + 2
-                region += QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
-                lights.append((c, iid))
+                square = QRect(int(c.x()) - rad, int(c.y()) - rad, 2 * rad + 1, 2 * rad + 1)
+                region += square
+                lights.append((c, iid, square))
+        if not live.isEmpty():
+            # a light whose square reaches into the moving part is drawn with it, the usual way - drawn on its own
+            # too, its glow went on twice along the edge (a few pixels a few shades off: measured)
+            joined = True
+            while joined:                                 # (a square joining can reach the next one)
+                joined = False
+                for c, iid, square in lights:
+                    if live.intersects(square) and not live.contains(square):
+                        live += square
+                        joined = True
+            lights = [(c, iid, square) for c, iid, square in lights if not live.intersects(square)]
+        lights = [(c, iid) for c, iid, _square in lights]
         if self.slides:                                   # covers sliding: the whole grid moves
             if now - self._slide_t0 >= SLIDE_S:
                 self.slides = {}
@@ -10581,6 +10805,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 if lights_only and not self.slides and not self._search_moving() and lights \
                         and self.grid.prepare_still():
                     self.grid.light_frame = {"region": region, "lights": lights}
+                elif quiet and moving and not self.slides and not self._search_moving() and lights \
+                        and self.grid.prepare_still(skip=live):
+                    # a hover moving while the lights breathe: the still picture + the lights, and only the
+                    # moving part drawn the usual way (see LibraryGrid.paintEvent)
+                    self.grid.light_frame = {"region": region, "lights": lights, "live": live}
                 self.grid.viewport().update(region)
         self.grid.painted_all = False
         if breathing:
@@ -10742,10 +10971,21 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.library.set_folder(gid, fid)
         self.refresh()
 
+    def _folder_key(self) -> str:
+        """The bar's folder button: on My Device nothing syncs, so the game's own folder is the useful one (owner,
+        2026-10-19); with two devices, the save folder. (The right-click menu always has both.)"""
+        return "bar.open_game" if self.settings.solo else "bar.open_saves"
+
+    def _bar_folder(self, g: Game) -> str:
+        mine = g.paths_for(self.settings.machine_name)
+        if self.settings.solo:
+            return str(Path(mine.exe).parent) if mine.exe else ""
+        return mine.save_dir
+
     def _open_saves(self) -> None:
         g = self.bar_game()
         if g:
-            open_folder(g.paths_for(self.settings.machine_name).save_dir)
+            open_folder(self._bar_folder(g))
 
     def open_settings(self) -> None:
         if self.worker:
@@ -10915,11 +11155,14 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return key + "_first"
         return key
 
-    def _conflict_choice(self, info: ConflictInfo) -> Optional[str]:
-        g = self.games.get(info.game_id)
+    def _conflict_choice(self, info: ConflictInfo, fresh: bool = False) -> Optional[str]:
+        """fresh: re-read the game first - right after a save folder was found, finish_first_play has just written
+        its setup_saves (only then: a cloud read on the window's thread can stall while Google Drive is busy)."""
+        g = (self.library.get(info.game_id) if fresh else None) or self.games.get(info.game_id)
         other = bool(g and g.paths_for(other_slot(self.settings.machine_name)).exe)
         d = ConflictDialog(g.title if g else info.game_id, info, self, other_set_up=other,
-                           first_sync=other and not self.engine.has_synced(info.game_id))
+                           first_sync=other and not self.engine.has_synced(info.game_id),
+                           setup=g.setup_saves if g else {}, machine=self.settings.machine_name)
         d.exec()
         return d.choice
 
@@ -11063,7 +11306,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                          game_dir=str(Path(exe).parent) if exe else "")
         if d.exec() and d.save_dir:
             res = finish_first_play(game, self.settings, self.library, self.engine, d.save_dir,
-                                    d.registry_key, self._conflict_choice)
+                                    d.registry_key, lambda info: self._conflict_choice(info, fresh=True),
+                                    started_at=r.started_at)
             self.statusBar().showMessage(i18n.line(res.message), 10000)
 
     def _auto_cover(self, gid: str, title: str) -> None:
@@ -11403,7 +11647,7 @@ _DIAG: dict = {}
 
 def _install_stall_log() -> None:
     """Diagnostics, only with IKEMEN_DEBUG_STALLS=1: whenever the window freezes for more than half a second,
-    what every thread was doing is written to %APPDATA%\\IkemenReader\\stalls.log (and sort picks are timed)."""
+    what every thread was doing is written to %APPDATA%\\IkemenReader\\stalls.log."""
     if os.environ.get("IKEMEN_DEBUG_STALLS") != "1":
         return
     import faulthandler
@@ -11488,12 +11732,6 @@ def _install_frame_log() -> None:
     for cls in (LibraryGrid, Backdrop, SyncStatus, StatsLine, PulseButton, ThemedCombo):
         timed(cls)
     _DIAG["frames"] = f
-
-
-def diag(text: str) -> None:
-    f = _DIAG.get("file")
-    if f is not None:
-        f.write(f"{time.strftime('%H:%M:%S')}.{int(time.time() * 1000) % 1000:03d} {text}\n")
 
 
 def user_fonts_dir() -> Path:
@@ -11686,6 +11924,7 @@ def main() -> None:
         if not d.exec():
             return
         settings = d.result_settings
+    warm_title_bar()                            # (Windows' title bar ready before the real window appears)
     w = MainWindow(settings)
     listen_for_second_copies(w)
     w.place_at_last_position()                  # (where it was when last closed)

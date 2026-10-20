@@ -68,6 +68,8 @@ class ConflictInfo:
     game_id: str
     local_mtime: Optional[float]
     cloud_mtime: Optional[float]
+    local_fp: Optional[str] = None     # the two sides' fingerprints (to tell a copy the game made on first opening)
+    cloud_fp: Optional[str] = None
 
 
 @dataclass
@@ -161,6 +163,17 @@ def _fingerprint_map(files: dict[str, Path]) -> Optional[str]:
 def fingerprint(folder: Path) -> Optional[str]:
     """Content hash of a save folder. None if the folder is missing or has no files."""
     return _fingerprint_map(_files(folder))
+
+
+def all_made_since(folder: str | Path, since: float) -> bool:
+    """Was every save file in this folder created at or after `since` (and is there at least one)? False when
+    anything can't be read."""
+    try:
+        files = _files(Path(folder))
+        return bool(files) and all(getattr(st := p.stat(), "st_birthtime", st.st_ctime) >= since
+                                   for p in files.values())
+    except OSError:
+        return False
 
 
 def _newest(files: dict[str, Path]) -> Optional[float]:
@@ -485,7 +498,8 @@ class SyncEngine:
             if not allow_pull:   # after playing: local didn't change, so there's nothing to upload
                 return SyncResult(Action.NOTHING, "sync.nothing_to_upload")
             return self._pull(game_id, local_dir, registry_key, local)
-        choice = on_conflict(ConflictInfo(game_id, _newest(local), _newest(cloud))) if on_conflict else None
+        choice = on_conflict(ConflictInfo(game_id, _newest(local), _newest(cloud), local_fp, cloud_fp)) \
+            if on_conflict else None
         if choice == "local":
             return self._push(game_id, local_dir, registry_key, local)
         if choice == "cloud":
@@ -493,6 +507,10 @@ class SyncEngine:
         return SyncResult(Action.CONFLICT, "sync.conflict_unresolved")
 
     # -- public API used by the launcher / UI
+    def fingerprint_now(self, game_id: str, local_dir: str | Path, registry_key: str = "") -> Optional[str]:
+        """This device's saves for the game as the sync compares them (None: no files)."""
+        return _fingerprint_map(self._local_files(game_id, _check_local_dir(local_dir, self.cloud_root), registry_key))
+
     def has_synced(self, game_id: str) -> bool:
         """Has this device synced this game before? (No: its saves and the cloud's can't have "both changed" -
         a mismatch on the first sync means this device already had files of its own.)"""

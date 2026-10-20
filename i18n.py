@@ -76,6 +76,7 @@ S: dict[str, tuple[str, str]] = {
     "stop.keep":                ("Keep Open", "開いたままにする"),
     "bar.edit":                 ("Edit", "編集"),
     "bar.open_saves":           ("Open Save Folder", "セーブフォルダーを開く"),
+    "bar.open_game":            ("Open Game Folder", "ゲームフォルダーを開く"),   # (My Device: the bar's folder button)
     "bar.tip_busy":             ("Another game is running.", "別のゲームが起動中です。"),
     "bar.tip_no_exe":           ("Set This Device's .exe in Edit first.",
                                  '先に「編集」で、この端末の .exe を設定してください。'),
@@ -419,6 +420,11 @@ S: dict[str, tuple[str, str]] = {
     "conflict.last_saved":      ('Last Saved: {date}',
                                  '最終セーブ：{date}'),
     "conflict.newer":           ("(Newer)", "（新しい方）"),
+    # (a side still holding exactly the saves the game made in the session that found its save folder: Game.setup_saves)
+    "conflict.setup_here":      ("Made When the Game Was First Opened on This Device",
+                                 "この端末でゲームを初めて開いたときに作られたセーブ"),
+    "conflict.setup_other":     ("Made When the Game Was First Opened on the Other Device",
+                                 "もう一方の端末でゲームを初めて開いたときに作られたセーブ"),
     "conflict.none":            ("No Saves", "セーブなし"),
     "conflict.backup_note":     ("Whichever saves you don't keep are backed up on This Device first, so nothing is lost.",
                                  '残さなかった方のセーブは、先にこの端末にバックアップされます。何も失われません。'),
