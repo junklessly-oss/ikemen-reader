@@ -5033,7 +5033,7 @@ class WheelGlide(unittest.TestCase):
                         QApplication.processEvents()
                         time.sleep(0.005)
 
-                step = QApplication.wheelScrollLines() * sb.singleStep()
+                step = round(w.grid.notch_px())
                 sb.setValue(0)
                 wheel(-120)
                 self.assertLess(sb.value(), step)                 # not there at once: it glides
@@ -5056,6 +5056,233 @@ class WheelGlide(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class GlideStrips(unittest.TestCase):
+    """2026-10-19 (owner: "smooth as butter like Steam"): while a wheel glide runs, the covers are drawn once into
+    strips that slide over the fixed background (LibraryGrid._layer). They must look exactly like normal drawing,
+    also after a cover's hover began / settled (only its spot is patched); a flick the other way heads straight back;
+    the cover under the pointer lifts only once scrolling has stopped."""
+
+    def _window(self, tmp):
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        cloud = Path(tmp) / "cloud"
+        cloud.mkdir()
+        lib = Library(cloud)
+        for i in range(40):
+            lib.add_game(f"Game {i}", "PC", exe=str(Path(tmp) / f"g{i}" / "g.exe"))
+        w = app.MainWindow(LocalSettings("PC", str(cloud)))
+        w.show()
+        w.refresh()
+        return app, w
+
+    @staticmethod
+    def _worst(a, b) -> int:
+        worst = 0
+        for y in range(0, a.height(), 3):
+            for x in range(0, a.width(), 3):
+                p, q = a.pixel(x, y), b.pixel(x, y)
+                if p != q:
+                    worst = max(worst, max(abs(((p >> k) & 255) - ((q >> k) & 255)) for k in (0, 8, 16)))
+        return worst
+
+    def test_strips_look_like_normal_drawing(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp)
+            try:
+                g, sb = w.grid, w.grid.verticalScrollBar()
+                w._set_hovered = lambda gid: None              # (the real pointer may be anywhere)
+                g.item(3).setSelected(True)
+                app.hold_pulse(True)                           # (both pictures at the same moment of the breath)
+                for v in (0, 137, sb.maximum()):
+                    sb.setValue(v)
+                    normal = g.viewport().grab().toImage()
+                    g._glide_to = float(v)                     # a glide running (without its clock)
+                    self.assertTrue(g.layer_active())
+                    self.assertLessEqual(self._worst(normal, g.viewport().grab().toImage()), 3)
+                    self.assertTrue(g._layer)
+                    gid = g.item(g.visible_range()[2]).data(app.GAME_ID_ROLE)
+                    w.hover[gid], w.hovered = 1.0, gid         # a cover lifts: its spot is patched out...
+                    g.viewport().grab()
+                    self.assertIn(gid, g._layer_skip)
+                    w.hover.clear(); w.hovered = None          # ...and back in once it has settled
+                    self.assertLessEqual(self._worst(normal, g.viewport().grab().toImage()), 3)
+                    g._glide_to = None
+                    g._drop_layer()
+            finally:
+                app.hold_pulse(False)
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_reversal_and_hover(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp)
+            try:
+                g, sb = w.grid, w.grid.verticalScrollBar()
+                sb.setValue(0)
+                g._aim(400.0, app.WHEEL_GLIDE_S)               # heading down...
+                g._glide_t0 -= 0.08                            # (part-way along)
+                _, vel, _ = g._glide_state(time.perf_counter())
+                self.assertGreater(vel, 0)
+                g._aim(0.0, app.WHEEL_GLIDE_S)                 # ...a flick up: straight back, not down first
+                self.assertEqual(g._glide_v0, 0.0)
+                w.hovered = "x"
+                w.scrolled()                                   # gliding: nothing lifts
+                self.assertIsNone(w.hovered)
+                g._end_glide()                                 # stopped: it lifts a moment later, not at once
+                self.assertTrue(g._rehover_timer().isActive())
+                self.assertTrue(g.scroll_settling())
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class WheelPressScroll(unittest.TestCase):
+    """2026-10-20 (owner: "make sure it works... as perfect as regular scroll"): wheel-press scrolling (_AutoScroll)
+    and what its stress test found: Esc never stopped it (the window's Esc shortcut took the key), steering lifted
+    covers, a press with nothing to scroll ate the next click, steps followed when they ran instead of the screen's
+    frames, upward runs built strips behind instead of ahead, each arriving cover repainted whole rows, and a cover
+    pushed out of memory mid-load counted as unreadable for good."""
+
+    _window = GlideStrips._window
+
+    def _run(self, body):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp)
+            try:
+                body(app, w, tmp)
+            finally:
+                if w.grid.auto_scrolling():
+                    w.grid._auto.stop()
+                w.close()
+                app.wait_for_tasks(5)
+
+    @staticmethod
+    def _press(app, w):
+        from PySide6.QtCore import QEvent, QPointF
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtWidgets import QApplication
+        vp = w.grid.viewport()
+        pt = QPointF(vp.width() / 2, vp.height() / 2)
+        QApplication.sendEvent(vp, QMouseEvent(QEvent.MouseButtonPress, pt, QPointF(vp.mapToGlobal(pt.toPoint())),
+                                               app.Qt.MiddleButton, app.Qt.MiddleButton, app.Qt.NoModifier))
+
+    def test_keys_stop_it_and_esc_does_nothing_else(self):
+        def body(app, w, tmp):
+            from PySide6.QtCore import QEvent
+            from PySide6.QtGui import QKeyEvent
+            from PySide6.QtWidgets import QApplication
+            for key in (app.Qt.Key_Escape, app.Qt.Key_Right):
+                self._press(app, w)
+                self.assertTrue(w.grid.auto_scrolling())
+                ev = QKeyEvent(QEvent.ShortcutOverride, key, app.Qt.NoModifier)
+                ev.ignore()
+                QApplication.sendEvent(w.grid, ev)             # (what a real key sends first)
+                self.assertFalse(w.grid.auto_scrolling())
+                self.assertEqual(ev.isAccepted(), key == app.Qt.Key_Escape)   # Esc: no folder closing / Back
+                self.assertIsNone(QApplication.overrideCursor())
+        self._run(body)
+
+    def test_nothing_to_scroll_nothing_starts(self):
+        def body(app, w, tmp):
+            from PySide6.QtWidgets import QApplication
+            w.search.setText("Game 7")
+            w._apply_filter()
+            self.assertEqual(w.grid.verticalScrollBar().maximum(), 0)
+            self._press(app, w)
+            self.assertFalse(w.grid.auto_scrolling())
+            self.assertIsNone(QApplication.overrideCursor())
+        self._run(body)
+
+    def test_no_cover_lifts_while_steering(self):
+        def body(app, w, tmp):
+            from PySide6.QtCore import QEvent, QPointF
+            from PySide6.QtGui import QMouseEvent
+            from PySide6.QtWidgets import QApplication
+            g = w.grid
+            w.hovered = g.item(0).data(app.GAME_ID_ROLE)
+            self._press(app, w)
+            self.assertIsNone(w.hovered)                       # (a lifted cover settles on the press)
+            pt = QPointF(g.visualRect(g.model().index(1, 0)).center())
+            QApplication.sendEvent(g.viewport(), QMouseEvent(QEvent.MouseMove, pt, QPointF(g.viewport().mapToGlobal(pt.toPoint())),
+                                                             app.Qt.NoButton, app.Qt.MiddleButton, app.Qt.NoModifier))
+            self.assertIsNone(w.hovered)
+        self._run(body)
+
+    def test_frame_time_follows_the_screen(self):
+        import app
+        t = time.perf_counter()
+        f = app.frame_time()
+        self.assertGreaterEqual(f, t - 0.001)
+        self.assertLess(f, t + 0.1)                            # (the next refresh, or now where Windows can't say)
+
+    def test_upward_run_builds_the_strip_above(self):
+        def body(app, w, tmp):
+            g, sb = w.grid, w.grid.verticalScrollBar()
+            self.assertGreater(sb.maximum(), 2 * app.LAYER_TILE)
+            sb.setValue(sb.maximum())
+            g._drop_layer()
+            v = sb.value()
+            g._glide_to, g._heading = v + 0.4, -1              # (going up, the exact spot just past the shown one)
+            g.viewport().grab()
+            self.assertIn(v // app.LAYER_TILE - 1, g._layer)
+            g._glide_to, g._heading = None, 0
+        self._run(body)
+
+    def test_patching_a_cover_paints_only_it(self):
+        def body(app, w, tmp):
+            g = w.grid
+            g._glide_to = 0.0
+            g.viewport().grab()                                # (strips made)
+            painted = []
+            real = app.CardDelegate.paint
+            app.CardDelegate.paint = lambda d, p, o, i: (painted.append(i.data(app.GAME_ID_ROLE)), real(d, p, o, i))
+            try:
+                gid = g.item(g.visible_range()[3]).data(app.GAME_ID_ROLE)
+                g._patch_layer({gid})
+            finally:
+                app.CardDelegate.paint = real
+            self.assertTrue(painted)
+            self.assertEqual(set(painted), {gid})
+            g._layer_arrived = {gid}
+            g._end_glide()                                     # (patches still queued are done on handing back)
+            self.assertFalse(g._layer_arrived)
+        self._run(body)
+
+    def test_pushed_out_cover_is_loaded_again(self):
+        def body(app, w, tmp):
+            from PySide6.QtGui import QImage
+            from PySide6.QtWidgets import QApplication
+            img = QImage(60, 90, QImage.Format_RGB32)
+            img.fill(0xFF336699)
+            art = Path(tmp) / "c.png"
+            img.save(str(art))
+            gid = w.grid.item(0).data(app.GAME_ID_ROLE)
+            w.library.set_artwork(gid, str(art))
+            w.refresh()
+            app.wait_for_tasks(5)
+            game = w.games[gid]
+            w.covers.get(w.art(game), (game.crop_zoom, game.crop_x, game.crop_y))
+            self.assertTrue(w.cover_ready(gid))
+            w._cover_wanted.add(gid)
+            w._load_wanted_covers()                            # asked for while in memory (so not decoded)...
+            w.covers._cache.clear()                            # ...and pushed out before the answer came
+            w.covers._ready.clear()
+            end = time.monotonic() + 5
+            while time.monotonic() < end and not (w.cover_ready(gid) and not w._cover_loading):
+                QApplication.processEvents()
+                time.sleep(0.01)
+            self.assertNotIn(gid, w._cover_given_up)
+            self.assertTrue(w.cover_ready(gid))
+        self._run(body)
 
 
 class HoverFrames(unittest.TestCase):

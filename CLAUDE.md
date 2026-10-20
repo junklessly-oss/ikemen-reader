@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 266 tests (2026-10-19, 1.1.5 + drag fixes), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 275 tests (2026-10-20, + wheel-press scrolling), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -152,7 +152,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.5" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.6" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -1239,6 +1239,48 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   of 120), sideways, with a key held: Qt's own scrolling as before. Measured on the laptop, 240 games, bursts of 3
   notches down and up (bigbench BIG_PROFILE=wheel): ~1,070 glide frames, 2 over 25 ms (worst 29), never backwards,
   ends exactly at top / bottom. Test: WheelGlide.
+  CURVE v2 (owner, 2026-10-19: "not as smooth as Steam's"): the exponential chase kicked hardest on the first frame,
+  shoved again on every notch and had a long whole-pixel stair-step tail. Now Chromium-like: each notch -> _aim()
+  starts a cubic Hermite curve from the CURRENT position and speed to the target at rest (WHEEL_GLIDE_S 0.2; shortened
+  to 3 x dist / speed when already heading there, so it never overshoots) - eases in, stacked notches build one push,
+  ends firmly. Notch = wheelScrollLines x WHEEL_LINE_PX (100/3: Chromium's 100 px at Windows' 3 lines; was 72).
+  glide_to_show uses the same curve (0.2-0.45 s by distance). A flick the OTHER way starts from zero speed (owner:
+  "rubbery" - it carried on the old way ~30 ms first).
+- WHEEL GLIDE = SLIDING STRIPS (owner, 2026-10-19: "smooth as butter like Steam"; "the stutter is horrific", worst
+  with the pointer over a cover). LibraryGrid._layer: the covers (no background, no lights) drawn into strips
+  LAYER_TILE 256 px tall in CONTENT coordinates; while layer_active() (a glide runs, or _layer_hold, and nothing else
+  moves the covers: no drag / slides / search fade / rumble / marker / bookmark fade / no-results / live background)
+  _paint_layer = background + strips at the scroll offset + covers settling from a hover (live) + every light (live).
+  Strips: kept between flicks (_keep_layer for the hand-back repaint); dropped by any normal paint that isn't a lights
+  / hover frame, model / selection changes, resize. Made in quiet moments (_prebuild: LAYER_AHEAD 2 screens each way,
+  one per LAYER_STEP_MS, LAYER_QUIET_MS after the last drop, only strips whose covers are in memory); one ahead per
+  frame while gliding. A hover beginning / settling patches only that cover's spot (_sync_skip / _patch_layer: a whole
+  rebuild in one frame was the pointer-over-a-cover hitch). Strips NEVER read covers (CoverCache.no_decode, art()
+  too): a cover still loading = plain placeholder (no title), loaded in the background (want_cover), patched in on
+  arrival (covers_arrived, a few per frame while gliding: LAYER_PATCH_BUDGET_S); a glide ending with covers still
+  loading on screen keeps the strips until they arrive (_layer_hold, max LAYER_HOLD_MAX_S) - normal drawing would
+  read them all at once. Hover: no cover lifts while wheel-scrolling; HOVER_AFTER_SCROLL_MS 250 after it stops (or
+  a mouse move). Lights: stamped per look per frame (_LIGHT_SPRITES; breathing value rounded to 1/256 so a frame's
+  lights share it; only at 100 % opacity / translation-only). _tick skips its per-cover loop while gliding.
+  Measured (claude-tools scrollstress.py, real window at 143 Hz, owner's look, 600 games with 600 separate cover files,
+  pointer over the covers; library / search / 162-game folder x down / up / mixed / slow / free-spin; Dual + My
+  Device): ~1 % of frames one refresh late (0 % on My Device: no lights), essentially none two late, worst 18 ms
+  (was 90-230 ms: covers decoded mid-frame), strip frame ~1.4 ms (My Device ~1.0); pixel checks mid-glide vs normal
+  drawing identical. Owner's 22-game library by real wheel: 1 of 1,098 frames late.
+  GOTCHA: filming the screen (recfull / wheelrec: a screen copy per refresh) knocks the app off its rhythm - 28.7 %
+  late frames with the recorder vs 0.1 % without, same input. Judge smoothness live or by the in-app log
+  (IKEMEN_DEBUG_WHEEL=1 -> %APPDATA%\IkemenReader\wheel.log: wheel events, glide steps, paints + why not strips).
+  Tests: GlideStrips.
+  Hardening after the stress tests (same day): a glide's end checks EVERY cover on screen (+ the row Qt draws above
+  it) - still loading or pushed out of the 120-cover memory since its strip was made -> asked for in the background,
+  strips stay until they're back (_missing_in_view; LAYER_HOLD_MAX_S 10 s safety net); the live-drawn hovered cover
+  never reads either. Cover loading tasks run at LOW thread priority (TaskOwner._run(low=True)): on 1 core, nonstop
+  flinging through 600 unseen covers went 15-17 % -> 2-3 % late. Checked: starting a flick with a cover fully lifted
+  (280 first frames, 1 late), flicks into / against / away from both ends (slows 7,6,4,4,2,1 px into the end, never
+  past it or back), stale-picture fuzz (fuzz110 FUZZ_STALE=1: 53 mid-glide frames after random changes, all identical),
+  fuzz 1,582 actions 0 errors. 2 cores: long nonstop runs 3-8 % one refresh late at 143 Hz (worst ~35 ms), all else
+  ~1 %. Known leftover: ~3 covers read on the window's thread just AFTER a long nonstop run on 2 cores (not while
+  scrolling). Not measured on the laptop (60 Hz, 4 cores) - expected fine (16.7 ms a frame; strips ~2-3 ms there).
 
 ## 1.1.5 pass on the PC (2026-10-19 night; owner: "all tests on the new build... hone performance... build, push,
 ## pack it up")
@@ -1286,7 +1328,63 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   DRAG_AIM_SPEED (8 px per 1/60 s) _drag_racing is set: no line, no target lift (_move_game_drag), and letting go
   then puts the game back (nothing was shown to aim at). Slow edge scrolling still shows them. 24 -> 0 changes.
 
+## Refocus hitch (2026-10-20, SOLVED)
+- Cause: pressing the TITLE BAR. Windows' own WM_NCLBUTTONDOWN(HTCAPTION) handling waits, without running the
+  program, until the button is released or the mouse moves (drag detection) - frozen exactly as long as the click is
+  held (held 30 ms -> 32 ms, 100 ms -> 102 ms; a click inside the window: 0). Every app has it; browsers / Steam draw
+  on another thread so it never shows. Fix: KeepsTitleBar.nativeEvent eats that press (_caption_pressed); a PreciseTimer
+  (_watch_press, 8 ms) watches the button: released = a click; moved past SM_CXDRAG / SM_CYDRAG while held -> window
+  moved by the offset (no lag) + windowHandle().startSystemMove() (snapping etc. as usual). Double-click maximise is
+  its own message (untouched). Measured with real Opera <-> app clicks (scratch refocus.py / dragcheck.py): 0 ms frozen,
+  drag follows the mouse exactly, double-click maximise + restore OK. 268 tests pass.
+- Earlier steps kept: LibraryGrid WA_InputMethodEnabled False (harmless; NOT the cause), sys.setswitchinterval(0.0005).
+  The IME / text-services experiment switches and the focus message log were removed once solved (1.1.6). Debug:
+  IKEMEN_DEBUG_FRAMES=always (frames.log outside sessions too).
+- DON'T: py-spy / in-process SuspendThread samplers on the owner's app (froze / crashed it).
+- Second, smaller one (owner: "minor stutter when tabbing in"): Qt's item view repainted the WHOLE grid (and the still
+  picture was remade) on every window switch - WindowActivate/Deactivate and focus in/out with ActiveWindowFocusReason.
+  LibraryGrid.event / focusInEvent / focusOutEvent skip QAbstractItemView's handler for those (QAbstractScrollArea's
+  runs); covers look the same focused or not. Alt+Tab test: a skipped refresh on most switches -> ~1 in 10 (a bare Qt
+  window's level). IKEMEN_DEBUG_LATE_MS (default 20) lowers the frames.log threshold for small hitches.
+- Wheel-press scrolling (owner, 2026-10-20): _AutoScroll (middle press in the grid; hold = until release, quick click =
+  until next click / wheel / Esc / switching away); counts as a glide (_glide_to) so the strips draw it.
+  AUTO_SCROLL_DEAD / _SPEED / _CLICK_S.
+
+## Wheel-press scrolling stress pass (2026-10-20, owner: "do em all... as perfect as regular scroll")
+- Bench: claude-tools autobench.py <appdata> [library search folder swap ends misc small] (real cursor via
+  QCursor.setPos, Qt events for buttons / wheel / keys; frame timing, evenness per frame vs speed x frame time, paints,
+  old-way frames, main-thread decodes, hover, stuck states, pixel checks with diagnostics) and autoreal.py (REAL
+  SendInput middle / wheel / Esc / left click: 14 checks). autoprof*.py = per-piece timing of fast runs. Copies:
+  %TEMP%\claude\C--Users-Jaden-Desktop-VN-Cloud-Test-vnlauncher\0051e5ba-009c-49f3-9334-137778801b2d\scratchpad\
+  adbig (600 games), adsmall (owner's look, 22), adsolo (My Device).
+- Fixed: (1) steps placed by WHEN THE FRAME SHOWS - frame_time() (DwmGetCompositionTimingInfo: last vblank + period;
+  _DwmTiming is pack 1, 292 bytes) - not when the step ran (0.5-4 ms late, unevenly): 5,000 px/s moved 22-55 px a
+  frame, now 34-35. The wheel glide's _glide_step uses it too. (2) Each cover arriving mid-scroll repainted whole ROWS
+  on every strip it touched (~4 ms): visible_range gives whole rows; a still cover draws only inside its own cell and
+  cells never overlap (checked 1000-1913 px wide), so _patch_layer paints just that cell + cover (_draw_strip only=),
+  found via _index_of (id -> row, checked on use, cleared by _drop_layer) instead of walking five screens. (3) Upward
+  runs built the strip BEHIND (direction came from _glide_to >= v, and _glide_to = the unrounded position): _heading.
+  No strip past the end; a frame building a strip ahead skips that frame's patches; _hand_back patches queued arrivals
+  (else the next flick showed placeholders for loaded covers). (4) Esc never stopped it: keys arrive as
+  ShortcutOverride and the window's Esc shortcut took them - now any key stops it, Esc accepted (does nothing else).
+  (5) Steering lifted covers (viewport MouseMove -> _set_hovered): none while auto_scrolling(); a press settles a
+  lifted one. (6) Nothing to scroll: a press does nothing (it showed the cursor and ate the next click).
+  (7) REAL BUG for any fast scroll: _load_wanted_covers skips covers in memory at request time; one pushed out of the
+  120-cover memory before the answer was marked GIVEN UP (placeholder in strips + decoded on the window's thread
+  whenever drawn, until the library reloaded) - _pushed_out asks again. MainWindow._tile_games shared helper.
+- Results (PC, 143 Hz, owner's look): slow / crawl / steering / search / folder / small library / My Device ~0 late;
+  600 games at 5,000-max px/s 2-4 % single late frames (was 7-20 %), steps even; swap wheel <-> press 51 rounds no
+  jumps, 0.1-0.2 % late; pixel checks 0 differences (were 3-5); wheel glide (scrollstress) unchanged ~1 %; autoreal
+  14/14. Tests: test_features.WheelPressScroll (7).
+- Bench gotchas: frame gaps only within one session; a press is delivered ~25 ms after SendInput (measure at start()).
+- Pointer (owner, 2026-10-20): scroll_cursor(way) = the drop-downs' chevron, up + down (centres 7 px from the hot spot,
+  text colour, band-coloured edge), replacing Windows' SizeVerCursor; the way it's scrolling bright, the other 0.35.
+  Both lit only at the press or after AUTO_SCROLL_REST_S 0.15 back in the middle (a quick reverse goes straight
+  across). AUTO_SCROLL_DEAD 12 -> 6 (owner: slow starts felt dead). Folder bar margins 14/10/16/12: the folder name
+  17 px from the top bar and 17 px from where the covers are cut off (was 10 bottom 0: covers cut right under it).
+
 ## Ideas for later (owner interested, not scheduled)
+- Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +
   Custom edits; restyle_all / MainWindow.restyle -> app_icon()), and an unpinned taskbar button shows it (owner
   confirmed). A PINNED button (owner's: `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\

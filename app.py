@@ -28,8 +28,8 @@ from PySide6.QtCore import (QAbstractNativeEventFilter, QSizeF, QEvent, QObject,
                             QTimer, QUrl, Signal)
 from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap, QRegion,
-                           QRadialGradient)
-from PySide6.QtWidgets import (QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QGraphicsOpacityEffect, QCheckBox, QComboBox,
+                           QRadialGradient, QTransform)
+from PySide6.QtWidgets import (QAbstractScrollArea, QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QGraphicsOpacityEffect, QCheckBox, QComboBox,
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                                QProgressBar, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
@@ -91,7 +91,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "1.1.5"
+APP_VERSION = "1.1.6"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -355,6 +355,131 @@ class Backdrop(QWidget):
         p.end()
 
 
+_SCROLL_CURSORS: dict = {}
+
+
+def scroll_cursor(way: int) -> QCursor:
+    """Wheel-press scrolling's pointer: the drop-downs' chevron, one up + one down, in the text colour with a thin
+    band-coloured edge (readable over any cover). way = -1 / 1: that one bright, the other dimmed; 0: both."""
+    key = (way, COLORS["text"], COLORS["band"])
+    if key not in _SCROLL_CURSORS:
+        size, s = 32, 1.75                         # (the 12-unit chevron drawn 1.75x: ~12 px wide)
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        c = size / 2
+        for d, lift in ((-1, -7.0), (1, 7.0)):     # chevron centres 7 px above / below the hot spot
+            y, h = c + lift, 1.75 * s * d          # (tip 1.75 units from the centre line, pointing the way)
+            path = QPainterPath(QPointF(c - 3.5 * s, y - h))
+            path.lineTo(c, y + h)
+            path.lineTo(c + 3.5 * s, y - h)
+            p.setOpacity(1.0 if way in (0, d) else 0.35)
+            for colour, width in ((COLORS["band"], 1.6 * s + 2.4), (COLORS["text"], 1.6 * s)):
+                p.setPen(QPen(QColor(colour), width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                p.drawPath(path)
+        p.end()
+        _SCROLL_CURSORS[key] = QCursor(pm, size // 2, size // 2)
+    return _SCROLL_CURSORS[key]
+
+
+class _AutoScroll(QObject):
+    """Pressing the mouse wheel scrolls like a browser (owner, 2026-10-20): move the pointer above / below where it was
+    pressed and the library keeps scrolling that way, faster the further away. Held and moved: letting go stops it;
+    a quick click: it runs until the next click, the wheel or Esc. Counts as a glide (the strips draw it, no hover)."""
+
+    def __init__(self, grid: "LibraryGrid"):
+        super().__init__(grid)
+        self.grid = grid
+        self.active = False
+        self.clock = VsyncClock(self)
+        self.clock.timeout.connect(self._step)
+
+    def start(self) -> None:
+        g, sb = self.grid, self.grid.verticalScrollBar()
+        g._end_glide()
+        self.active, self.moved = True, False
+        self.anchor = QCursor.pos().y()
+        self.pos = float(sb.value())
+        self.started = time.perf_counter()
+        self.last = frame_time()
+        g._glide_clock_ready()
+        g._glide_to = self.pos                     # (everything else treats it as a glide)
+        g._rehover_timer().stop()
+        g.w._set_hovered(None)                     # (a cover lifted under the pointer settles: no hover meanwhile)
+        self.way, self.rest_since = 0, None
+        QApplication.setOverrideCursor(scroll_cursor(0))
+        QApplication.instance().installEventFilter(self)
+        self.clock.start()
+
+    def stop(self) -> None:
+        if not self.active:
+            return
+        self.active = False
+        self.clock.stop()
+        QApplication.instance().removeEventFilter(self)
+        QApplication.restoreOverrideCursor()
+        self.grid._heading = 0
+        self.grid._end_glide()
+
+    def eventFilter(self, obj, ev) -> bool:
+        t = ev.type()
+        if t == QEvent.MouseButtonRelease and ev.button() == Qt.MiddleButton:
+            if self.moved or time.perf_counter() - self.started > AUTO_SCROLL_CLICK_S:
+                self.stop()                        # held and used: letting go ends it
+            return True
+        if t in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick, QEvent.Wheel):
+            self.stop()
+            return True
+        # a key comes as ShortcutOverride first (Esc never got here as a KeyPress: the window's Esc shortcut took it).
+        # Any key stops it; Esc does only that (accepted: no going back out of a folder), others then work as usual
+        # (an arrow key's selection and this both moved the view, back and forth)
+        if t in (QEvent.ShortcutOverride, QEvent.KeyPress):
+            self.stop()
+            if ev.key() == Qt.Key_Escape:
+                ev.accept()
+                return True
+        if t == QEvent.ApplicationDeactivate:
+            self.stop()
+        return False
+
+    def _step(self) -> None:
+        g, sb = self.grid, self.grid.verticalScrollBar()
+        if not self.active or not g.isVisible():
+            self.stop()
+            return
+        now = frame_time()                         # (the frame's own time: even steps - see frame_time)
+        dt, self.last = min(0.05, now - self.last), max(self.last, now)
+        if dt <= 0:
+            return                                 # (a second step for the same frame)
+        dy = QCursor.pos().y() - self.anchor
+        over = abs(dy) - AUTO_SCROLL_DEAD
+        way = 0 if over <= 0 else (1 if dy > 0 else -1)
+        # (the pointer brightens the way it's scrolling; passing through the middle on the way to the other side
+        # goes straight across - both lit again only after a real rest there)
+        if way:
+            self.rest_since = None
+        elif self.way:
+            self.rest_since = self.rest_since or now
+            if now - self.rest_since < AUTO_SCROLL_REST_S:
+                way = self.way
+        if way != self.way:
+            self.way = way
+            QApplication.changeOverrideCursor(scroll_cursor(way))
+        if over <= 0:
+            return
+        self.moved = True
+        self.pos += math.copysign(over ** 1.2 * AUTO_SCROLL_SPEED, dy) * dt
+        self.pos = min(float(sb.maximum()), max(float(sb.minimum()), self.pos))
+        g._heading = 1 if dy > 0 else -1           # (_glide_to is where it is: the strip ahead needs the way)
+        g._glide_to = self.pos
+        g._gliding = True
+        try:
+            sb.setValue(round(self.pos))
+        finally:
+            g._gliding = False
+
+
 class LibraryGrid(QListWidget):
     """The cover grid. It draws its own part of the backdrop (only where something changed), and
     redraws instead of sliding pixels when scrolling, so the background picture stays fixed."""
@@ -364,35 +489,135 @@ class LibraryGrid(QListWidget):
         self.w = window
         self.viewport().setAutoFillBackground(False)
         self.viewport().setAttribute(Qt.WA_OpaquePaintEvent, True)   # we paint every pixel ourselves
+        # No input method (IME) for the grid: nothing is typed into it (browsers / Steam only connect the IME to real
+        # text boxes). Tried first for the refocus freeze (2026-10-20) - not its cause (that was the title-bar press:
+        # KeepsTitleBar._caption_pressed), kept as harmless.
+        self.setAttribute(Qt.WA_InputMethodEnabled, False)
+        self._layer = {}
+        self._layer_missing = set()
+        self._layer_arrived = set()
 
     bare = False              # True while taking a snapshot of the covers alone (folder animation)
 
     # Mouse-wheel scrolling glides (owner, 2026-10-19: Steam's library and browsers do; a notch jumped 72 px). A
-    # notch moves a TARGET; the view follows it every screen refresh, closing WHEEL_GLIDE_TAU's share of the way
-    # (exponential: more notches just move the target - one continuous glide). Touchpads / free-spinning wheels
-    # send small steps, not whole notches: those scroll directly as before. Anything else moving the view (scroll
-    # bar, keyboard, a rebuild, dragging a game to the edge) ends the glide on the spot.
+    # notch moves a TARGET and the view follows a curve to it, like Chromium (Steam): eases in from rest, and a
+    # notch arriving mid-glide starts a new curve from where the view IS at the speed it HAS - so stacked notches
+    # build into one push instead of a shove each (the first version chased the target exponentially: fastest on
+    # the first frame, a kick per notch, a long sub-pixel tail). Curve = cubic Hermite (start position + speed ->
+    # target at rest). Touchpads / free-spinning wheels send small steps, not whole notches: those scroll directly
+    # as before. Anything else moving the view (scroll bar, keyboard, a rebuild, dragging a game to the edge) ends
+    # the glide on the spot.
     _glide_to: Optional[float] = None
-    _glide_at = 0.0
-    _glide_last = 0.0
+    _glide_from = 0.0         # the curve: from position, starting speed (px/s), start time, length (s)
+    _glide_v0 = 0.0
+    _glide_t0 = 0.0
+    _glide_len = 0.2
     _gliding = False          # (True while the glide itself moves the scroll bar)
+    _heading = 0              # wheel-press scrolling: +1 down / -1 up (a glide goes towards _glide_to)
+
+    def notch_px(self) -> float:
+        """How far one wheel notch goes: Chromium's 100 px for Windows' usual 3 lines (follows the Windows setting)."""
+        return QApplication.wheelScrollLines() * WHEEL_LINE_PX
+
+    def event(self, ev) -> bool:
+        # Qt's item views repaint their WHOLE viewport when the window gains / loses focus (selected items can look
+        # different in an inactive window) - here every cover plus the still picture remade: a skipped frame on every
+        # switch to / from the window (owner, 2026-10-20, "minor stutter when tabbing in"). Our covers look the same
+        # either way, so that step is skipped (the scroll area's own handling still runs).
+        if ev.type() in (QEvent.WindowActivate, QEvent.WindowDeactivate):
+            return QAbstractScrollArea.event(self, ev)
+        return super().event(ev)
+
+    # (the same whole-viewport repaint comes again with the grid's keyboard focus leaving / returning with the window)
+    def focusInEvent(self, ev) -> None:
+        if ev.reason() == Qt.ActiveWindowFocusReason:
+            QAbstractScrollArea.focusInEvent(self, ev)
+        else:
+            super().focusInEvent(ev)
+
+    def focusOutEvent(self, ev) -> None:
+        if ev.reason() == Qt.ActiveWindowFocusReason:
+            QAbstractScrollArea.focusOutEvent(self, ev)
+        else:
+            super().focusOutEvent(ev)
+
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.MiddleButton:
+            if not hasattr(self, "_auto"):
+                self._auto = _AutoScroll(self)
+            if not self._auto.active and self.verticalScrollBar().maximum() > 0:
+                self._auto.start()                 # (nothing to scroll: nothing happens, no cursor, no eaten click)
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def auto_scrolling(self) -> bool:
+        return hasattr(self, "_auto") and self._auto.active
 
     def wheelEvent(self, ev) -> None:
         d = ev.angleDelta().y()
+        if WHEEL_LOG:
+            WHEEL_LOG.append(f"{time.perf_counter():.4f} wheel {ev.angleDelta().y()} {ev.angleDelta().x()} "
+                             f"pixel {ev.pixelDelta().y()} mods {int(ev.modifiers().value)} phase {ev.phase()}")
         if not d or ev.angleDelta().x() or ev.modifiers() or d % 120:
             self._end_glide()
             super().wheelEvent(ev)             # touchpad / fine wheel / sideways / with a key held: as before
             return
         sb = self.verticalScrollBar()
-        step = QApplication.wheelScrollLines() * sb.singleStep()      # (72 px: as far as a notch went before)
         base = self._glide_to if self._glide_to is not None else float(sb.value())
-        target = min(float(sb.maximum()), max(float(sb.minimum()), base - d / 120 * step))
-        if self._glide_to is None:
-            self._glide_at = float(sb.value())
-            self._glide_last = time.perf_counter()
-            self._glide_clock_ready().start()
-        self._glide_to = target
+        self._aim(base - d / 120 * self.notch_px(), WHEEL_GLIDE_S)
         ev.accept()
+
+    def _glide_state(self, now: float) -> tuple[float, float, float]:
+        """(position, speed px/s, progress 0..1) on the current curve at `now`."""
+        L = self._glide_len
+        s = min(1.0, max(0.0, (now - self._glide_t0) / L))
+        p0, m, p1 = self._glide_from, self._glide_v0 * L, self._glide_to
+        s2, s3 = s * s, s * s * s
+        pos = (2 * s3 - 3 * s2 + 1) * p0 + (s3 - 2 * s2 + s) * m + (3 * s2 - 2 * s3) * p1
+        vel = ((6 * s2 - 6 * s) * p0 + (3 * s2 - 4 * s + 1) * m + (6 * s - 6 * s2) * p1) / L
+        return pos, vel, s
+
+    def _aim(self, target: float, length: float) -> None:
+        """Start a curve to `target` from where the view is now, keeping its current speed."""
+        sb = self.verticalScrollBar()
+        target = min(float(sb.maximum()), max(float(sb.minimum()), target))
+        now = time.perf_counter()
+        if self._glide_to is not None:
+            pos, vel, _ = self._glide_state(now)
+        else:
+            pos, vel = float(sb.value()), 0.0
+        dist = target - pos
+        if abs(dist) < 0.5:                   # (already there - at an end of the list: land exactly on it)
+            if self._glide_to is not None:
+                self._gliding = True
+                try:
+                    sb.setValue(round(target))
+                finally:
+                    self._gliding = False
+            self._end_glide()
+            return
+        if vel * dist > 0:                    # already heading there: shorten so the curve never overshoots
+            length = min(length, 3 * dist / vel)
+        elif vel * dist < 0:
+            vel = 0.0                         # turned round: straight back, not on the old way first (owner: rubbery)
+        self._glide_from, self._glide_v0, self._glide_t0 = pos, vel, now
+        self._glide_len = max(length, 0.05)
+        was_idle = self._glide_to is None
+        self._glide_to = target
+        if was_idle:
+            self._rehover_timer().stop()
+            self._glide_clock_ready().start()
+
+    def _rehover_timer(self) -> QTimer:
+        if not hasattr(self, "_rehover"):
+            self._rehover = QTimer(self, singleShot=True, interval=HOVER_AFTER_SCROLL_MS)
+            self._rehover.timeout.connect(self.w.scrolled)
+        return self._rehover
+
+    def scroll_settling(self) -> bool:
+        """A wheel glide runs, or ended moments ago (the hover waits: see _end_glide)."""
+        return self._glide_to is not None or (hasattr(self, "_rehover") and self._rehover.isActive())
 
     def _glide_clock_ready(self) -> "VsyncClock":
         if not hasattr(self, "_glide_clock"):
@@ -405,15 +630,19 @@ class LibraryGrid(QListWidget):
         if self._glide_to is None:
             self._glide_clock.stop()
             return
-        now = time.perf_counter()
-        dt, self._glide_last = min(0.1, now - self._glide_last), now
         sb = self.verticalScrollBar()
-        target = min(float(sb.maximum()), max(float(sb.minimum()), self._glide_to))   # (the range may have changed)
-        self._glide_at += (target - self._glide_at) * (1 - math.exp(-dt / WHEEL_GLIDE_TAU))
-        done = abs(target - self._glide_at) < 0.5
+        lo, hi = float(sb.minimum()), float(sb.maximum())
+        if not lo <= self._glide_to <= hi:                   # the range changed (a rebuild): aim at the new edge
+            self._aim(self._glide_to, self._glide_len)
+            if self._glide_to is None:
+                return
+        pos, _, s = self._glide_state(frame_time())           # (where it should be when this frame shows)
+        done = s >= 1.0
+        if WHEEL_LOG:
+            WHEEL_LOG.append(f"{time.perf_counter():.4f} step pos={pos:.1f} s={s:.2f}")
         self._gliding = True
         try:
-            sb.setValue(round(target if done else self._glide_at))
+            sb.setValue(round(self._glide_to if done else min(hi, max(lo, pos))))
         finally:
             self._gliding = False
         if done:
@@ -426,12 +655,316 @@ class LibraryGrid(QListWidget):
     def _end_glide(self) -> None:
         if self._glide_to is not None:
             self._glide_to = None
-            self._glide_clock.stop()
+            self._glide_clock_ready().stop()
+            if self._layer and self._missing_in_view():
+                # covers on screen still loading: the strips stay in charge until they've arrived (normal drawing
+                # would read them all at once right now - a stutter just as the glide settles)
+                self._layer_hold = time.perf_counter()
+            elif self._layer:
+                self._hand_back()
+            # the cover under the pointer lifts once scrolling has really stopped (or the mouse moves): lifting at
+            # every glide's end made covers pop up and drop between quick flicks - noisy, and each one had to be
+            # drawn live through the next flick (owner, 2026-10-19: the pointer over a cover added lots of stress)
+            self._rehover_timer().start()
+            if WHEEL_LOG:
+                WHEEL_LOG.f.flush()
 
-    def visible_range(self) -> range:
-        """The items in view. They're laid out in reading order, so two binary searches find them: the
-        animations ask every frame, and walking all of a big library each time cost ~4 ms at 600 games."""
-        n, view = self.count(), self.viewport().rect()
+    # While a wheel glide runs, the covers are drawn ONCE into strips of the whole grid's picture (LAYER_TILE px tall,
+    # covers only: no background, no lights) and each frame just slides them over the fixed background, then draws
+    # the lights and any cover still settling from a hover on top - like a browser (Steam) scrolls a finished page.
+    # Redrawing every cover each frame (and the lights' still picture on top of it, as the hovered cover changed)
+    # took longer than a 143 Hz refresh: frames went out unevenly (owner, 2026-10-19: "the stutter is horrific").
+    # Only while gliding and nothing else moves the covers; anything changing them drops the strips (redrawn when
+    # next needed), and the glide's end hands back to normal drawing. The hover doesn't follow the scroll meanwhile
+    # (browsers don't either): the cover under the pointer lifts when the glide ends.
+    _layer: dict = {}                    # strip number -> QPixmap (content y = number x LAYER_TILE)
+    _layer_skip: frozenset = frozenset()  # covers left out of the strips (drawn live: settling from a hover)
+    _keep_layer = False                   # the next normal repaint leaves the strips alone (the glide's last one)
+
+    def layer_active(self) -> bool:
+        w = self.w
+        return ((self._glide_to is not None or self._layer_hold) and not self.bare and self.marker is None
+                and self.isVisible()
+                and getattr(w, "_ghost", None) is None and w._landing is None and not w.slides
+                and not w._search_moving() and not w.rumble and w.no_results == 0 and w.drag_dim == 0
+                and w.bookmark_alpha in (0.0, 1.0) and not BACKGROUND["live"])
+
+    def _drop_layer(self, *_args) -> None:
+        self._layer = {}
+        self._rows = {}
+        self._layer_missing = set()
+        self._layer_arrived = set()
+        self._layer_hold = 0.0
+        if hasattr(self, "w"):
+            self._prebuild_timer().start(LAYER_QUIET_MS)  # (made again once things are quiet)
+
+    def _layer_tile(self, k: int) -> QPixmap:
+        """Strip k of the covers (made now if it isn't there yet)."""
+        tile = self._layer.get(k)
+        if tile is not None:
+            return tile
+        vp = self.viewport()
+        dpr = vp.devicePixelRatioF()
+        width, top = vp.width(), k * LAYER_TILE - self.verticalScrollBar().value()   # (its top, in viewport terms)
+        tile = QPixmap(math.ceil(width * dpr), math.ceil(LAYER_TILE * dpr))
+        tile.setDevicePixelRatio(dpr)
+        tile.fill(Qt.transparent)
+        self._draw_strip(tile, top, QRect(0, top, width, LAYER_TILE))
+        self._layer[k] = tile
+        return tile
+
+    def _sync_skip(self) -> frozenset:
+        """The covers left out of the strips = those lifted / settling now; a change patches just their spots."""
+        w = self.w
+        skip = frozenset(gid for gid, h in w.hover.items() if h > 0) | ({w.hovered} if w.hovered else frozenset())
+        if skip != self._layer_skip:
+            changed, self._layer_skip = skip ^ self._layer_skip, skip
+            self._patch_layer(changed)
+        return skip
+
+    def _layer_keep(self) -> tuple[int, int]:
+        """The strips worth having: LAYER_AHEAD screens above and below the view (in strip numbers)."""
+        v, h = self.verticalScrollBar().value(), self.viewport().height()
+        last = (self.verticalScrollBar().maximum() + h - 1) // LAYER_TILE
+        return (max(0, (v - LAYER_AHEAD * h) // LAYER_TILE),
+                min(last, (v + h + LAYER_AHEAD * h) // LAYER_TILE))
+
+    def _prebuild(self) -> None:
+        """While nothing happens: make the strips around the view, one per step, so a glide starts with them all
+        ready and never draws one mid-frame (that was most of the late frames while flicking quickly)."""
+        w = self.w
+        if (not self.isVisible() or w.isMinimized() or self._glide_to is not None or self.bare
+                or w.slides or w._search_moving() or w.rumble or getattr(w, "_ghost", None) is not None):
+            return
+        self._sync_skip()
+        lo, hi = self._layer_keep()
+        todo = [k for k in range(lo, hi + 1) if k not in self._layer]
+        v = self.verticalScrollBar().value() // LAYER_TILE
+        todo.sort(key=lambda k: abs(k - v))                # nearest first
+        vp_top = self.verticalScrollBar().value()
+        for k in todo:
+            # only strips whose covers are already in memory: decoding one here would freeze an idle frame. The
+            # others' covers load in the background; their arrival redraws the grid, which starts this again
+            missing = [iid for i in self.visible_range(QRect(0, k * LAYER_TILE - vp_top - 40, self.viewport().width(),
+                                                             LAYER_TILE + 80))
+                       if not w.cover_ready(iid := self.model().index(i, 0).data(GAME_ID_ROLE))]
+            if missing:
+                for iid in missing:
+                    w.want_cover(iid)
+                continue
+            self._layer_tile(k)
+            self._prebuild_timer().start(LAYER_STEP_MS)    # (the next one shortly)
+            return
+
+    def _prebuild_timer(self) -> QTimer:
+        if not hasattr(self, "_prebuilder"):
+            self._prebuilder = QTimer(self, singleShot=True)
+            self._prebuilder.timeout.connect(self._prebuild)
+        return self._prebuilder
+
+    def _draw_strip(self, tile: QPixmap, top: int, part: QRect, only=None) -> None:
+        """Draw the covers reaching into `part` (viewport terms) into a strip whose top is at `top`, lights left
+        out; the strip is cleared there first. (A whole strip, or just one cover's cell - `only`, its index: a hover
+        began / settled, or its picture arrived.)"""
+        q = QPainter(tile)
+        q.translate(0, -top)
+        q.setClipRect(part)
+        q.setCompositionMode(QPainter.CompositionMode_Clear)
+        q.fillRect(part, Qt.transparent)
+        q.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        delegate = self.itemDelegate()
+        delegate._skip_light = True
+        # a cover not loaded yet is NOT read here (reading + decoding it held a frame up to ~0.2 s when scrolling
+        # fast through a big library - faster than the background loading): its placeholder goes in for now, the
+        # cover loads in the background and is patched in when it arrives (covers_arrived), like Steam does
+        covers = self.w.covers
+        covers.no_decode = True
+        # a still cover draws inside its own cell (cover, ring, bookmark; the lights and a lifted cover's shadow
+        # aren't in the strips), and cells never overlap: one cover's cell needs just that cover (patching every
+        # cover of the rows around it made each one arriving mid-scroll cost ~4 ms)
+        if only is not None:
+            todo = [only]
+        else:
+            rows = (self.model().index(i, 0) for i in self.visible_range(part.adjusted(-40, -40, 40, 40)))
+            todo = [index for index in rows if self.visualRect(index).intersects(part)]
+        try:
+            for index in todo:
+                iid = index.data(GAME_ID_ROLE)
+                if iid in self._layer_skip:
+                    continue
+                if not self.w.cover_ready(iid):
+                    self._layer_missing.add(iid)
+                    self.w.want_cover(iid)
+                delegate.paint(q, self._item_option(index), index)
+        finally:
+            covers.no_decode = False
+            delegate._skip_light = False
+            q.end()
+
+    _layer_missing: set = set()           # covers drawn as placeholders in the strips, until they've loaded
+
+    def covers_arrived(self) -> None:
+        """Covers finished loading in the background: those drawn as placeholders in the strips are patched in."""
+        if self._glide_to is None and not self._prebuild_timer().isActive():
+            self._prebuild_timer().start(LAYER_STEP_MS)    # (strips skipped for covers still loading: now possible)
+        if not self._layer_missing:
+            return
+        ready = {iid for iid in self._layer_missing if self.w.cover_ready(iid)}
+        if ready:
+            self._layer_missing -= ready
+            if self._layer:
+                if self._glide_to is None:
+                    self._patch_layer(ready)
+                else:
+                    self._layer_arrived |= ready       # (gliding: a few a frame - _paint_layer)
+                self.viewport().update()
+            if self._layer_hold and self._glide_to is None and not self._missing_in_view():
+                self._hand_back()
+
+    _layer_hold = 0.0                     # a glide ended with covers still loading: the strips stay until then (its time)
+
+    def _missing_in_view(self) -> bool:
+        """Is any cover on screen not in memory (still loading, or pushed out of the cover memory since its strip
+        was made - a long fast run draws hundreds)? Those are asked for in the background."""
+        missing = False
+        # (a little above the view too: normal drawing asks Qt about GRID_TOP_SHIFT higher - see _paint_part)
+        for i in self.visible_range(self.viewport().rect().adjusted(0, -GRID_TOP_SHIFT - 40, 0, 40)):
+            iid = self.model().index(i, 0).data(GAME_ID_ROLE)
+            if iid in self._layer_missing or not self.w.cover_ready(iid):
+                self._layer_missing.add(iid)
+                self.w.want_cover(iid)
+                missing = True
+        return missing
+
+    def _hand_back(self) -> None:
+        """Gliding is over: normal drawing takes over (the strips are kept for the next flick)."""
+        self._layer_hold = 0.0
+        if self._layer_arrived:            # (covers that arrived in the last frames: patched now, or the next flick
+            arrived, self._layer_arrived = self._layer_arrived, set()      # would show their placeholders)
+            self._patch_layer(arrived)
+        self._still = None                 # (normal drawing takes over: everything drawn fresh)
+        self._keep_layer = True            # (that one repaint changes nothing: the strips stay for the next flick)
+        self.viewport().update()
+
+    def _patch_arrived(self) -> None:
+        """Gliding: covers that arrived are patched in a few at a time (a batch of ten at once held one frame up)."""
+        t0 = time.perf_counter()
+        while self._layer_arrived and time.perf_counter() - t0 < LAYER_PATCH_BUDGET_S:
+            self._patch_layer({self._layer_arrived.pop()})
+
+    def _patch_layer(self, ids) -> None:
+        """Covers whose hover began / settled: only their spots in the strips are drawn again (a whole new set of
+        strips in one frame was the hitch the owner saw with the pointer over a cover)."""
+        vp, v = self.viewport(), self.verticalScrollBar().value()
+        for gid in ids:
+            index = self._index_of(gid)
+            if index is None:
+                continue
+            spot = self.visualRect(index)                  # (all a still cover draws: see _draw_strip)
+            for k in range((spot.top() + v) // LAYER_TILE, (spot.bottom() + v) // LAYER_TILE + 1):
+                tile = self._layer.get(k)
+                if tile is not None:
+                    top = k * LAYER_TILE - v
+                    self._draw_strip(tile, top, spot.intersected(QRect(0, top, vp.width(), LAYER_TILE)), index)
+
+    _rows: dict = {}                      # game / folder id -> its row (checked on use, made again when out of date)
+
+    def _index_of(self, gid: str):
+        """The model index showing `gid` (None if it isn't shown). Patching looked for it among five screens of
+        covers each time - ~1 ms per cover arriving while scrolling fast through a big library."""
+        model = self.model()
+        row = self._rows.get(gid)
+        if row is not None and row < model.rowCount() and model.index(row, 0).data(GAME_ID_ROLE) == gid:
+            return model.index(row, 0)
+        if row is None and self._rows:
+            return None                    # (made since the last change - _drop_layer - and it isn't shown)
+        self._rows = {model.index(i, 0).data(GAME_ID_ROLE): i for i in range(model.rowCount())}
+        row = self._rows.get(gid)
+        return model.index(row, 0) if row is not None else None
+
+    def _item_option(self, index) -> QStyleOptionViewItem:
+        opt = QStyleOptionViewItem()
+        opt.rect = self.visualRect(index)
+        opt.font = self.font()
+        opt.state = QStyle.State_Enabled | (QStyle.State_Selected if self.selectionModel()
+                                            and self.selectionModel().isSelected(index) else QStyle.State_None)
+        return opt
+
+    def _paint_layer(self) -> None:
+        w, vp, v = self.w, self.viewport(), self.verticalScrollBar().value()
+        skip = self._sync_skip()
+        first, last = v // LAYER_TILE, (v + vp.height() - 1) // LAYER_TILE
+        ahead = None                                       # one strip ahead each frame, the way it's going
+        if self._glide_to is not None:
+            k = last + 1 if (self._heading > 0 if self._heading else self._glide_to >= v) else first - 1
+            if 0 <= k <= self._layer_keep()[1] and k not in self._layer:
+                ahead = k                                  # (none past the end: it was made and dropped every frame)
+        if self._layer_arrived and ahead is None:
+            self._patch_arrived()                          # (not in the same frame as a new strip: one or the other)
+        p = QPainter(vp)
+        backdrop = getattr(w, "backdrop", None)
+        if backdrop is not None:
+            backdrop.paint_into(p, vp.rect(), vp.mapTo(backdrop, QPoint(0, 0)) - backdrop.library_area().topLeft())
+        else:
+            p.fillRect(vp.rect(), QColor(COLORS["bg"]))
+        for k in range(first, last + 1):
+            p.drawPixmap(0, k * LAYER_TILE - v, self._layer_tile(k))
+        # the strip ahead (spreads the drawing out), and none kept far away
+        if ahead is not None:
+            self._layer_tile(ahead)
+        elif self._glide_to is None and self._layer_hold and time.perf_counter() - self._layer_hold > LAYER_HOLD_MAX_S:
+            self._hand_back()                              # (covers that never arrive don't keep it forever)
+        lo, hi = self._layer_keep()
+        for k in [k for k in self._layer if k < lo or k > hi]:
+            del self._layer[k]
+        delegate = self.itemDelegate()
+        p.setRenderHint(QPainter.Antialiasing)
+        vis = self.visible_range()
+        delegate._skip_light = True
+        w.covers.no_decode = True                          # (one still loading: its placeholder, like the strips)
+        try:
+            for i in vis:                                  # covers settling from a hover: drawn as usual, live
+                index = self.model().index(i, 0)
+                if index.data(GAME_ID_ROLE) in skip:
+                    delegate.paint(p, self._item_option(index), index)
+        finally:
+            w.covers.no_decode = False
+            delegate._skip_light = False
+        for i in vis:                                      # the lights, live (they breathe)
+            index = self.model().index(i, 0)
+            iid = index.data(GAME_ID_ROLE)
+            centre = CardDelegate.light_center(CardDelegate.cover_rect(self.visualRect(index), w.hover.get(iid, 0.0)))
+            if is_folder(iid):
+                paint_light(p, centre, w.folder_colours(iid[len(FOLDER_PREFIX):]), "calm", w.settings.pulse)
+            elif iid in w.games:
+                delegate._paint_light(p, centre, w.light_state(iid), iid)
+        p.end()
+
+    def dataChanged(self, *args) -> None:
+        self._drop_layer()
+        super().dataChanged(*args)
+
+    def selectionChanged(self, *args) -> None:
+        self._drop_layer()
+        super().selectionChanged(*args)
+
+    def rowsInserted(self, *args) -> None:
+        self._drop_layer()
+        super().rowsInserted(*args)
+
+    def rowsAboutToBeRemoved(self, *args) -> None:
+        self._drop_layer()
+        super().rowsAboutToBeRemoved(*args)
+
+    def reset(self) -> None:
+        self._drop_layer()
+        super().reset()
+
+    def visible_range(self, view: Optional[QRect] = None) -> range:
+        """The items in view (or in `view`, viewport coordinates). They're laid out in reading order, so two binary
+        searches find them: the animations ask every frame, and walking all of a big library each time cost ~4 ms
+        at 600 games."""
+        n, view = self.count(), view if view is not None else self.viewport().rect()
         rect = lambda i: self.visualRect(self.model().index(i, 0))
         lo, hi = 0, n
         while lo < hi:                                  # the first item reaching into view
@@ -509,6 +1042,32 @@ class LibraryGrid(QListWidget):
 
     def paintEvent(self, ev) -> None:
         frame, self.light_frame = self.light_frame, None
+        t = time.perf_counter()
+        layer = not getattr(self, "_making_still", False) and self.layer_active()
+        if layer:
+            self._paint_layer()                            # gliding: the covers' strips slide (see layer_active)
+        else:
+            self._paint_normal(ev, frame)
+        if WHEEL_LOG:
+            WHEEL_LOG.append(f"{t:.4f} paint {'layer' if layer else 'normal'} {(time.perf_counter() - t) * 1000:.2f} ms "
+                             f"v={self.verticalScrollBar().value()} glide={self._glide_to is not None} "
+                             f"why={self._layer_blocker() if self._glide_to is not None and not layer else ''}")
+
+    def _layer_blocker(self) -> str:
+        w = self.w
+        checks = {"bare": self.bare, "marker": self.marker is not None, "hidden": not self.isVisible(),
+                  "ghost": getattr(w, "_ghost", None) is not None, "landing": w._landing is not None,
+                  "slides": bool(w.slides), "search": w._search_moving(), "rumble": bool(w.rumble),
+                  "no_results": w.no_results != 0, "drag_dim": w.drag_dim != 0,
+                  "bookmark": w.bookmark_alpha not in (0.0, 1.0), "bg_live": bool(BACKGROUND["live"])}
+        return ",".join(k for k, v in checks.items() if v)
+
+    def _paint_normal(self, ev, frame) -> None:
+        # the wheel's strips stay for the next flick only while nothing but the lights / a hover is drawn (a hover's
+        # cover is patched in when the next glide starts); anything else drawn may have changed a cover
+        if not self._keep_layer and not (frame is not None and ev.region().subtracted(frame["region"]).isEmpty()):
+            self._drop_layer()
+        self._keep_layer = False
         live = frame.get("live") if frame is not None else None
         if frame is not None and not getattr(self, "_making_still", False) and not self.bare \
                 and self._still is not None and self._still.size() == self._still_size() \
@@ -624,6 +1183,7 @@ class LibraryGrid(QListWidget):
         super().paintEvent(QPaintEvent(region.united(region.translated(0, -GRID_TOP_SHIFT))))
 
     def resizeEvent(self, ev) -> None:
+        self._drop_layer()
         super().resizeEvent(ev)
         if hasattr(self.w, "grid"):
             self.w._fit_grid()
@@ -639,7 +1199,9 @@ class LibraryGrid(QListWidget):
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
-        if self._still is not None and (dx or dy):
+        if self.layer_active():
+            self._still = None                 # (gliding: remade when the glide ends - moving it is wasted work)
+        elif self._still is not None and (dx or dy):
             # Qt moved the covers on screen and draws only the strip it uncovered: the lights-only frames' picture
             # moves the same way (the strip is patched in when next used). It used to stay put: small squares of
             # what was there before the scroll showed around the lights (without a background picture)
@@ -648,7 +1210,7 @@ class LibraryGrid(QListWidget):
             if self._still_dirty is not None:
                 self._still_dirty.translate(dx, dy)
         self.w.scrolled()
-        if BACKGROUND["path"]:
+        if BACKGROUND["path"] or self.layer_active():
             self.viewport().update()          # keep the picture still while the covers scroll
 
     # every cell GRID_TOP_SHIFT lower than Qt places it: drawing, clicks and our own code all go through these
@@ -700,11 +1262,8 @@ class LibraryGrid(QListWidget):
         to = self._showing(index)
         if to is None:
             return
-        sb = self.verticalScrollBar()
-        self._glide_at = float(sb.value())
-        self._glide_to = float(min(sb.maximum(), max(sb.minimum(), to)))
-        self._glide_last = time.perf_counter()
-        self._glide_clock_ready().start()
+        dist = abs(to - self.verticalScrollBar().value())     # longer trips take a little longer, like a browser's
+        self._aim(float(to), min(0.45, WHEEL_GLIDE_S + dist / 4000))
 
     def scrollToItem(self, item, hint=QAbstractItemView.EnsureVisible) -> None:
         self.scrollTo(self.indexFromItem(item), hint)    # (Qt's own skips the shift above)
@@ -901,7 +1460,20 @@ GRID_END_EXTRA = GRID_TOP_SHIFT + ROW_GAP - (CARD_PAD_BOTTOM + GRID_SPACING)
 GRID = {"cover_w": float(COVER_W), "cover_h": float(COVER_H)}
 HOVER_LIFT = 6                       # px the cover rises on hover
 HOVER_GROW = 0.03                    # 3% bigger on hover
-WHEEL_GLIDE_TAU = 0.05               # mouse-wheel glide: closes 1 - 1/e of the way each 0.05 s (~0.15 s to arrive)
+WHEEL_GLIDE_S = 0.2                  # mouse-wheel glide: one notch's curve from rest (shorter when already moving)
+WHEEL_LINE_PX = 100 / 3              # per wheel "line" (Chromium: 100 px a notch at Windows' default 3 lines)
+HOVER_AFTER_SCROLL_MS = 250          # wheel scrolling: the cover under a still pointer lifts this long after it stops
+AUTO_SCROLL_DEAD = 6                 # wheel-press scrolling: px from the press point before it moves
+AUTO_SCROLL_SPEED = 6.0              # ... speed = (px past that) ^ 1.2 x this, px/s (100 px away ~1,200 px/s)
+AUTO_SCROLL_CLICK_S = 0.35           # ... let go sooner without moving = a click: keeps running until the next click
+AUTO_SCROLL_REST_S = 0.15            # ... back in the middle this long before both chevrons light (a quick reverse skips it)
+LAYER_TILE = 256                     # wheel glides: the covers' picture is made in strips this tall (LibraryGrid._layer)
+LAYER_AHEAD = 2                      # ... kept ready this many screens above and below the view
+LAYER_QUIET_MS = 400                 # ... made this long after the last change ...
+LAYER_STEP_MS = 12                   # ... one at a time, this far apart (never a long freeze)
+LAYER_HOLD_MAX_S = 10.0              # ... a glide's end waits at most this long for covers still loading on screen (a
+#                                      safety net: the strips show the right picture meanwhile; a weak PC can take > 2 s)
+LAYER_PATCH_BUDGET_S = 0.0015        # ... gliding: at most this long a frame patching in covers that have just loaded
 FLAT_TILES = 64                      # finished (rounded) covers kept ready for repaints (CardDelegate._flat; ~15 MB)
 HOVER_MS = 150                       # ease in/out time
 SLIDE_S = 0.22                       # covers sliding aside into their new places after a drop
@@ -920,7 +1492,7 @@ APPEAR_STAGGER = 0.025               # ... each one a little after the one befor
 APPEAR_STAGGER_MAX = 0.15            # ... the last at most this much later
 ARRIVE_CLEAR = 0.12                  # (a place is clear once whatever was leaving it is fainter than this)
 MAX_LEAVING_GROUPS = 4               # leaving pictures from earlier changes still finishing
-NO_RESULTS_OUT_S = 0.12             # "No Results Found" fades out quickly when covers come back (they wait) ...
+NO_RESULTS_OUT_S = 0.12              # "No Results Found" fades out quickly when covers come back (they wait) ...
 NO_RESULTS_S = 0.3                   # ... and fades in (once the last cover has gone) ...
 NO_RESULTS_RISE = 8                  # ... rising this many px into place ...
 NO_RESULTS_Y = 0.44                  # ... at this height of the library (the optical centre); it goes at once
@@ -962,6 +1534,23 @@ DRAG_SCROLL_MIN, DRAG_SCROLL_MAX = 2, 60   # ...this many px per frame, faster t
 DRAG_AIM_SPEED = 8                   # faster than this, no drop line / target lift while it scrolls (rows race past)
 LIGHT_R = 5.5
 LOGO_H = 30
+
+
+class _WheelLog:
+    """IKEMEN_DEBUG_WHEEL=1: every wheel event, glide step and grid paint -> %APPDATA%\\IkemenReader\\wheel.log."""
+
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.f = open(path, "w", encoding="utf-8", buffering=1 << 16)
+        import atexit
+        atexit.register(self.f.flush)
+
+    def append(self, line: str) -> None:
+        self.f.write(line + "\n")
+
+
+WHEEL_LOG = _WheelLog(Path(os.environ.get("APPDATA", ".")) / "IkemenReader" / "wheel.log") \
+    if os.environ.get("IKEMEN_DEBUG_WHEEL") else None
 
 GAME_ID_ROLE = Qt.UserRole + 1          # item id: a game id, or FOLDER_PREFIX + folder id
 FOLDER_PREFIX = "folder:"
@@ -1664,6 +2253,7 @@ class CoverCache:
     MAX_COVERS = 120          # ~120 x 0.85 MB at most
     KEEP_DRAWN = 48           # the covers drawn last are never dropped for ones prepared ahead (> a screenful)
     MAX_ORIGINALS = 4         # full-size images kept while cropping/zooming the same cover
+    no_decode = False         # True: a cover not yet in memory isn't read now (get returns None)
 
     def __init__(self):
         from collections import OrderedDict
@@ -1683,6 +2273,8 @@ class CoverCache:
             return None
         sp = str(path)
         if sp not in self._mtimes:
+            if self.no_decode:
+                return None                            # (not even a look at the file: it may be on the cloud drive)
             try:
                 self._mtimes[sp] = path.stat().st_mtime
             except OSError:
@@ -1695,6 +2287,8 @@ class CoverCache:
             self._cache.move_to_end(key)
         else:
             part = self._ready.pop(key, None)          # prepared in the background (see prepare)
+            if part is None and self.no_decode:
+                return None                            # (a wheel glide: the placeholder for now - LibraryGrid)
             if part is None:
                 img = self._load(path, crop[0])
                 if img is None:
@@ -2222,6 +2816,56 @@ class TipTiming(QProxyStyle):
         return super().styleHint(hint, option, widget, returnData)
 
 
+class _DwmTiming(ctypes.Structure):
+    _pack_ = 1                                       # (dwmapi.h packs it to 1 byte)
+    _fields_ = [("cbSize", ctypes.c_uint32), ("rateRefresh", ctypes.c_uint32 * 2), ("qpcRefreshPeriod", ctypes.c_uint64),
+                ("rateCompose", ctypes.c_uint32 * 2), ("qpcVBlank", ctypes.c_uint64), ("cRefresh", ctypes.c_uint64),
+                ("cDXRefresh", ctypes.c_uint32), ("qpcCompose", ctypes.c_uint64), ("cFrame", ctypes.c_uint64),
+                ("cDXPresent", ctypes.c_uint32), ("cRefreshFrame", ctypes.c_uint64), ("cFrameSubmitted", ctypes.c_uint64),
+                ("cDXPresentSubmitted", ctypes.c_uint32), ("cFrameConfirmed", ctypes.c_uint64),
+                ("cDXPresentConfirmed", ctypes.c_uint32), ("cRefreshConfirmed", ctypes.c_uint64),
+                ("cDXRefreshConfirmed", ctypes.c_uint32), ("cFramesLate", ctypes.c_uint64),
+                ("cFramesOutstanding", ctypes.c_uint32), ("cFrameDisplayed", ctypes.c_uint64),
+                ("qpcFrameDisplayed", ctypes.c_uint64), ("cRefreshFrameDisplayed", ctypes.c_uint64),
+                ("cFrameComplete", ctypes.c_uint64), ("qpcFrameComplete", ctypes.c_uint64), ("cFramePending", ctypes.c_uint64),
+                ("qpcFramePending", ctypes.c_uint64)] + [(n, ctypes.c_uint64) for n in (
+                "cFramesDisplayed", "cFramesComplete", "cFramesPending", "cFramesAvailable", "cFramesDropped",
+                "cFramesMissed", "cRefreshNextDisplayed", "cRefreshNextPresented", "cRefreshesDisplayed",
+                "cRefreshesPresented", "cRefreshStarted", "cPixelsReceived", "cPixelsDrawn", "cBuffersEmpty")]
+
+
+_FRAME_TIMING: list = []          # [DwmGetCompositionTimingInfo, QueryPerformanceCounter, counts a second, info] or [None]
+
+
+def frame_time() -> float:
+    """When the frame being drawn now reaches the screen (perf_counter seconds): the next refresh after the last one.
+    Scrolling is placed by THIS, not by the moment its step happens to run: steps run 0.5-4 ms after the refresh,
+    unevenly, and at speed that showed - 5,000 px/s moved 22-55 px a frame instead of an even 34-36 (wheel-press
+    scrolling, 2026-10-20). Falls back to perf_counter where Windows can't say."""
+    now = time.perf_counter()
+    if not _FRAME_TIMING:
+        try:
+            freq = ctypes.c_int64()
+            ctypes.windll.kernel32.QueryPerformanceFrequency(ctypes.byref(freq))
+            info = _DwmTiming(cbSize=ctypes.sizeof(_DwmTiming))
+            get = ctypes.windll.dwmapi.DwmGetCompositionTimingInfo
+            get.argtypes = [ctypes.c_void_p, ctypes.POINTER(_DwmTiming)]
+            _FRAME_TIMING[:] = [get, ctypes.windll.kernel32.QueryPerformanceCounter, freq.value, info]
+        except (AttributeError, OSError):
+            _FRAME_TIMING[:] = [None]
+    get = _FRAME_TIMING[0]
+    if get is None:
+        return now
+    _, qpc, freq, info = _FRAME_TIMING
+    count = ctypes.c_int64()
+    if get(None, ctypes.byref(info)) != 0 or not qpc(ctypes.byref(count)) or not info.qpcRefreshPeriod:
+        return now
+    period = info.qpcRefreshPeriod
+    passed = count.value - info.qpcVBlank            # (the last refresh may be a few behind if DWM was idle)
+    nxt = info.qpcVBlank + (passed // period + 1) * period
+    return now + (nxt - count.value) / freq
+
+
 class _VsyncHub(QObject):
     """The one background thread behind every VsyncClock: it waits for Windows' next screen composition (DwmFlush:
     once per refresh, whatever the screen's rate) and then ticks every running clock, all in the same frame. It
@@ -2635,7 +3279,54 @@ class KeepsTitleBar:
 
     _closing = False                    # a pop-up on its way out (done())
 
+    # Pressing the title bar: Windows' own handling waits there - without running the program - until the button is
+    # released or the mouse moves, to see whether it's a drag. Everything froze for as long as the button was held
+    # (owner, 2026-10-20, "clicking back into the window": a click is held ~50-100 ms; measured: held 30 ms -> 32 ms
+    # frozen, 100 ms -> 102 ms; a click inside the window: 0). Browsers / Steam keep drawing on another thread, so
+    # it never shows there. So the press is kept from Windows; the window watches the button itself and only once
+    # the mouse really moves with it held does it hand the drag to Windows (startSystemMove: snapping, dragging a
+    # maximised window off the top - all as usual). A double-click (maximise) comes as its own message, untouched.
+    _press_at = None
+
+    def _caption_pressed(self) -> bool:
+        from ctypes import wintypes
+        pt = wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+        self._press_at = (pt.x, pt.y)
+        if not hasattr(self, "_press_watch"):
+            self._press_watch = QTimer(self, interval=8, timerType=Qt.PreciseTimer)
+            self._press_watch.timeout.connect(self._watch_press)
+        self._press_watch.start()
+        return True
+
+    def _watch_press(self) -> None:
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        button = 0x02 if u.GetSystemMetrics(23) else 0x01            # (SM_SWAPBUTTON: the left-hand button)
+        if not u.GetAsyncKeyState(button) & 0x8000 or self._press_at is None:
+            self._press_watch.stop()                                  # let go: it was just a click
+            self._press_at = None
+            return
+        pt = wintypes.POINT()
+        u.GetCursorPos(ctypes.byref(pt))
+        x0, y0 = self._press_at
+        if abs(pt.x - x0) > u.GetSystemMetrics(68) or abs(pt.y - y0) > u.GetSystemMetrics(69):   # SM_CX/CYDRAG
+            self._press_watch.stop()
+            self._press_at = None
+            if not self.isMaximized():
+                self.move(self.pos() + QPoint(pt.x - x0, pt.y - y0))  # (catch up with the mouse: no lag behind it)
+            if self.windowHandle() is not None:
+                self.windowHandle().startSystemMove()
+
     def nativeEvent(self, event_type, message):
+        if sys.platform == "win32":
+            try:
+                from ctypes import wintypes
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x00A1 and msg.wParam == 2:         # WM_NCLBUTTONDOWN on the caption (HTCAPTION)
+                    return self._caption_pressed(), 0
+            except (ValueError, TypeError, OSError):
+                pass
         if (_CLOAKED or self._closing) and sys.platform == "win32":
             try:
                 from ctypes import wintypes
@@ -3558,7 +4249,10 @@ class CardDelegate(QStyledItemDelegate):
         cover = self.cover_rect(option.rect, self.w.hover.get(gid, 0.0))
         self._shadow(p, cover, e)
         pm = self.w.covers.get(self.w.art(game), (game.crop_zoom, game.crop_x, game.crop_y))
-        src = pm if pm else self._placeholder(game.title, option.font)
+        if not pm and game.artwork and self.w.covers.no_decode:
+            src = self._placeholder("", option.font)    # (still loading - a wheel glide: no title flashing up first)
+        else:
+            src = pm if pm else self._placeholder(game.title, option.font)
 
         def draw(q: QPainter, rect: QRectF) -> None:
             q.drawPixmap(rect, src, QRectF(src.rect()))
@@ -3704,6 +4398,38 @@ def _paint_light(p: QPainter, c: QPointF, colour_key, pulse: str, pulsing_on: bo
         e = PULSE_EPOCH[0]
         if pulsing_on or now < e + math.ceil((PULSE_OFF_AT[0] - e) / period) * period:
             s = (1 - math.cos(2 * math.pi * pulse_phase(period, now))) / 2   # 0..1, all in step
+            s = round(s * 256) / 256      # (finer than a shade of the glow: lights drawn in one frame share a look)
+    # The lights breathe in step, so in any one frame lights of the same colour look the same: each look is drawn
+    # once into a small picture and stamped (~20 lights x 3 gradient shapes cost ~1 ms a frame while scrolling).
+    # Only where the stamp lands on whole pixels exactly as drawing would (no rotation / scaling, 100 % zoom).
+    dev = p.device()
+    t = p.transform()
+    if dev is not None and dev.devicePixelRatioF() == 1.0 and p.opacity() == 1.0 \
+            and t.type() in (QTransform.TxNone, QTransform.TxTranslate):
+        ox, oy = c.x() + t.dx(), c.y() + t.dy()
+        fx, fy = ox - math.floor(ox), oy - math.floor(oy)
+        R = math.ceil(r * 2.8) + 3                      # (the biggest halo + the ring)
+        key = (tuple(LIGHTS[k] for k in keys), s, halo, r, fx, fy)
+        sprite = _LIGHT_SPRITES.get(key)
+        if sprite is None:
+            if len(_LIGHT_SPRITES) > 64:
+                _LIGHT_SPRITES.clear()                  # (s changes every frame: last frames' looks)
+            sprite = QPixmap(2 * R, 2 * R)
+            sprite.fill(Qt.transparent)
+            q = QPainter(sprite)
+            q.setRenderHint(QPainter.Antialiasing)
+            _draw_light(q, QPointF(R + fx, R + fy), keys, s, r, halo)
+            q.end()
+            _LIGHT_SPRITES[key] = sprite
+        p.drawPixmap(QPointF(c.x() - fx - R, c.y() - fy - R), sprite)
+        return
+    _draw_light(p, c, keys, s, r, halo)
+
+
+_LIGHT_SPRITES: dict = {}
+
+
+def _draw_light(p: QPainter, c: QPointF, keys: list, s: float, r: float, halo: float) -> None:
     halo_r = r * (1.6 + 1.2 * s)
     span = 360 * 16 / len(keys)                         # Qt angles: 1/16 degree, counter-clockwise from 3 o'clock
     p.setPen(Qt.NoPen)
@@ -6870,7 +7596,7 @@ class TaskOwner:
     started it: closing the window never waits for it (no freeze) and never deletes it mid-run
     (which would make Qt abort the program); if the window is gone, the result is simply dropped."""
 
-    def _run(self, fn, done, failed=None):
+    def _run(self, fn, done, failed=None, low=False):
         import shiboken6
         if not hasattr(self, "_tasks"):
             self._tasks = []
@@ -6892,7 +7618,10 @@ class TaskOwner:
         t.finished.connect(finished)
         _LIVE_TASKS.add(t)
         self._tasks.append(t)
-        t.start()
+        # low: background work the window must never wait for (cover loading): on a weak or busy PC Windows gives
+        # the window its turn first - on one core, loading covers while flinging through a big library held
+        # scroll frames up to ~170 ms (the loader's time slices)
+        t.start(QThread.Priority.LowPriority if low else QThread.Priority.InheritPriority)
 
 
 class CoverPickerDialog(TaskOwner, QDialog):
@@ -7970,7 +8699,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         # -- folder bar (only inside a folder): back to the library + the folder's name
         self.folderbar = QFrame(objectName="folderbar")
         fb = QHBoxLayout(self.folderbar)
-        fb.setContentsMargins(14, 10, 16, 0)
+        fb.setContentsMargins(14, 10, 16, 12)                    # name centred (17 px each side) between the top bar and the covers' edge
         self.back_btn = QPushButton(objectName="back")
         self.back_btn.clicked.connect(self.close_folder)
         self.back_btn.setAcceptDrops(True)
@@ -8580,6 +9309,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         cloud drive on every redraw is far too slow (see CoverCache)."""
         key = (game.game_id, game.artwork)
         if key not in self._art:
+            if self.covers.no_decode:
+                return None                    # (a wheel glide's strip: looked up in the background - want_cover)
             self._art[key] = self.library.artwork_path(game)
         return self._art[key]
 
@@ -8587,15 +9318,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """Can this tile be drawn without reading or decoding a cover file (a folder: its mosaic)?"""
         if iid in self._cover_given_up:
             return True
-        games = self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4] if is_folder(iid) else \
-            [self.games[iid]] if iid in self.games else []
-        for g in games:
+        for g in self._tile_games(iid):
             if not g.artwork:
                 continue
             key = (g.game_id, g.artwork)
             if key not in self._art or not self.covers.ready(self._art[key], (g.crop_zoom, g.crop_x, g.crop_y)):
                 return False
         return True
+
+    def _tile_games(self, iid: str) -> list:
+        """The games whose covers a tile shows (a folder: the first four, its mosaic)."""
+        if is_folder(iid):
+            return self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4]
+        return [self.games[iid]] if iid in self.games else []
 
     def want_cover(self, iid: str) -> None:
         """Load this tile's cover(s) in the background (it arrives once they're ready; see CardDelegate.paint)."""
@@ -8609,10 +9344,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not ids or self._cover_loading:
             self._cover_wanted |= ids
             return
-        games = []
-        for iid in ids:
-            games += self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4] if is_folder(iid) else \
-                [self.games[iid]] if iid in self.games else []
+        games = [g for iid in ids for g in self._tile_games(iid)]
         todo = [(g.game_id, g.artwork, (g.crop_zoom, g.crop_x, g.crop_y)) for g in games if g.artwork]
         art_dir, known, skip = self.library.art_dir, dict(self._art), self.covers.cached()
         self._cover_loading = True
@@ -8641,8 +9373,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 self.covers._mtimes.setdefault(sp, m)
             self.covers.accept(prepared, urgent=True)
             for iid in ids:
-                if not self.cover_ready(iid):
+                if self.cover_ready(iid):
+                    continue
+                if self._pushed_out(iid, skip):
+                    self._cover_wanted.add(iid)           # (asked for again - see _pushed_out)
+                else:
                     self._cover_given_up.add(iid)         # (damaged / unreadable: drawn the usual way)
+            self.grid.covers_arrived()
             self.grid.viewport().update()
             if self._cover_wanted:
                 self._load_wanted_covers()
@@ -8651,7 +9388,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self._cover_loading = False
             self._cover_given_up |= ids
             self.grid.viewport().update()
-        self._run(work, done, failed)
+        self._run(work, done, failed, low=True)
+
+    def _pushed_out(self, iid: str, skip: frozenset) -> bool:
+        """A cover in memory when it was asked for (so not loaded again) and pushed out of the cover memory since:
+        scrolling fast through a big library does that. It used to count as unreadable - a placeholder in the wheel
+        strips and a decode on the window's thread whenever drawn normally, until the library was read again."""
+        for g in self._tile_games(iid):
+            path = self._art.get((g.game_id, g.artwork)) if g.artwork else None
+            m = self.covers._mtimes.get(str(path)) if path else None
+            crop = (g.crop_zoom, g.crop_x, g.crop_y)
+            if m is not None and CoverCache._key(str(path), m, crop) in skip and not self.covers.ready(path, crop):
+                return True
+        return False
 
     def _forget_files(self) -> None:
         self._art = {}
@@ -9057,14 +9806,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         milliseconds. Windows' open animation fades in whatever the window shows at that moment, and decoding ~20
         covers inside the first paint took ~165 ms - longer than the animation, which then faded in a blank white window
         (owner, 2026-10-18)."""
-        games = []
-        for i in range(min(n, self.grid.count())):
-            iid = self.grid.item(i).data(GAME_ID_ROLE)
-            games += self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4] if is_folder(iid) else \
-                    [self.games[iid]] if iid in self.games else []
+        games = [g for i in range(min(n, self.grid.count())) for g in self._tile_games(self.grid.item(i).data(GAME_ID_ROLE))]
         wanted = [(path, (g.crop_zoom, g.crop_x, g.crop_y)) for g in games if g.artwork and (path := self.art(g))]
         try:
             self.covers.accept(CoverCache.prepare(wanted, self.covers.cached()))
+            self.grid.covers_arrived()
         except Exception:                          # noqa: BLE001 - (they're then decoded when drawn, as before)
             pass
 
@@ -9108,12 +9854,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 for key, path in arts.items():
                     self._art.setdefault(key, path)
                 self.covers.accept(prepared, ahead=ahead)
+                self.grid.covers_arrived()
             if self._prefetch_next is not None:
                 self._prefetch_covers(*self._prefetch_next)
 
         def failed(_):
             self._prefetching = False
-        self._run(work, done, failed)
+        self._run(work, done, failed, low=True)
 
     _ahead_pending = False
 
@@ -9121,7 +9868,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """The grid scrolled: get the covers around the view ready (once per moment, not per scroll step), and the
         cover now under the pointer is the hovered one (it only followed mouse moves: with the wheel's glide, the
         lifted cover slid away under a still pointer - browsers and Steam follow the scroll too)."""
-        if self._ghost is None:                         # (a game being dragged sets its own target)
+        if self.grid.scroll_settling():
+            self._set_hovered(None)                     # (lifts once scrolling has stopped - LibraryGrid._end_glide)
+        elif self._ghost is None:                       # (a game being dragged sets its own target)
             vp = self.grid.viewport()
             pos = vp.mapFromGlobal(QCursor.pos())
             it = self.grid.itemAt(pos) if vp.rect().contains(pos) and vp.underMouse() else None
@@ -10082,6 +10831,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     self._start_game_drag(gid)
                     return True
                 it = self.grid.itemAt(pos)
+                if self.grid.auto_scrolling():
+                    it = None                       # (the mouse steers the scrolling: no cover lifts meanwhile)
                 self._set_hovered(it.data(GAME_ID_ROLE) if it else None)
                 if pos.x() > self.grid.viewport().width() - SCROLLBAR_EDGE_PX:
                     self._show_scrollbar()
@@ -10793,7 +11544,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         quiet = self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0) \
             and self._ghost is None and self._landing is None and not self.rumble
         lights_only = quiet and not moving
-        for i in self.grid.visible_range():
+        layered = self.grid.layer_active()                # (gliding: every frame is drawn whole anyway)
+        for i in (() if layered else self.grid.visible_range()):
             it = self.grid.item(i)
             r = self.grid.visualItemRect(it)
             iid = it.data(GAME_ID_ROLE)
@@ -10843,7 +11595,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         # the check of all running programs (launcher.warm_up) waits while covers move: it keeps Python busy
         launcher.hold_warm_up(bool(self.slides) or self._search_moving() or self._ghost is not None
                               or self._landing is not None, "grid")
-        if not region.isEmpty():
+        if layered:
+            if breathing or changed:
+                self.grid.viewport().update()            # gliding: each frame slides the covers' strips anyway
+        elif not region.isEmpty():
             # (not while a folder opens / closes: the animation covers the grid, and each of these little
             # updates would make it redraw out of step)
             if lights_only and self.grid.painted_all:
@@ -11722,12 +12477,14 @@ def _install_frame_log() -> None:
     every animation frame that comes over 20 ms after the last, and every paint over 8 ms, are written to
     %APPDATA%\\IkemenReader\\frames.log with what the bar showed; a hold-up over 40 ms also gets what every thread
     (the window's included) was doing (faulthandler)."""
-    if os.environ.get("IKEMEN_DEBUG_FRAMES") != "1":
+    mode = os.environ.get("IKEMEN_DEBUG_FRAMES")
+    if mode not in ("1", "always"):                      # (always: not just around a reading session)
         return
     import faulthandler
     f = open(default_app_dir() / "frames.log", "a", encoding="utf-8", buffering=1)
     f.write(f"\n===== started {time.strftime('%H:%M:%S')} =====\n")
     state = {"until": 0.0, "last": time.monotonic()}
+    LATE_MS = float(os.environ.get("IKEMEN_DEBUG_LATE_MS", "20"))   # (lower for small hitches at a fast screen)
 
     def stamp() -> str:
         return f"{time.strftime('%H:%M:%S')}.{int(time.time() * 1000) % 1000:03d}"
@@ -11736,6 +12493,8 @@ def _install_frame_log() -> None:
         return next((x for x in QApplication.topLevelWidgets() if isinstance(x, MainWindow)), None)
 
     def recording() -> bool:
+        if mode == "always":
+            return True
         w = window()
         if w is not None and w.worker is not None:
             state["until"] = time.monotonic() + 4        # (and 4 s after the session ends)
@@ -11757,9 +12516,9 @@ def _install_frame_log() -> None:
         gap = (now - state["last"]) * 1000
         state["last"] = now
         if recording():
-            if gap > 20:
+            if gap > LATE_MS:
                 f.write(f"{stamp()} late frame: {gap:.0f} ms since the last  {what()}\n")
-            faulthandler.dump_traceback_later(0.04, repeat=False, file=f)
+            faulthandler.dump_traceback_later(max(0.012, LATE_MS / 1000), repeat=False, file=f)
         t = time.perf_counter()
         orig_tick(self)
         d = (time.perf_counter() - t) * 1000
@@ -11934,6 +12693,12 @@ def main() -> None:
     # Luna (a Qt program too): see outside.own_setting.
     outside.own_setting("QT_ENABLE_HIGHDPI_SCALING", "0")
     outside.own_setting("QT_FONT_DPI", "96")
+    # The window's thread gets Python's lock back within 0.5 ms (default 5 ms). Clicking back into the window froze
+    # it 50-100 ms whenever the save check / library check was running Python in the background (owner, 2026-10-20):
+    # Qt tells every widget about the focus change, each widget's handler needs the lock, and each time the window
+    # waited up to 5 ms for a background thread to hand it over. Measured (focus storm with a busy background
+    # thread): 80-90 ms -> 0.1 ms. (1 ms doesn't help: Windows rounds that wait up to its timer tick.)
+    sys.setswitchinterval(0.0005)
     app = QApplication(sys.argv)
     app.setApplicationName("Ikemen Reader")
     app.setEffectEnabled(Qt.UI_AnimateCombo, False)   # drop-downs slide open by themselves (ThemedCombo)
