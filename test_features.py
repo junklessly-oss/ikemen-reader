@@ -5128,3 +5128,54 @@ class HoverFrames(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class DragFolderInPlace(unittest.TestCase):
+    """2026-10-19 (owner: "it'll snap back"): a game dropped onto another made a folder that My Arrangement put at the
+    END of the library, and the view jumped there. Now it takes the target's place; a folder that does land out of
+    view (an automatic sort) is glided to, not jumped to."""
+
+    def test_folder_takes_the_targets_place(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            ids = [lib.add_game(f"Game {i:02d}", "PC", exe=str(Path(tmp) / f"g{i}" / "g.exe")).game_id for i in range(40)]
+            lib.set_library_order(ids)
+            s = LocalSettings("PC", str(cloud))
+            s.sort = "custom"
+            w = app.MainWindow(s)
+            try:
+                w.show()
+                w.refresh()
+                sb = w.grid.verticalScrollBar()
+                sb.setValue(sb.maximum() // 2)
+                before = sb.value()
+                target, dragged = ids[20], ids[3]
+                w._drop_game(dragged, target, False)
+                order = lib.library_order()
+                folder = next(x for x in order if x.startswith(app.FOLDER_PREFIX))
+                self.assertEqual(order.index(folder), 20 - 1)          # (the dragged game left a place before it)
+                self.assertNotIn(dragged, order)
+                self.assertNotIn(target, order)
+                self.assertEqual(sb.value(), before)                    # the view stays put
+                self.assertEqual(w.selected_folder(), folder[len(app.FOLDER_PREFIX):])
+                # an item far out of view: glided to, not jumped to
+                w.grid.setCurrentRow(0)
+                sb.setValue(0)
+                far = w.grid.count() - 1
+                w._select_item(w.grid.item(far).data(app.GAME_ID_ROLE), glide=True)
+                self.assertLess(sb.value(), 50)                         # not there at once
+                end = time.monotonic() + 2
+                while time.monotonic() < end and w.grid._glide_to is not None:
+                    QApplication.processEvents()
+                    time.sleep(0.005)
+                self.assertGreater(sb.value(), 200)                     # ...but it got there
+            finally:
+                w.close()
+                app.wait_for_tasks(5)

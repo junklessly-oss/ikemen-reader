@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 265 tests (2026-10-19, 1.1.5), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 266 tests (2026-10-19, 1.1.5 + drag fixes), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -1270,6 +1270,20 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   (now watches the whole screen: Explorer cascades new windows); taskbar filmed during start-up: the title-bar
   warm-up window never shows a button. Tools made zoom-aware (the owner's PC screens are at 125 % now): launchcheck,
   explcheck (SetProcessDpiAwarenessContext -4), backdrop.py (QT_ENABLE_HIGHDPI_SCALING=0).
+
+## Drag fixes (2026-10-19 late, owner: "it'll snap back" + "the white drop line flickers like crazy")
+- Reproduced with scratch dragscroll2.py (a game carried to the edge, edge-scrolled, dropped): dropping ONTO a cover
+  (new folder) after edge-scrolling jumped the view - down: 1076 -> 0, up: 9951 -> 10947. Cause: My Arrangement didn't
+  know the new folder, so in_order put it at the END; _select_item then scrollToItem'd there. Now _drop_game puts
+  FOLDER_PREFIX + fid in the target's place in library_order (the dragged game's entry removed): the view stays put.
+  In an automatic sort the folder goes where the sort ranks it; _select_item(glide=True) GLIDES there
+  (LibraryGrid.glide_to_show = scrollTo's math in _showing() + the wheel's glide; setAutoScroll off around
+  setCurrentRow, else Qt jumps first). Test: DragFolderInPlace.
+- Drop line: held still or trembling over a gap it was steady (filmed: 0 of 191 frames missing - scratch markerfilm.py).
+  The flicker was the EDGE SCROLL: rows racing past a still pointer switched the line on over every gap and off over
+  every cover, and covers under it lifted / dropped (24 changes in 1.5 s). While the edge scroll runs faster than
+  DRAG_AIM_SPEED (8 px per 1/60 s) _drag_racing is set: no line, no target lift (_move_game_drag), and letting go
+  then puts the game back (nothing was shown to aim at). Slow edge scrolling still shows them. 24 -> 0 changes.
 
 ## Ideas for later (owner interested, not scheduled)
 - Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +

@@ -389,14 +389,17 @@ class LibraryGrid(QListWidget):
         target = min(float(sb.maximum()), max(float(sb.minimum()), base - d / 120 * step))
         if self._glide_to is None:
             self._glide_at = float(sb.value())
-            if not hasattr(self, "_glide_clock"):
-                self._glide_clock = VsyncClock(self)
-                self._glide_clock.timeout.connect(self._glide_step)
-                sb.valueChanged.connect(self._scrolled_elsewhere)
             self._glide_last = time.perf_counter()
-            self._glide_clock.start()
+            self._glide_clock_ready().start()
         self._glide_to = target
         ev.accept()
+
+    def _glide_clock_ready(self) -> "VsyncClock":
+        if not hasattr(self, "_glide_clock"):
+            self._glide_clock = VsyncClock(self)
+            self._glide_clock.timeout.connect(self._glide_step)
+            self.verticalScrollBar().valueChanged.connect(self._scrolled_elsewhere)
+        return self._glide_clock
 
     def _glide_step(self) -> None:
         if self._glide_to is None:
@@ -672,17 +675,36 @@ class LibraryGrid(QListWidget):
         sb = self.verticalScrollBar()
         sb.setRange(0, max(0, self.contentsSize().height() + GRID_END_EXTRA - self.viewport().height()))
 
-    def scrollTo(self, index, hint=QAbstractItemView.EnsureVisible) -> None:
+    def _showing(self, index) -> Optional[int]:
+        """The scroll position that brings this item into view (None: it's in view already)."""
         r = self.visualRect(index)
         if not r.isValid():
-            return
+            return None
         sb = self.verticalScrollBar()
         cover_top = r.top() + CARD_PAD_TOP - ROW_GAP       # (with the usual gap above / below it)
         cover_bottom = r.bottom() - (CARD_PAD_BOTTOM + GRID_SPACING) + ROW_GAP
         if cover_top < 0:
-            sb.setValue(sb.value() + cover_top)
-        elif cover_bottom > self.viewport().height():
-            sb.setValue(sb.value() + cover_bottom - self.viewport().height())
+            return sb.value() + cover_top
+        if cover_bottom > self.viewport().height():
+            return sb.value() + cover_bottom - self.viewport().height()
+        return None
+
+    def scrollTo(self, index, hint=QAbstractItemView.EnsureVisible) -> None:
+        to = self._showing(index)
+        if to is not None:
+            self.verticalScrollBar().setValue(to)
+
+    def glide_to_show(self, index) -> None:
+        """Like scrollTo, but gliding there like a wheel notch (a new folder made far from the view: the view jumped
+        - owner, 2026-10-19, "it snaps back")."""
+        to = self._showing(index)
+        if to is None:
+            return
+        sb = self.verticalScrollBar()
+        self._glide_at = float(sb.value())
+        self._glide_to = float(min(sb.maximum(), max(sb.minimum(), to)))
+        self._glide_last = time.perf_counter()
+        self._glide_clock_ready().start()
 
     def scrollToItem(self, item, hint=QAbstractItemView.EnsureVisible) -> None:
         self.scrollTo(self.indexFromItem(item), hint)    # (Qt's own skips the shift above)
@@ -937,6 +959,7 @@ SCROLLBAR_LINGER_S = 0.6             # stays visible this long after scrolling /
 SCROLLBAR_EDGE_PX = 36               # mouse this close to the right edge shows it
 DRAG_SCROLL_ZONE = 70                # dragging a game this close to the grid's top/bottom scrolls it...
 DRAG_SCROLL_MIN, DRAG_SCROLL_MAX = 2, 60   # ...this many px per frame, faster the further you push
+DRAG_AIM_SPEED = 8                   # faster than this, no drop line / target lift while it scrolls (rows race past)
 LIGHT_R = 5.5
 LOGO_H = 30
 
@@ -10157,6 +10180,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             start = QRectF(QPointF(QCursor.pos()) - QPointF(size.width() / 2, size.height() / 2), size)
         self._dragging = gid
         self._dim_gid = gid
+        self._drag_racing = False
         self._ghost = DragGhost(img, start)
         self._ghost.follow(QCursor.pos())
         self._ghost.show()
@@ -10209,7 +10233,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         sb = self.grid.verticalScrollBar()
         before = sb.value()
         sb.setValue(before + step)
-        if sb.value() != before:
+        racing = speed > DRAG_AIM_SPEED and sb.value() != before
+        if racing != self._drag_racing or sb.value() != before:
+            self._drag_racing = racing
             self._move_game_drag(gp)                 # what's under the mouse changed
 
     def _start_folder_drag(self, iid: str) -> None:
@@ -10281,9 +10307,15 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         x = c.left() - GRID_GAP / 2 if before else c.right() + GRID_GAP / 2
         return ("between", index, QRectF(x - 2, c.top() + 6, 4, c.height() - 12))
 
+    _drag_racing = False      # the edge scroll is going fast: rows race past, nothing to aim at (no line / lift)
+
     def _move_game_drag(self, gp: QPoint) -> None:
         self._ghost.follow(gp)
         kind, spot = self._drag_hit(gp)
+        if self._drag_racing and kind == "grid":
+            # (owner, 2026-10-19: the drop line "flickers like crazy" - with the rows racing past a still pointer it
+            # switched on over every gap and off over every cover, and the covers under it lifted and dropped)
+            spot = None
         self.trash_btn.set_hot(kind == "trash")
         self._ghost.set_faded(kind == "trash")          # almost see-through over the trash can
         onto = spot[1] if kind == "grid" and spot and spot[0] == "onto" else None
@@ -10292,7 +10324,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def _end_game_drag(self, gp: QPoint, drop: bool) -> None:
         gid = self._dragging
-        kind, spot = self._drag_hit(gp) if drop else (None, None)
+        # (let go while the rows race past: nothing was shown to aim at - it goes back where it was)
+        kind, spot = self._drag_hit(gp) if drop and not self._drag_racing else (None, None)
+        self._drag_racing = False
         self.grid.set_marker(None)
         if self._ghost is None:
             return
@@ -10578,8 +10612,12 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         fid = self.library.create_folder(tr("folder.new_name"))
         self.library.set_folder(target, fid)
         self.library.set_folder(gid, fid)
+        order = list(self.library_order)
+        if target in order:                     # (My Arrangement: the folder takes the target's place - it went
+            order[order.index(target)] = FOLDER_PREFIX + fid        # to the end, and the view jumped there)
+            self.library.set_library_order([x for x in order if x != gid])
         self._reshow((gid, target))
-        self._select_item(FOLDER_PREFIX + fid)
+        self._select_item(FOLDER_PREFIX + fid, glide=True)
 
     def _reshow(self, changed: tuple = ()) -> None:
         """After a change made here (folders, order): only the games that changed are read again, then the grid
@@ -10595,12 +10633,22 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._rebuild()
         self._own_change()
 
-    def _select_item(self, iid: str) -> None:
+    def _select_item(self, iid: str, glide: bool = False) -> None:
+        """glide: brought into view by gliding there (after a drop), not a jump."""
         for i in range(self.grid.count()):
             if self.grid.item(i).data(GAME_ID_ROLE) == iid:
-                self.grid.setCurrentRow(i)
-                self.grid.item(i).setSelected(True)
-                self.grid.scrollToItem(self.grid.item(i))
+                if glide:
+                    self.grid.setAutoScroll(False)          # (Qt would scroll there at once)
+                    try:
+                        self.grid.setCurrentRow(i)
+                    finally:
+                        self.grid.setAutoScroll(True)
+                    self.grid.item(i).setSelected(True)
+                    self.grid.glide_to_show(self.grid.model().index(i, 0))
+                else:
+                    self.grid.setCurrentRow(i)
+                    self.grid.item(i).setSelected(True)
+                    self.grid.scrollToItem(self.grid.item(i))
                 return
 
     def _set_hovered(self, gid: Optional[str]) -> None:
