@@ -26,7 +26,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import (QAbstractNativeEventFilter, QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
                             QTimer, QUrl, Signal)
-from PySide6.QtGui import (QCursor, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
+from PySide6.QtGui import (QCursor, QPalette, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap, QRegion,
                            QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QAbstractScrollArea, QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QGraphicsOpacityEffect, QCheckBox, QComboBox,
@@ -91,7 +91,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "1.1.6"
+APP_VERSION = "1.1.7"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -388,25 +388,43 @@ class _AutoScroll(QObject):
     pressed and the library keeps scrolling that way, faster the further away. Held and moved: letting go stops it;
     a quick click: it runs until the next click, the wheel or Esc. Counts as a glide (the strips draw it, no hover)."""
 
-    def __init__(self, grid: "LibraryGrid"):
+    def __init__(self, grid: QAbstractScrollArea):
         super().__init__(grid)
         self.grid = grid
         self.active = False
         self.clock = VsyncClock(self)
         self.clock.timeout.connect(self._step)
 
-    def start(self) -> None:
-        g, sb = self.grid, self.grid.verticalScrollBar()
+    def _begin(self) -> None:
+        g = self.grid
         g._end_glide()
+        g._glide_clock_ready()
+        g._glide_to = self.pos                     # (everything else treats it as a glide)
+        g._rehover_timer().stop()
+        g.w._set_hovered(None)                     # (a cover lifted under the pointer settles: no hover meanwhile)
+
+    def _end(self) -> None:
+        self.grid._heading = 0
+        self.grid._end_glide()
+
+    def _move(self, dy: float) -> None:
+        g, sb = self.grid, self.grid.verticalScrollBar()
+        g._heading = 1 if dy > 0 else -1           # (_glide_to is where it is: the strip ahead needs the way)
+        g._glide_to = self.pos
+        g._gliding = True
+        try:
+            sb.setValue(round(self.pos))
+        finally:
+            g._gliding = False
+
+    def start(self) -> None:
+        sb = self.grid.verticalScrollBar()
         self.active, self.moved = True, False
         self.anchor = QCursor.pos().y()
         self.pos = float(sb.value())
         self.started = time.perf_counter()
         self.last = frame_time()
-        g._glide_clock_ready()
-        g._glide_to = self.pos                     # (everything else treats it as a glide)
-        g._rehover_timer().stop()
-        g.w._set_hovered(None)                     # (a cover lifted under the pointer settles: no hover meanwhile)
+        self._begin()
         self.way, self.rest_since = 0, None
         QApplication.setOverrideCursor(scroll_cursor(0))
         QApplication.instance().installEventFilter(self)
@@ -419,8 +437,7 @@ class _AutoScroll(QObject):
         self.clock.stop()
         QApplication.instance().removeEventFilter(self)
         QApplication.restoreOverrideCursor()
-        self.grid._heading = 0
-        self.grid._end_glide()
+        self._end()
 
     def eventFilter(self, obj, ev) -> bool:
         t = ev.type()
@@ -471,13 +488,41 @@ class _AutoScroll(QObject):
         self.moved = True
         self.pos += math.copysign(over ** 1.2 * AUTO_SCROLL_SPEED, dy) * dt
         self.pos = min(float(sb.maximum()), max(float(sb.minimum()), self.pos))
-        g._heading = 1 if dy > 0 else -1           # (_glide_to is where it is: the strip ahead needs the way)
-        g._glide_to = self.pos
-        g._gliding = True
+        self._move(dy)
+
+
+class _AreaAutoScroll(_AutoScroll):
+    """Wheel-press scrolling for every other scrolling area (owner, 2026-10-20): Settings, Edit, Custom Theme, the
+    guide, drop-down lists... The same pointer, speeds and ways to stop as the library's; drawn by SmoothWheel's
+    solid-background sliding (see SmoothWheel._solid)."""
+
+    def _begin(self) -> None:
+        area = self.grid
+        if isinstance(area, QAbstractItemView) and area.verticalScrollMode() != QAbstractItemView.ScrollPerPixel:
+            top = area.indexAt(QPoint(4, 4))       # (row by row it could only jump: by pixel, the same row on top)
+            area.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+            if top.isValid():
+                area.scrollTo(top, QAbstractItemView.PositionAtTop)
+            self.pos = float(area.verticalScrollBar().value())
+        sb = area.verticalScrollBar()
+        sw = _SMOOTH_WHEEL
+        if sw is not None:
+            sw.glides.pop(sb, None)
+            sw._solid(sb, True)
+
+    def _end(self) -> None:
+        if _SMOOTH_WHEEL is not None and shiboken6.isValid(self.grid):
+            _SMOOTH_WHEEL._solid(self.grid.verticalScrollBar(), False)
+
+    def _move(self, dy: float) -> None:
+        sw = _SMOOTH_WHEEL
+        if sw is not None:
+            sw._setting = True                     # (not "moved elsewhere": nothing to cancel)
         try:
-            sb.setValue(round(self.pos))
+            self.grid.verticalScrollBar().setValue(round(self.pos))
         finally:
-            g._gliding = False
+            if sw is not None:
+                sw._setting = False
 
 
 class LibraryGrid(QListWidget):
@@ -559,9 +604,12 @@ class LibraryGrid(QListWidget):
         if WHEEL_LOG:
             WHEEL_LOG.append(f"{time.perf_counter():.4f} wheel {ev.angleDelta().y()} {ev.angleDelta().x()} "
                              f"pixel {ev.pixelDelta().y()} mods {int(ev.modifiers().value)} phase {ev.phase()}")
-        if not d or ev.angleDelta().x() or ev.modifiers() or d % 120:
+        # a mouse wheel glides however finely it reports: high-resolution / free-spinning wheels send parts of a
+        # notch (not multiples of 120) some of the time, and those used to jump (2026-10-20). Touchpads (pixel deltas or a scroll phase) keep Qt's own scrolling.
+        touchpad = not ev.pixelDelta().isNull() or ev.phase() != Qt.NoScrollPhase
+        if not d or ev.angleDelta().x() or ev.modifiers() or touchpad:
             self._end_glide()
-            super().wheelEvent(ev)             # touchpad / fine wheel / sideways / with a key held: as before
+            super().wheelEvent(ev)             # touchpad / sideways / with a key held: as before
             return
         sb = self.verticalScrollBar()
         base = self._glide_to if self._glide_to is not None else float(sb.value())
@@ -1065,9 +1113,14 @@ class LibraryGrid(QListWidget):
     def _paint_normal(self, ev, frame) -> None:
         # the wheel's strips stay for the next flick only while nothing but the lights / a hover is drawn (a hover's
         # cover is patched in when the next glide starts); anything else drawn may have changed a cover
-        if not self._keep_layer and not (frame is not None and ev.region().subtracted(frame["region"]).isEmpty()):
+        # (drawing the lights' still picture changes no cover either: it dropped the strips right after every glide,
+        # so each flick began by rebuilding them - an 8-16 ms first frame, every time; owner's launch check 2026-10-20)
+        making_still = getattr(self, "_making_still", False)
+        if not self._keep_layer and not making_still \
+                and not (frame is not None and ev.region().subtracted(frame["region"]).isEmpty()):
             self._drop_layer()
-        self._keep_layer = False
+        if not making_still:
+            self._keep_layer = False
         live = frame.get("live") if frame is not None else None
         if frame is not None and not getattr(self, "_making_still", False) and not self.bare \
                 and self._still is not None and self._still.size() == self._still_size() \
@@ -1428,6 +1481,14 @@ def restyle_all() -> None:
 
 
 _SHEET_ROOT: list = [None]
+
+
+def discard(d: QWidget) -> None:
+    """Delete a closed window NOW. A window opened with a parent stays as its hidden child until deleted: every
+    Settings / Edit / theme / colour window opened since start was restyled again on every theme change (owner,
+    2026-10-20: the theme windows were "comically slow", worse the longer the program ran)."""
+    if shiboken6.isValid(d):
+        shiboken6.delete(d)
 
 
 def sheet_on(root: Optional[QWidget]) -> None:
@@ -3076,6 +3137,193 @@ def install_smooth_tips(app: QApplication) -> None:
         app.setStyle(TipTiming(app.style().name()))
         _TIP_MANAGER = TipManager(app)
         app.installEventFilter(_TIP_MANAGER)
+
+
+class SmoothWheel(QObject):
+    """The library's wheel glide for EVERY other scrolling area (owner, 2026-10-20: "everything super smooth"):
+    Settings, Edit, Custom Theme, the guide, drop-down lists, VNDB results, the restore list... Same curve as
+    LibraryGrid (cubic Hermite from the current position + speed to the target, WHEEL_GLIDE_S, never overshooting;
+    a flick the other way starts from rest), placed by frame_time() on the shared VsyncClock. Item views scroll per
+    pixel (per row they could only jump). Touchpads, sideways and with a key held: Qt's own scrolling. Nothing to
+    scroll that way: the wheel goes on to the area outside, as before. The library grid has its own (strips)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.glides: dict = {}                 # QScrollBar -> [from, speed, start, length, target]
+        self._seen: set = set()                # scroll bars already connected to
+        self._setting = False
+        self.clock = VsyncClock(self)
+        self.clock.timeout.connect(self._step)
+
+    @staticmethod
+    def _area(obj) -> Optional[QAbstractScrollArea]:
+        area = obj.parent() if isinstance(obj, QWidget) else None
+        if isinstance(area, QAbstractScrollArea) and not isinstance(area, LibraryGrid) \
+                and obj in (area.viewport(), area.verticalScrollBar()):
+            return area
+        return None
+
+    def eventFilter(self, obj, ev) -> bool:
+        if ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.MiddleButton:
+            return self._press(obj)
+        if ev.type() != QEvent.Wheel:
+            return False
+        d = ev.angleDelta().y()
+        if not d or ev.angleDelta().x() or ev.modifiers() or not ev.pixelDelta().isNull() \
+                or ev.phase() != Qt.NoScrollPhase:
+            return False
+        area = self._area(obj)
+        if WHEEL_LOG:
+            WHEEL_LOG.append(f"{time.perf_counter():.4f} sw wheel {d} on {type(obj).__name__} "
+                             f"area={type(area).__name__ if area else '-'} accepted={ev.isAccepted()}")
+        if area is None:
+            area = self._holding_area(obj)
+            if area is None:
+                return False
+            # a drop-down / number box / slider inside a scrolling window: the wheel scrolls the window, never the
+            # value (owner, 2026-10-20: Settings "bounced" - the glide slid Language / This Is under the pointer
+            # and the next notch switched them, re-laying the whole window out)
+            if not self._glide(area, d):
+                ev.accept()
+            return True
+        return self._glide(area, d)
+
+    def _press(self, obj) -> bool:
+        """The wheel pressed over a scrolling area (not the library: it has its own): wheel-press scrolling."""
+        area = self._area(obj) or self._holding_area(obj)
+        if area is None and isinstance(obj, QWidget):          # (over a label / box inside a window's scroll area)
+            w = obj
+            while w is not None and not w.isWindow() and area is None:
+                p = w.parentWidget()
+                if isinstance(p, QAbstractScrollArea) and not isinstance(p, LibraryGrid) and w is p.viewport():
+                    area = p
+                w = p
+        if area is None or area.verticalScrollBar().maximum() <= 0:
+            return False
+        auto = area.findChild(_AreaAutoScroll, options=Qt.FindDirectChildrenOnly)
+        if auto is None:
+            auto = _AreaAutoScroll(area)
+        if not auto.active:
+            auto.start()
+        return True
+
+    @staticmethod
+    def _holding_area(obj) -> Optional[QAbstractScrollArea]:
+        from PySide6.QtWidgets import QAbstractSlider, QAbstractSpinBox, QComboBox, QScrollBar
+        if not isinstance(obj, (QComboBox, QAbstractSpinBox, QAbstractSlider)) or isinstance(obj, QScrollBar):
+            return None
+        w = obj.parentWidget()
+        while w is not None and not w.isWindow():
+            area = w.parentWidget()
+            if isinstance(area, QAbstractScrollArea) and not isinstance(area, LibraryGrid) and w is area.viewport():
+                return area
+            w = area
+        return None
+
+    def _glide(self, area: QAbstractScrollArea, d: int) -> bool:
+        if isinstance(area, QAbstractItemView) and area.verticalScrollMode() != QAbstractItemView.ScrollPerPixel:
+            area.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        sb = area.verticalScrollBar()
+        g = self.glides.get(sb)
+        base = g[4] if g else float(sb.value())
+        if (d > 0 and base <= sb.minimum()) or (d < 0 and base >= sb.maximum()):
+            if WHEEL_LOG:
+                WHEEL_LOG.append(f"{time.perf_counter():.4f} sw at end d={d} base={base:.1f} max={sb.maximum()}")
+            # still gliding there: the notch is spent (handed on, Qt scrolled the bar itself and cut the glide off
+            # halfway - Settings "bounced" with a quick wheel, owner 2026-10-20); really there: the area outside
+            return g is not None or sb.value() != (sb.minimum() if d > 0 else sb.maximum())
+        notch = QApplication.wheelScrollLines() * WHEEL_LINE_PX
+        notch = min(notch, max(20.0, area.viewport().height() * 0.75))     # (a short list: not past most of it)
+        self._aim(sb, base - d / 120 * notch)
+        return True
+
+    @staticmethod
+    def _state(g, now: float) -> tuple[float, float, float]:
+        p0, v0, t0, length, p1 = g
+        s = min(1.0, max(0.0, (now - t0) / length))
+        s2, s3, m = s * s, s * s * s, v0 * length
+        pos = (2 * s3 - 3 * s2 + 1) * p0 + (s3 - 2 * s2 + s) * m + (3 * s2 - 2 * s3) * p1
+        vel = ((6 * s2 - 6 * s) * p0 + (3 * s2 - 4 * s + 1) * m + (6 * s - 6 * s2) * p1) / length
+        return pos, vel, s
+
+    def _aim(self, sb, target: float) -> None:
+        target = min(float(sb.maximum()), max(float(sb.minimum()), target))
+        now = time.perf_counter()
+        g = self.glides.get(sb)
+        pos, vel = self._state(g, now)[:2] if g else (float(sb.value()), 0.0)
+        dist, length = target - pos, WHEEL_GLIDE_S
+        if abs(dist) < 0.5:
+            return
+        if vel * dist > 0:
+            length = min(length, 3 * dist / vel)          # (already heading there: never overshoot)
+        elif vel * dist < 0:
+            vel = 0.0                                     # (turned round: straight back)
+        if g is None:
+            if sb not in self._seen:
+                self._seen.add(sb)
+                sb.valueChanged.connect(lambda _v, sb=sb: self._moved_elsewhere(sb))
+                sb.destroyed.connect(lambda _o=None, sb=sb: (self.glides.pop(sb, None), self._seen.discard(sb)))
+            self._solid(sb, True)
+        self.glides[sb] = [pos, vel, now, max(length, 0.05), target]
+        if WHEEL_LOG:
+            WHEEL_LOG.append(f"{now:.4f} sw aim {type(sb.parent().parent()).__name__} from={pos:.1f} v={vel:.0f} "
+                             f"to={target:.1f} max={sb.maximum()}")
+        if not self.clock.isActive():
+            self.clock.start()
+
+    @staticmethod
+    def _solid(sb, on: bool) -> None:
+        """While gliding, a window's scrolling contents are given a solid background (the window's own colour, so
+        nothing looks different): Qt then slides what's already drawn and paints only the strip coming into view.
+        See-through (as styled), every frame repainted the whole visible part - 4-5 ms in Settings, a quarter of
+        frames late on a quick wheel at 143 Hz (owner, 2026-10-20: "a tad stuttery"); solid: 0.9 ms, none late.
+        Only while gliding: a theme change (or its live preview) never meets a stale colour."""
+        area = sb.parentWidget().parentWidget() if sb.parentWidget() else None
+        if not isinstance(area, QScrollArea) or not isinstance(area.window(), QDialog) or area.widget() is None:
+            return                              # (item views / text views draw their own background)
+        for w in (area.viewport(), area.widget()):
+            if on:
+                pal = w.palette()
+                pal.setColor(QPalette.Window, QColor(COLORS["bg"]))
+                w.setPalette(pal)
+            w.setAutoFillBackground(on)
+
+    def _moved_elsewhere(self, sb) -> None:
+        if not self._setting:
+            if WHEEL_LOG and sb in self.glides:
+                WHEEL_LOG.append(f"{time.perf_counter():.4f} sw moved elsewhere to {sb.value()} max={sb.maximum()}")
+            if self.glides.pop(sb, None) is not None:   # (scroll bar dragged, keys, a jump to a row: that wins)
+                self._solid(sb, False)
+
+    def _step(self) -> None:
+        now = frame_time()
+        for sb, g in list(self.glides.items()):
+            if not shiboken6.isValid(sb):
+                self.glides.pop(sb, None)
+                continue
+            pos, _, s = self._state(g, now)
+            if WHEEL_LOG:
+                WHEEL_LOG.append(f"{time.perf_counter():.4f} sw step {pos:.1f} s={s:.2f} value={sb.value()}")
+            self._setting = True
+            try:
+                sb.setValue(round(g[4] if s >= 1.0 else pos))
+            finally:
+                self._setting = False
+            if s >= 1.0:
+                self.glides.pop(sb, None)
+                self._solid(sb, False)
+        if not self.glides:
+            self.clock.stop()
+
+
+_SMOOTH_WHEEL: Optional[SmoothWheel] = None
+
+
+def install_smooth_wheel(app: QApplication) -> None:
+    global _SMOOTH_WHEEL
+    if _SMOOTH_WHEEL is None:
+        _SMOOTH_WHEEL = SmoothWheel(app)
+        app.installEventFilter(_SMOOTH_WHEEL)
 
 
 def bring_to_front(w: QWidget) -> None:
@@ -5154,6 +5402,7 @@ class ThemedCombo(QComboBox):
         self._shade = _ListShadow(self._box(), self)
         self._shade.lower()
         self.view().setItemDelegate(_SeparatorDelegate(self.view().itemDelegate(), self))   # visible dividers
+        self.view().setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)   # (glides: whole rows could only jump)
         self._t0 = 0.0
         self._down = True
         self._last = 0.0
@@ -5717,7 +5966,7 @@ class TrashButton(QPushButton):
         dt, self._t = now - self._t, now
         target = self._target_scale()
         self._scale += (target - self._scale) * min(1.0, dt * 14)          # ease towards the target size
-        if abs(target - self._scale) < 0.002:
+        if abs(target - self._scale) < 0.0002:     # (the last step invisible: 0.002 jumped a box's edges ~0.2 px)
             self._scale = target
         if self._scale == target and not self._hot and self._wiggle_from < 0:
             self._timer.stop()                                              # still: stop redrawing
@@ -5865,21 +6114,69 @@ class WobbleBox(BoxZone, TrashButton):
             self._hover = False
             self._animate()
 
+    def _settled_picture(self, scale: float, fill: str) -> QPixmap:
+        """The box exactly as it was always drawn standing still at this size (upright, at rest or grown):
+        made once per size / colour / text / screen."""
+        dpr = self.devicePixelRatioF()
+        key = (scale, fill, COLORS["border"], COLORS["text"], self.text_, self.box_font.key(), self.size(), dpr)
+        cache = self.__dict__.setdefault("_pictures", {})
+        pm = cache.get(key)
+        if pm is None:
+            if len(cache) > 8:
+                cache.clear()
+            pm = QPixmap(round(self.width() * dpr), round(self.height() * dpr))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setRenderHint(QPainter.TextAntialiasing)
+            p.translate(self.width() / 2, self.height() / 2 - (scale - 1.0) * 10)
+            p.scale(scale, scale)
+            r = QRectF(-self.box.width() / 2, -self.box.height() / 2, self.box.width(), self.box.height())
+            p.setPen(QPen(QColor(COLORS["border"]), 1))
+            p.setBrush(QColor(fill))
+            p.drawRoundedRect(r, 8, 8)
+            p.setPen(QColor(COLORS["text"]))
+            p.setFont(self.box_font)
+            p.drawText(r, Qt.AlignCenter, self.text_)
+            p.end()
+            cache[key] = pm
+        return pm
+
     def paintEvent(self, _ev) -> None:
+        # The box is shown from a picture of how it looks standing still at the size it's heading for, moved /
+        # turned / grown from there: drawn live, Windows drew the words and edges one way while the box was turned or
+        # grown and snapped them to whole pixels once it stood still - a small shift each time a wiggle settled
+        # (owner, 2026-10-20). Standing still it IS that picture, 1:1 (the old look exactly). When it heads for a new
+        # size, the picture it left blends into the new one over the move.
+        target = self._target_scale()
+        fill = COLORS["button_hover"] if (self._hot or self._hover) else COLORS["button"]
+        dest = (target, fill)
+        if dest != getattr(self, "_dest", None):
+            self._leaving = getattr(self, "_dest", None)
+            self._dest, self._dest_from = dest, self._scale
+        s = self._scale
+        span = target - self._dest_from
+        k = 1.0 if self._leaving is None or abs(span) < 1e-9 else max(0.0, min(1.0, (s - self._dest_from) / span))
+        if k >= 1.0:
+            self._leaving = None
+        angle = self._angle(time.monotonic())
+        cx, cy = self.width() / 2, self.height() / 2
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.TextAntialiasing)
-        lift = (self._scale - 1.0) * 10
-        p.translate(self.width() / 2, self.height() / 2 - lift)
-        p.rotate(self._angle(time.monotonic()))
-        p.scale(self._scale, self._scale)
-        r = QRectF(-self.box.width() / 2, -self.box.height() / 2, self.box.width(), self.box.height())
-        p.setPen(QPen(QColor(COLORS["border"]), 1))
-        p.setBrush(QColor(COLORS["button_hover"] if (self._hot or self._hover) else COLORS["button"]))
-        p.drawRoundedRect(r, 8, 8)
-        p.setPen(QColor(COLORS["text"]))
-        p.setFont(self.box_font)
-        p.drawText(r, Qt.AlignCenter, self.text_)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+        layers = ([(self._leaving, 1.0)] if self._leaving is not None else []) + [(dest, k)]
+        for (pic_scale, pic_fill), opacity in layers:
+            if opacity <= 0:
+                continue
+            p.save()
+            if s != pic_scale or angle:              # (standing still at its size: the picture as it is)
+                p.translate(cx, cy - (s - 1.0) * 10)
+                p.rotate(angle)
+                p.scale(s / pic_scale, s / pic_scale)
+                p.translate(-cx, -(cy - (pic_scale - 1.0) * 10))
+            p.setOpacity(opacity)
+            p.drawPixmap(0, 0, self._settled_picture(pic_scale, pic_fill))
+            p.restore()
         p.end()
 
 
@@ -6031,6 +6328,7 @@ class EasterEgg(QWidget):
     """Click the logo: the window goes dark with two boxes in the middle. Clicking anywhere else
     (or Esc) brings the library back."""
     DARK = 175            # how dark the cover gets (0-255)
+    FADE_S = 0.3          # darkening / brightening, with the boxes fading alongside
 
     def __init__(self, window: QWidget):
         super().__init__(window)
@@ -6055,13 +6353,44 @@ class EasterEgg(QWidget):
         self._rumble.timeout.connect(self._rumble_step)
         self._rumble.start()
         window.installEventFilter(self)          # follow the window's size
-        self._t = time.monotonic()
         self._fade = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._fade.setInterval(16)
         self._fade.timeout.connect(self._step)
+        self._snap, self._box_snaps, self._grabbing = None, [], False
+        self._freeze(window.grab())               # (taken before this layer shows: the window as it was)
         self.show()
         self.raise_()
         self.setFocus()
+        self._begin_fade()
+
+    # The fades draw a picture of the window taken as they start, darkened, with pictures of the boxes on top: a see-
+    # through layer over the live window made Qt redraw the WHOLE window (background picture included) on every
+    # frame - ~40 % of frames late and the darkness stepping unevenly (owner, 2026-10-20: "something seems off").
+    # The boxes used to pop in / out at once; they fade with the darkness now. Settled: the live window again.
+    def _freeze(self, snap: QPixmap) -> None:
+        self._snap = snap
+        self._box_snaps = [(b.geometry().topLeft(), self._box_picture(b)) for b in self.boxes]
+        for b in self.boxes:
+            b.hide()
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)   # (nothing underneath is redrawn meanwhile)
+
+    @staticmethod
+    def _box_picture(b: QWidget) -> QPixmap:
+        """The box as drawn, on a see-through picture (grab() filled its spare margin with a solid colour: a grey
+        square round each box while fading)."""
+        dpr = b.devicePixelRatioF()
+        pm = QPixmap(round(b.width() * dpr), round(b.height() * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.transparent)
+        b.render(pm, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return pm
+
+    def _thaw(self) -> None:
+        self._snap, self._box_snaps = None, []
+        self.setAttribute(Qt.WA_OpaquePaintEvent, False)
+
+    def _begin_fade(self) -> None:
+        self._from, self._t0 = self._alpha, frame_time()
         self._fade.start()
 
     def _place(self) -> None:
@@ -6111,34 +6440,58 @@ class EasterEgg(QWidget):
         if obj is self.parent() and ev.type() == QEvent.Resize:
             self.setGeometry(self.parent().rect())
             self._place()
+            if self._snap is not None:              # (the picture no longer fits: the live window, darkened)
+                self._thaw()
+                if self._target:
+                    for b in self.boxes:
+                        b.show()
         return False
 
     def _step(self) -> None:
-        now = time.monotonic()
-        dt, self._t = now - self._t, now
-        self._alpha += (self._target - self._alpha) * min(1.0, dt * 14)
-        if abs(self._target - self._alpha) < 1:
+        # placed by when the frame reaches the screen (see frame_time), a fixed length, eased out: even steps
+        s = min(1.0, max(0.0, (frame_time() - self._t0) / self.FADE_S))
+        self._alpha = self._from + (self._target - self._from) * (1 - (1 - s) ** 3)
+        if s >= 1.0:
             self._alpha = self._target
             self._fade.stop()
             if self._target == 0:                # faded away: gone
                 self.parent().removeEventFilter(self)
                 self.deleteLater()
                 return
+            self._thaw()                         # settled dark: the live window (lights, rocking covers) again
+            for b in self.boxes:
+                b.show()
         self.update()
 
     def dismiss(self) -> None:
         if self._target != 0:
             self._target = 0.0
-            for b in self.boxes:
-                b.hide()
-            self._rumble_step()                  # (hidden: the covers settle straight back)
+            if self._snap is None:               # (still opening: its picture is the window as it is anyway)
+                boxes = [(b.geometry().topLeft(), self._box_picture(b)) for b in self.boxes]
+                for b in self.boxes:
+                    b.hide()                     # (not in the picture: they fade on top of it)
+                self._grabbing = True            # (this layer draws nothing into the picture)
+                try:
+                    snap = self.parent().grab()
+                finally:
+                    self._grabbing = False
+                self._freeze(snap)
+                self._box_snaps = boxes
+            self._rumble_step()                  # (boxes hidden: the covers settle straight back)
             self._rumble.stop()
-            self._t = time.monotonic()
-            self._fade.start()
+            self._begin_fade()
 
     def paintEvent(self, _ev) -> None:
+        if self._grabbing:
+            return
         p = QPainter(self)
+        if self._snap is not None:
+            p.drawPixmap(self.rect(), self._snap)
         p.fillRect(self.rect(), QColor(0, 0, 0, int(self._alpha)))
+        if self._box_snaps:
+            p.setOpacity(min(1.0, self._alpha / self.DARK))
+            for at, pm in self._box_snaps:
+                p.drawPixmap(at, pm)
         p.end()
 
     def mousePressEvent(self, ev) -> None:      # (the boxes take their own clicks, so this is "elsewhere")
@@ -6344,6 +6697,8 @@ class ThemeDialog(QDialog):
     def _fit(self) -> None:
         """Make the window exactly tall enough for the main colours (no scrolling slack); the extra
         colours scroll."""
+        if not shiboken6.isValid(self):
+            return                                    # (closed and deleted before this came round)
         spare = self.body.sizeHint().height() - self.scroll.viewport().height()
         screen = self.screen().availableGeometry().height() if self.screen() else 900
         self.resize(self.width(), min(self.height() + spare, int(screen * 0.9)))
@@ -6452,6 +6807,7 @@ class ThemeDialog(QDialog):
             else:
                 self._set(k, before)
         finally:
+            discard(d)                             # (gone before the real look is restyled underneath)
             live, self._live = self._live, None
             if live is not None:
                 self.preview(self.colors)          # the real look underneath, then the layer goes (same frame)
@@ -6912,15 +7268,23 @@ class FitsScreen:
         # rows coming back with Dual Device, the last pixels of fitting - used to grow only the bottom edge
         unmoved = self.isVisible() and getattr(self, "_aligned_pos", None) == self.pos()
         self.setMinimumHeight(min(320, h))
-        self.resize(width, h)
         target = self._align_with() if getattr(self, "_aligning", False) or unmoved else None
         if self.isVisible() and target is not None and target.isVisible():
-            deco_w = self.frameGeometry().width() - self.geometry().width()
-            deco_h = self.frameGeometry().height() - self.geometry().height()
+            # size and place in ONE step: resize, then move, showed the grown bottom edge for a frame before the
+            # window moved up (owner, 2026-10-20: Settings flashed at the bottom going back to Dual Device)
+            frame, inner = self.frameGeometry(), self.geometry()
+            deco_w, deco_h = frame.width() - inner.width(), frame.height() - inner.height()
             t = target.frameGeometry()
-            self.move(t.left() + (t.width() - (width + deco_w)) // 2,
-                      t.top() + (t.height() - (h + deco_h)) // 2)
+            x = t.left() + (t.width() - (width + deco_w)) // 2
+            y = t.top() + (t.height() - (h + deco_h)) // 2
+            if getattr(self, "_aligning", False):        # opening: as it always was (one step flashed on open)
+                self.resize(width, h)
+                self.move(x, y)
+            else:
+                self.setGeometry(x + inner.x() - frame.x(), y + inner.y() - frame.y(), width, h)
             self._aligned_pos = self.pos()
+        else:
+            self.resize(width, h)
         if self.isVisible():                    # keep the whole window on the screen
             room = self._screen_room(self)
             frame = max(self.frameGeometry().height() - self.geometry().height(), 32)
@@ -7294,6 +7658,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
                 self.theme_btns[self.theme].setChecked(True)
                 self._preview(self.theme, self.custom)
             finally:
+                discard(d)                       # (before the sheet moves back: no restyling a closed window)
                 sheet_on(None)
             return
         self.theme = name
@@ -7408,8 +7773,11 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         if d.exec():
             self.fonts[lang] = d.family()
             self._persist(**{f"font_{lang}": self.fonts[lang]})
+            discard(d)
             apply_fonts(self.fonts["en"], self.fonts["ja"])
             restyle_all()
+        else:
+            discard(d)
 
     def _persist(self, **changes) -> None:
         """Save some settings straight away (Save in a sub-window shouldn't also need Save in Settings).
@@ -7437,6 +7805,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
                 self._persist(bg_image=self.bg_path, bg_opacity=round(self.bg_opacity, 2),
                               bg_zoom=round(z, 4), bg_x=round(x, 4), bg_y=round(y, 4))
                 self._orig_bg = (self.bg_path, self.bg_opacity, *self.bg_crop)
+        discard(d)
         apply_background(self.bg_path, self.bg_opacity, *self.bg_crop)   # cancelled: back to the earlier choice
 
     _previewed = False                          # a theme was previewed (Cancel puts the original back)
@@ -9460,7 +9829,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     _refilling = False                       # (the grid is being emptied and refilled: the bar waits - _rebuild)
     _play_status_key = ""                    # the session's last status message (see _play_status)
 
+    CLOUD_RETRY_MS = 5000                    # the cloud folder didn't answer: read again this much later
+    _shown_root: Optional[str] = None        # the library folder the shown games were read from
+
     def _apply_library(self, data: dict, keep_files: bool = False) -> None:
+        root = self.settings.library_root
+        if not data["cloud"] and self.games and root == self._shown_root:
+            # the cloud folder was there a moment ago: Google Drive stalls while busy and then answers "no such
+            # folder" for a while (owner, 2026-10-20: the library vanished for ~30 s). Keep what's shown, try again.
+            self.statusBar().showMessage(tr("status.cloud_waiting"), self.CLOUD_RETRY_MS + 1000)
+            library = self.library
+            QTimer.singleShot(self.CLOUD_RETRY_MS,
+                              lambda: self.refresh_soon(keep_files=True) if library is self.library else None)
+            return
         if not keep_files:
             self._forget_files()
         self._quiet_rebuild = keep_files
@@ -9476,7 +9857,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self._quiet_rebuild = False
         if was_empty and games and self.no_results > 0 and self.isVisible():
             self._slide_from({}, appear=True)            # the first games fade in once "No Games Yet" has gone
-        cloud = Path(self.settings.library_root).is_dir()
+        cloud = data["cloud"]                        # (asked once, in the read: Google Drive can stall on each ask)
+        self._shown_root = root if cloud else None
         self.empty.setText(tr("grid.no_cloud", path=self.settings.cloud_root))
         self.empty.setVisible(not cloud)             # (no games yet: drawn on the grid like No Results Found)
         self.grid.setVisible(cloud)
@@ -11737,11 +12119,14 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         mine = lambda x: (x.paths_for(self.settings.machine_name).save_dir, x.registry_key) if x else None
         before = mine(g)
         d = GameDialog(self.library, self.settings, g, parent=self)
-        if d.exec():
-            if d.removed:                                   # the Edit window's Remove From Library
+        ok = d.exec()
+        removed, removed_how = d.removed, d.removed_how
+        discard(d)                                          # (else restyled on every theme change from now on)
+        if ok:
+            if removed:                                     # the Edit window's Remove From Library
                 self.clear_selection()
                 self.refresh()
-                self._offer_undo(g.title, d.removed, d.removed_how)
+                self._offer_undo(g.title, removed, removed_how)
                 return
             if mine(self.library.get(g.game_id)) != before:     # save folder set up / changed here: ask right away
                 self._ask_now.add(g.game_id)
@@ -11795,8 +12180,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             message(self, tr("settings.close_game"))
             return
         d = SettingsDialog(self.settings, self)
-        if d.exec() and d.result_settings:
-            self.apply_settings(d.result_settings)
+        # a closed window stays as a hidden child of its parent until deleted: each Settings / Edit / theme window
+        # opened since start was restyled on every theme step after that (owner, 2026-10-20: "comically slow")
+        ok = d.exec() and d.result_settings
+        result = d.result_settings
+        discard(d)
+        if ok:
+            self.apply_settings(result)
 
     def restore_selected(self) -> None:
         g = self.selected()
@@ -12722,6 +13112,7 @@ def main() -> None:
         apply_theme("dark")
     app.setWindowIcon(app_icon())
     apply_palette()
+    install_smooth_wheel(app)           # (every scrolling area glides like the library)
     install_smooth_tips(app)            # (hover popups: sooner, fading, following the mouse, inside the window)
     install_popups_to_front(app)        # (pop-ups come to the front of the screen when they open)
     app.setStyleSheet(build_style())

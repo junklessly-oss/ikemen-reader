@@ -37,7 +37,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 275 tests (2026-10-20, + wheel-press scrolling), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 277 tests (2026-10-20, 1.1.7: + smooth wheel / wheel-press everywhere; under a full run WheelGlide and SmoothHoverPopups.test_deselect... can flake on timing - pass alone), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -152,7 +152,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.6" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.7" in app.py (build.py reads it).
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
@@ -1235,8 +1235,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   wheelScrollLines x singleStep (72 px, the old jump), clamped to the range; _glide_step on a VsyncClock closes
   1 - exp(-dt / WHEEL_GLIDE_TAU 0.05) of the way each refresh (~0.15 s to arrive, more notches = one continuous glide),
   ends within 0.5 px. Anything else changing the scroll bar's value (_scrolled_elsewhere: scroll bar, keyboard
-  scrollTo, rebuilds, drag edge-scroll) ends it on the spot. Touchpads / free-spinning wheels (deltas not a multiple
-  of 120), sideways, with a key held: Qt's own scrolling as before. Measured on the laptop, 240 games, bursts of 3
+  scrollTo, rebuilds, drag edge-scroll) ends it on the spot. Touchpads (since 2026-10-20 fine-delta
+  wheels glide too), sideways, with a key held: Qt's own scrolling as before. Measured on the laptop, 240 games, bursts of 3
   notches down and up (bigbench BIG_PROFILE=wheel): ~1,070 glide frames, 2 over 25 ms (worst 29), never backwards,
   ends exactly at top / bottom. Test: WheelGlide.
   CURVE v2 (owner, 2026-10-19: "not as smooth as Steam's"): the exponential chase kicked hardest on the first frame,
@@ -1384,6 +1384,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   17 px from the top bar and 17 px from where the covers are cut off (was 10 bottom 0: covers cut right under it).
 
 ## Ideas for later (owner interested, not scheduled)
+- Saved custom themes (owner, 2026-10-20): keep more than one Custom Theme - save the current colours under a name,
+  pick / rename / delete saved ones (e.g. in Custom Theme next to Start From Dark / Light). Details not discussed yet
+  (per device or shared by Ikemen Sync, whether the background picture / fonts belong to a saved theme).
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +
   Custom edits; restyle_all / MainWindow.restyle -> app_icon()), and an unpinned taskbar button shows it (owner
@@ -1452,3 +1455,55 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 ## Notes
 - Owner is not very experienced with terminals; explain commands plainly.
 - Back up real save folders before testing on a real game (`..\save-backups\`).
+
+## Fixes 2026-10-20 (evening; released as 1.1.7)
+- Cloud folder not answering (Google Drive stall: library vanished ~30 s): _apply_library keeps the games already shown
+  (same library_root, _shown_root), status.cloud_waiting, re-reads every CLOUD_RETRY_MS 5 s.
+- Settings back to Dual Device: _set_fit_height resizes + re-centres in ONE setGeometry (bottom edge flashed); while
+  opening (_aligning) still resize + move as before (one step brought back the open flash).
+- Wheel: any mouse wheel glides, also parts of a notch (high-res / free-spin wheels jumped: "smooth only sometimes");
+  touchpads (pixel delta or a scroll phase) keep Qt's scrolling.
+- Closed windows are deleted (discard(): Settings, Custom Theme, colour picker, font, background). They stayed as hidden
+  children and every theme restyle also restyled them - slower the longer the program ran. Closing Custom Theme
+  0.40 -> 0.17 s, Cancel 0.15 -> 0.07 s. Keeping the sheet on the main window while open is still right (without it
+  the picker opens in 0.54 s instead of 0.24). Picker set-up ~0.24 s = the restyles + grabs LiveColour needs.
+- SmoothWheel (app event filter, install_smooth_wheel in main): every scroll area except LibraryGrid glides on the
+  wheel with the library's curve (Settings, Edit, Custom Theme, guide, drop-down lists, VNDB, restore...); item views
+  switched to per-pixel scrolling; touchpads / sideways / modifiers / nothing to scroll that way -> Qt as before.
+  Test: SmoothWheelEverywhere.
+- Drive outage + Read: an unreadable cloud reads as empty -> decide() = PUSHED (never "deleted everything") -> the
+  push fails -> sync.failed, game not started. Local saves never touched.
+- SmoothWheel fixes after the owner's checks: a notch past the end while still gliding there is spent (handing it on let
+  Qt scroll the bar itself and cut the glide off: Settings "bounced"); a drop-down / number box / slider inside a
+  scrolling window passes the wheel to the window (the glide slid Language / This Is under the pointer and the next
+  notch switched them). While gliding, a QScrollArea in a dialog gets a solid background (COLORS["bg"], _solid) so Qt
+  slides what's drawn instead of repainting the whole view: Settings quick wheel late frames 9-16 -> 0, pixel-identical
+  (dark + light). Owner's mouse sends whole notches (120): the fine-delta change wasn't his "sometimes smooth".
+- Launch: the library's first glide builds its strips on the spot (one ~14 ms frame); after ~0.25 s as steady as ever.
+- Probe scripts (scratchpad, this session): allscroll*.py (real wheel over each window, steps + paints per frame).
+- Wheel-press scrolling everywhere: _AutoScroll split into _begin / _end / _move hooks (library: glide + strips);
+  _AreaAutoScroll for any other scroll area (SmoothWheel._press on a middle press over a scroll area or anything inside
+  one; solid background while it runs). Test: WheelPressEverywhere.
+- Every flick started with an 8-16 ms frame: right after each glide, drawing the lights' still picture (render() into
+  _still, _making_still) went through _paint_normal and DROPPED the strips, so the next flick rebuilt them. Now a
+  still-picture render never drops them (nor uses up _keep_layer). Owner's real setup, 3 automatic launch + scroll
+  rounds (scratchpad launchscroll.py: closes the app, starts it with the recorders, wheel spins the moment ITS window
+  shows - matched by pid, not title: an Explorer window "Ikemen Reader" exists): late steps ~20 -> 1-2 per 500,
+  slow glide frames only the very first flick after launch (11-15 ms, strips not built yet).
+- Easter egg fades (owner: "something seems off"): the see-through dark layer made Qt redraw the whole window (background
+  picture too) every frame: ~40 % late frames, darkness steps 20-30 uneven; boxes popped in / out. Now EasterEgg fades
+  over a picture of the window (_freeze: window.grab() before it shows / on dismiss with the boxes hidden and the layer
+  drawing nothing, WA_OpaquePaintEvent) with box pictures (_box_picture: render() on transparent - grab() gave a solid
+  square) fading alongside; FADE_S 0.3, ease-out cubic placed by frame_time(); settled: _thaw = the live window (swap
+  pixel-identical). Late frames 33/80 -> 4-10/100 opening, 30/34 -> 0-6/45 closing; steps even (12). Test updated
+  (SmoothAnimations: the boxes are live after the fade).
+- Easter egg boxes: words / right-hand edges shifted when a wiggle settled (Windows draws text + edges one way while
+  turned or grown and snaps them to pixels upright at rest size; the size also snapped its last 0.002). WobbleBox now
+  shows _settled_picture(scale, fill) = the box drawn EXACTLY as before standing still at the size it's heading for
+  (old look within 2/255), 1:1 when still, moved / turned / grown from there while moving; a new size / colour blends
+  from the picture it left over the move. TrashButton's final snap 0.002 -> 0.0002. Settle now = a slight even
+  sharpening (~2x a normal late frame's change), no shift. (A 2x-picture version was tried first: words looked
+  lighter at rest - owner: "odd".)
+- Long drop-down lists (60 rows, real wheel): per-pixel glide, 1-2 late of ~110 frames, list paint 2.4-3.3 ms.
+  ThemedCombo lists scroll per pixel from the start; _AreaAutoScroll._begin switches any item view to per pixel (same
+  row kept on top) - wheel-press in a list moved whole rows before. In an open list it scrolls, the list stays open.

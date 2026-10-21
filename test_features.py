@@ -2359,6 +2359,9 @@ class SmoothAnimations(unittest.TestCase):
             app, w, _ = self._window(tmp, n=6, art_every=1)
             try:
                 egg = app.EasterEgg(w)
+                egg._t0 -= 1                                     # (the fade in done: the boxes are live)
+                egg._step()
+                self.assertTrue(egg._rocker.isVisible())
                 egg._rocker._scale = egg._rocker.HOT_SCALE
                 t = w.rumble_t
                 egg._rumble_step()
@@ -5022,12 +5025,12 @@ class WheelGlide(unittest.TestCase):
                 vp, sb = w.grid.viewport(), w.grid.verticalScrollBar()
                 self.assertGreater(sb.maximum(), 400)
 
-                def wheel(dy):
+                def wheel(dy, pixels=0):
                     c = QPointF(vp.width() / 2, vp.height() / 2)
-                    QApplication.sendEvent(vp, QWheelEvent(c, c, QPoint(0, 0), QPoint(0, dy), Qt.NoButton,
+                    QApplication.sendEvent(vp, QWheelEvent(c, c, QPoint(0, pixels), QPoint(0, dy), Qt.NoButton,
                                                            Qt.NoModifier, Qt.NoScrollPhase, False))
 
-                def settle(sec=1.0):
+                def settle(sec=3.0):                               # (a busy full run can starve the clock)
                     end = time.monotonic() + sec
                     while time.monotonic() < end and w.grid._glide_to is not None:
                         QApplication.processEvents()
@@ -5046,9 +5049,13 @@ class WheelGlide(unittest.TestCase):
                 settle(0.3)
                 self.assertEqual(sb.value(), 10)
                 self.assertIsNone(w.grid._glide_to)
-                wheel(-40)                                         # a touchpad's small step: straight away, no glide
+                wheel(-40)                                         # a fine wheel's part of a notch glides too
+                self.assertIsNotNone(w.grid._glide_to)
+                settle()
+                self.assertEqual(sb.value(), 10 + round(step / 3))
+                wheel(-40, pixels=-40)                             # a touchpad's step: straight away, no glide
                 self.assertIsNone(w.grid._glide_to)
-                self.assertGreater(sb.value(), 10)
+                self.assertGreater(sb.value(), 10 + round(step / 3))
                 sb.setValue(0)
                 wheel(120)                                         # already at the top: stays there
                 settle()
@@ -5406,3 +5413,120 @@ class DragFolderInPlace(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class SmoothWheelEverywhere(unittest.TestCase):
+    """2026-10-20 (owner: "everything super smooth"): every scrolling area outside the library glides on the wheel
+    like it does; touchpads keep Qt's own; at the end the wheel goes on to the area outside."""
+
+    def test_scroll_area_and_list_glide(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+        from PySide6.QtWidgets import QApplication, QListWidget, QScrollArea, QWidget
+        import app
+        qa = QApplication.instance() or QApplication([])
+        app.install_smooth_wheel(qa)
+        area = QScrollArea()
+        inner = QWidget()
+        inner.setFixedSize(200, 3000)
+        area.setWidget(inner)
+        area.resize(220, 300)
+        lst = QListWidget()
+        lst.addItems([f"row {i}" for i in range(200)])
+        lst.resize(200, 300)
+        area.show()
+        lst.show()
+        try:
+            def wheel(w, dy, pixels=0):
+                vp = w.viewport()
+                c = QPointF(10, 10)
+                QApplication.sendEvent(vp, QWheelEvent(c, c, QPoint(0, pixels), QPoint(0, dy), Qt.NoButton,
+                                                       Qt.NoModifier, Qt.NoScrollPhase, False))
+
+            def settle(sec=1.0):
+                end = time.monotonic() + sec
+                while time.monotonic() < end and app._SMOOTH_WHEEL.glides:
+                    QApplication.processEvents()
+                    time.sleep(0.005)
+            for w in (area, lst):
+                sb = w.verticalScrollBar()
+                wheel(w, -120)
+                self.assertEqual(sb.value(), 0)                       # not there at once: it glides
+                self.assertIn(sb, app._SMOOTH_WHEEL.glides)
+                settle()
+                self.assertGreater(sb.value(), 50)
+                at = sb.value()
+                wheel(w, -40, pixels=-40)                             # a touchpad: Qt's own, no glide
+                self.assertNotIn(sb, app._SMOOTH_WHEEL.glides)
+                self.assertNotEqual(sb.value(), at)
+                sb.setValue(0)
+                wheel(w, 120)                                         # at the top: nothing to glide
+                self.assertNotIn(sb, app._SMOOTH_WHEEL.glides)
+                sb.setValue(sb.maximum() - 30)
+                wheel(w, -120)                                        # gliding to the end...
+                wheel(w, -120)                                        # ...a quick extra notch doesn't cut it off
+                self.assertIn(sb, app._SMOOTH_WHEEL.glides)
+                settle()
+                self.assertEqual(sb.value(), sb.maximum())
+            from PySide6.QtWidgets import QComboBox
+            combo = QComboBox(inner)                                  # a drop-down inside: the wheel scrolls the area
+            combo.addItems(["a", "b", "c"])
+            combo.show()
+            sb = area.verticalScrollBar()
+            sb.setValue(0)
+            QApplication.sendEvent(combo, QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120),
+                                                      Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False))
+            self.assertEqual(combo.currentIndex(), 0)
+            self.assertIn(sb, app._SMOOTH_WHEEL.glides)
+        finally:
+            area.close()
+            lst.close()
+
+
+class WheelPressEverywhere(unittest.TestCase):
+    """2026-10-20 (owner): wheel-press scrolling in every scrolling area, not just the library - pressed over anything
+    inside a window's scroll area it starts, moving away from the press scrolls, letting go (after moving) stops it."""
+
+    def test_settings_like_window(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QEvent, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtWidgets import QApplication, QDialog, QLabel, QScrollArea, QVBoxLayout, QWidget
+        import app
+        qa = QApplication.instance() or QApplication([])
+        app.install_smooth_wheel(qa)
+        d = QDialog()
+        lay = QVBoxLayout(d)
+        area = QScrollArea()
+        inner = QWidget()
+        inner.setFixedSize(300, 3000)
+        label = QLabel("a hint text", inner)
+        label.move(10, 100)
+        area.setWidget(inner)
+        lay.addWidget(area)
+        d.resize(340, 400)
+        d.show()
+        try:
+            def mouse(kind):
+                pt = QPointF(5, 5)
+                QApplication.sendEvent(label, QMouseEvent(kind, pt, QPointF(label.mapToGlobal(pt.toPoint())),
+                                                          Qt.MiddleButton, Qt.MiddleButton if kind ==
+                                                          QEvent.MouseButtonPress else Qt.NoButton, Qt.NoModifier))
+            mouse(QEvent.MouseButtonPress)
+            auto = area.findChild(app._AreaAutoScroll)
+            self.assertIsNotNone(auto)
+            self.assertTrue(auto.active)
+            self.assertTrue(area.viewport().autoFillBackground())        # solid while it runs (quick sliding)
+            auto.anchor -= 150                                           # the pointer well below the press
+            end = time.monotonic() + 0.4
+            while time.monotonic() < end:
+                QApplication.processEvents()
+                time.sleep(0.005)
+            self.assertGreater(area.verticalScrollBar().value(), 20)
+            mouse(QEvent.MouseButtonRelease)                             # held and moved: letting go stops it
+            self.assertFalse(auto.active)
+            self.assertFalse(area.viewport().autoFillBackground())
+            self.assertIsNone(QApplication.overrideCursor())
+        finally:
+            d.close()

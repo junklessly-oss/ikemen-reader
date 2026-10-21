@@ -160,6 +160,8 @@ S: dict[str, tuple[str, str]] = {
     "status.startup_uploaded":  ("Uploaded newer saves for: {games}", "新しいセーブをアップロードしました：{games}"),
     "status.title_updated":     ('Title updated to "{title}" from the game window.', "ゲーム画面からタイトルを「{title}」に更新しました。"),
     "status.live_update":       ("Library updated from the other device.", "もう一方の端末の変更を反映しました。"),
+    "status.cloud_waiting":     ("The cloud folder isn't answering. Your library stays as it is.",
+                                 "クラウドフォルダーが応答していません。ライブラリはそのままです。"),
     "status.cover_found":       ("Found a cover on VNDB.", "VNDBでカバー画像が見つかりました。"),
 
     # launch problems

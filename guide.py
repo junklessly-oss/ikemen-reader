@@ -162,7 +162,7 @@ GUIDE = {
             "it. Inside a folder, drag a game onto \"‹ Library\" to take it out. Right-click a folder to rename or "
             "remove it (its games go back to the library).",
             "- Click an empty space or press Esc to deselect.",
-            "- Press the mouse wheel in the library to scroll by moving the mouse up or down (the further, the faster). "
+            "- Press the mouse wheel in the library, or in any window or list that scrolls, to scroll by moving the mouse up or down (the further, the faster). "
             "Hold it and let go to stop, or click it once and click again to stop.",
         ]),
         ("Removing Games", [
@@ -294,7 +294,7 @@ GUIDE = {
             "- フォルダー：ゲームを別のゲームの中央にドラッグすると、2つをまとめた新しいフォルダーができます。フォルダーにドラッグすると追加されます。フォルダーの中では、ゲームを「‹ ライブラリ」"
             "にドラッグすると外に出せます。フォルダーを右クリックすると、名前の変更や解除ができます（中のゲームはライブラリに戻ります）。",
             "- 何もないところをクリックするか、Escキーを押すと選択を解除できます。",
-            "- ライブラリでマウスホイールを押し込むと、マウスを上下に動かしてスクロールできます（離すほど速くなります）。押したまま動かした場合は離すと止まり、一度クリックした場合はもう一度クリックすると止まります。",
+            "- ライブラリやスクロールできるウィンドウ・リストでマウスホイールを押し込むと、マウスを上下に動かしてスクロールできます（離すほど速くなります）。押したまま動かした場合は離すと止まり、一度クリックした場合はもう一度クリックすると止まります。",
         ]),
         ("ゲームの削除", [
             "- ゲームを右下のゴミ箱にドラッグするか、ゲームを選んでゴミ箱をクリックします。",
