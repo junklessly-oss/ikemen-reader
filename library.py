@@ -238,7 +238,7 @@ def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSetting
     return s
 
 
-SOLO_PARTS = ("games", "artwork", "folders.json", "order.json")   # the library itself (not saves / devices / settings)
+SOLO_PARTS = ("games", "artwork", "folders.json", "order.json", "themes")   # the library itself + saved themes (not saves / devices / settings)
 SOLO_START = "solo-start.json"     # the shared library as it was when solo began (file times), for the merge
 
 
@@ -284,6 +284,15 @@ def backup_solo_library(app_dir: Optional[Path] = None, keep: int = 5) -> Option
     return dest
 
 
+def _theme_names(root: Path) -> dict:
+    """Saved themes' id -> name (themes.py's list), for the merge back to Dual."""
+    try:
+        data = json.loads((root / "themes" / "themes.json").read_text("utf-8"))["themes"]
+        return {k: v.get("name", "") for k, v in data.items() if isinstance(v, dict)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
 def start_solo_library(cloud_root: str, app_dir: Optional[Path] = None) -> Path:
     """Going solo: this computer's own copy of the shared library, made fresh from the cloud folder (when there is
     one: a new solo device starts empty). Nothing in the cloud folder changes. An older copy is replaced."""
@@ -302,7 +311,7 @@ def start_solo_library(cloud_root: str, app_dir: Optional[Path] = None) -> Path:
     (fresh / "games").mkdir(exist_ok=True)
     # what the shared library looked like when solo began: going back to Dual tells from it what changed where
     snap = {"time": time.time(), "games": {}, "folders": _mtime(fresh / "folders.json"),
-            "order": _mtime(fresh / "order.json")}
+            "order": _mtime(fresh / "order.json"), "themes": _theme_names(fresh)}
     for f in (fresh / "games").glob("*.json"):
         snap["games"][f.stem] = _mtime(f)
     _atomic_write(fresh / SOLO_START, json.dumps(snap))
@@ -360,6 +369,7 @@ class Game:
     # Reading"; only when every file was new in that session). A side of a conflict still holding exactly those
     # saves is named as such, not "(Newer)": the game wrote them by starting, they may hold no progress (owner)
     setup_saves: dict[str, str] = field(default_factory=dict)
+    notes: str = ""                                     # the owner's notes on the game (right-click > Notes)
 
     def removed_here(self, machine: str) -> bool:
         return machine in self.removed_on
@@ -1107,4 +1117,10 @@ def merge_solo(cloud_root: str, machine: str, joins: Optional[dict] = None, app_
         C.set_library_order(first + [x for x in (renamed.get(y, y) for y in second) if x not in first])
     for fid in list(C._folders_raw()):
         C._drop_folder_if_empty(fid)
+    import themes                                      # (saved themes: added / renamed / deleted while solo)
+    names = snap.get("themes")
+    try:
+        themes.merge(str(root), cloud_root, names if isinstance(names, dict) else {})
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass                                           # (a damaged saved-themes list: the library still goes back)
     return report

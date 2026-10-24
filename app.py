@@ -26,12 +26,12 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import (QAbstractNativeEventFilter, QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
                             QTimer, QUrl, Signal)
-from PySide6.QtGui import (QCursor, QPalette, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
+from PySide6.QtGui import (QCursor, QTextCursor, QPalette, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap, QRegion,
                            QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QAbstractScrollArea, QScrollArea, QTextBrowser, QAbstractItemView, QApplication, QButtonGroup, QGraphicsOpacityEffect, QCheckBox, QComboBox,
                                QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+                               QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QTextEdit, QStackedWidget,
                                QProgressBar, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
                                QProxyStyle, QStatusBar, QStyledItemDelegate, QStyleOption, QStyleOptionButton, QStyleOptionViewItem, QVBoxLayout,
                                QWidget)
@@ -42,6 +42,7 @@ import i18n
 import lnk
 import startup
 import devsync
+import themes
 import guide
 import luna
 import outside
@@ -91,7 +92,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "1.1.7"
+APP_VERSION = "2.0.0"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -558,6 +559,7 @@ class LibraryGrid(QListWidget):
     _glide_t0 = 0.0
     _glide_len = 0.2
     _gliding = False          # (True while the glide itself moves the scroll bar)
+    _glide_prev = None        # the last frame's (whole-pixel step, curve speed) - see _glide_step
     _heading = 0              # wheel-press scrolling: +1 down / -1 up (a glide goes towards _glide_to)
 
     def notch_px(self) -> float:
@@ -684,13 +686,26 @@ class LibraryGrid(QListWidget):
             self._aim(self._glide_to, self._glide_len)
             if self._glide_to is None:
                 return
-        pos, _, s = self._glide_state(frame_time())           # (where it should be when this frame shows)
+        pos, vel, s = self._glide_state(frame_time())         # (where it should be when this frame shows)
         done = s >= 1.0
         if WHEEL_LOG:
             WHEEL_LOG.append(f"{time.perf_counter():.4f} step pos={pos:.1f} s={s:.2f}")
+        cur = sb.value()
+        want = round(self._glide_to if done else min(hi, max(lo, pos)))
+        step, prev = want - cur, self._glide_prev
+        # each frame's whole-pixel step follows the curve's speed: never smaller than the last while it speeds up,
+        # never bigger while it slows down - rounding each frame's place on its own made 5, 4, 6 / 3, 4 wobbles
+        # (owner, 2026-10-24). Only within a pixel of the curve, so it still lands exactly where it would.
+        if not done and prev is not None and step and prev[0] and (step > 0) == (prev[0] > 0):
+            last = abs(prev[0])
+            low, high = (last, last + 1) if abs(vel) > abs(prev[1]) else (max(1, last - 1), last)  # (a pixel at a time)
+            even = math.copysign(min(high, max(low, abs(step))), step)
+            if abs(cur + even - pos) <= 1.5 and lo <= cur + even <= hi:
+                step = int(even)
+        self._glide_prev = (step, vel)
         self._gliding = True
         try:
-            sb.setValue(round(self._glide_to if done else min(hi, max(lo, pos))))
+            sb.setValue(cur + step)
         finally:
             self._gliding = False
         if done:
@@ -701,6 +716,7 @@ class LibraryGrid(QListWidget):
             self._end_glide()
 
     def _end_glide(self) -> None:
+        self._glide_prev = None
         if self._glide_to is not None:
             self._glide_to = None
             self._glide_clock_ready().stop()
@@ -731,10 +747,12 @@ class LibraryGrid(QListWidget):
 
     def layer_active(self) -> bool:
         w = self.w
-        return ((self._glide_to is not None or self._layer_hold) and not self.bare and self.marker is None
+        # (a dragged game's edge scroll glides too: the picked-up cover is left out of the strips and drawn live -
+        # fading - and the drop line goes on top; owner 2026-10-24: as smooth as the wheel)
+        return ((self._glide_to is not None or self._layer_hold) and not self.bare
                 and self.isVisible()
-                and getattr(w, "_ghost", None) is None and w._landing is None and not w.slides
-                and not w._search_moving() and not w.rumble and w.no_results == 0 and w.drag_dim == 0
+                and w._landing is None and not w.slides
+                and not w._search_moving() and not w.rumble and w.no_results == 0
                 and w.bookmark_alpha in (0.0, 1.0) and not BACKGROUND["live"])
 
     def _drop_layer(self, *_args) -> None:
@@ -764,7 +782,9 @@ class LibraryGrid(QListWidget):
     def _sync_skip(self) -> frozenset:
         """The covers left out of the strips = those lifted / settling now; a change patches just their spots."""
         w = self.w
-        skip = frozenset(gid for gid, h in w.hover.items() if h > 0) | ({w.hovered} if w.hovered else frozenset())
+        dim = getattr(w, "_dim_gid", None)      # (the picked-up game: drawn live, faded, its light with it)
+        skip = frozenset(gid for gid, h in w.hover.items() if h > 0) | ({w.hovered} if w.hovered else frozenset()) \
+            | ({dim} if dim else frozenset())
         if skip != self._layer_skip:
             changed, self._layer_skip = skip ^ self._layer_skip, skip
             self._patch_layer(changed)
@@ -782,7 +802,7 @@ class LibraryGrid(QListWidget):
         ready and never draws one mid-frame (that was most of the late frames while flicking quickly)."""
         w = self.w
         if (not self.isVisible() or w.isMinimized() or self._glide_to is not None or self.bare
-                or w.slides or w._search_moving() or w.rumble or getattr(w, "_ghost", None) is not None):
+                or w.slides or w._search_moving() or w.rumble):
             return
         self._sync_skip()
         lo, hi = self._layer_keep()
@@ -973,8 +993,12 @@ class LibraryGrid(QListWidget):
         try:
             for i in vis:                                  # covers settling from a hover: drawn as usual, live
                 index = self.model().index(i, 0)
-                if index.data(GAME_ID_ROLE) in skip:
+                iid = index.data(GAME_ID_ROLE)
+                if iid in skip:
+                    # (the picked-up game with its light, faded together - exactly as normal drawing does)
+                    delegate._skip_light = iid != w._dim_gid
                     delegate.paint(p, self._item_option(index), index)
+                    delegate._skip_light = True
         finally:
             w.covers.no_decode = False
             delegate._skip_light = False
@@ -982,10 +1006,16 @@ class LibraryGrid(QListWidget):
             index = self.model().index(i, 0)
             iid = index.data(GAME_ID_ROLE)
             centre = CardDelegate.light_center(CardDelegate.cover_rect(self.visualRect(index), w.hover.get(iid, 0.0)))
+            if iid == w._dim_gid and iid in skip:
+                continue                                   # (drawn with its cover above, faded with it)
             if is_folder(iid):
                 paint_light(p, centre, w.folder_colours(iid[len(FOLDER_PREFIX):]), "calm", w.settings.pulse)
             elif iid in w.games:
                 delegate._paint_light(p, centre, w.light_state(iid), iid)
+        if self.marker is not None:                        # (a dragged game's drop line)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(COLORS["select"]))
+            p.drawRoundedRect(self.marker, 2, 2)
         p.end()
 
     def dataChanged(self, *args) -> None:
@@ -1103,10 +1133,9 @@ class LibraryGrid(QListWidget):
 
     def _layer_blocker(self) -> str:
         w = self.w
-        checks = {"bare": self.bare, "marker": self.marker is not None, "hidden": not self.isVisible(),
-                  "ghost": getattr(w, "_ghost", None) is not None, "landing": w._landing is not None,
+        checks = {"bare": self.bare, "hidden": not self.isVisible(), "landing": w._landing is not None,
                   "slides": bool(w.slides), "search": w._search_moving(), "rumble": bool(w.rumble),
-                  "no_results": w.no_results != 0, "drag_dim": w.drag_dim != 0,
+                  "no_results": w.no_results != 0,
                   "bookmark": w.bookmark_alpha not in (0.0, 1.0), "bg_live": bool(BACKGROUND["live"])}
         return ",".join(k for k, v in checks.items() if v)
 
@@ -1249,6 +1278,10 @@ class LibraryGrid(QListWidget):
                 if r is not None:
                     self.viewport().update(r.adjusted(-3, -3, 3, 3).toAlignedRect())
             self.marker = rect
+            # (the line is drawn on top of the covers, never into the strips: redrawing its spot changes no cover.
+            # Dropping them each time it moved meant a dragged game's edge scroll began by building them all in its
+            # first frame - an 8 ms hitch, owner 2026-10-24: "abrupt start")
+            self._keep_layer = True
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
@@ -1592,7 +1625,9 @@ SCROLLBAR_LINGER_S = 0.6             # stays visible this long after scrolling /
 SCROLLBAR_EDGE_PX = 36               # mouse this close to the right edge shows it
 DRAG_SCROLL_ZONE = 70                # dragging a game this close to the grid's top/bottom scrolls it...
 DRAG_SCROLL_MIN, DRAG_SCROLL_MAX = 2, 60   # ...this many px per frame, faster the further you push
-DRAG_AIM_SPEED = 8                   # faster than this, no drop line / target lift while it scrolls (rows race past)
+DRAG_SCROLL_EASE_S = 0.16          # ... its speed eases towards the new one over about this long
+DRAG_SCROLL_BRAKE = 5000            # ... and slows into the library's end at this rate (px/s²)
+DRAG_AIM_SPEED = 8                  # let go scrolling faster than this: the game goes back (rows race past, nothing to aim at)
 LIGHT_R = 5.5
 LOGO_H = 30
 
@@ -1673,6 +1708,10 @@ QListWidget#library {{ background: transparent; }}
 QLineEdit, QComboBox {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px;
                        padding: 5px 8px; selection-background-color: {c['button_hover']}; }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {c['focus']}; }}
+QFrame#notes_box {{ background: transparent; }}
+QLabel#notes_title {{ color: {c['text']}; font-size: 20pt; }}
+QTextEdit#notes {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px;
+                       padding: 6px 8px; font-size: 11pt; selection-background-color: {c['button_hover']}; }}
 QComboBox#fontpick QAbstractItemView::item {{ padding: 5px 5px; min-height: 22px; }}
 QScrollArea#settings_scroll, QWidget#settings_content {{ background: transparent; }}
 QTextBrowser#guide {{ background: {c['bg']}; border: none; font-size: 10.5pt; }}
@@ -2130,7 +2169,10 @@ def confirm_remove(parent, game: Game, machine: str, solo: bool = False) -> Opti
     import html
     shared = not solo and any(p.exe for m, p in game.paths.items() if m != machine)
     key = "game.remove_choose" if shared else "game.remove_confirm"
-    body = html.escape(tr(key, title=game.title)).replace("\n", "<br>")
+    body = tr(key, title=game.title)
+    if game.notes.strip():                       # (they live in the game file: they go with it)
+        body += "\n" + tr("game.remove_notes_both" if shared else "game.remove_notes")
+    body = html.escape(body).replace("\n", "<br>")
     text = f'<span style="font-size:13pt; font-weight:600">{html.escape(tr("game.remove_sure"))}</span><br><br>{body}'
     buttons = ([("here", tr("game.remove_here")), ("both", tr("game.remove_both")), ("no", tr("game.cancel"))]
                if shared else [("here", tr("game.remove_yes")), ("no", tr("game.cancel"))])
@@ -2158,6 +2200,51 @@ class Task(QThread):
             self.done.emit(self.fn())
         except Exception as e:  # noqa: BLE001 - reported to the UI
             self.failed.emit(e)
+
+
+_LIVE_TASKS: set = set()          # every background task still running, whoever started it
+
+
+def wait_for_tasks(seconds: float) -> bool:
+    """Give running background tasks up to `seconds` to finish (at exit). True if all did."""
+    end = time.monotonic() + seconds
+    for t in list(_LIVE_TASKS):
+        t.wait(max(0, int((end - time.monotonic()) * 1000)))
+    return not any(t.isRunning() for t in _LIVE_TASKS)
+
+
+class TaskOwner:
+    """Mixin: run work in the background. A task belongs to the program, not to the window that
+    started it: closing the window never waits for it (no freeze) and never deletes it mid-run
+    (which would make Qt abort the program); if the window is gone, the result is simply dropped."""
+
+    def _run(self, fn, done, failed=None, low=False):
+        import shiboken6
+        if not hasattr(self, "_tasks"):
+            self._tasks = []
+        t = Task(fn)
+        owner = self
+
+        def deliver(callback):
+            def call(value):
+                if callback is not None and shiboken6.isValid(owner):
+                    callback(value)
+            return call
+        t.done.connect(deliver(done))
+        t.failed.connect(deliver(failed))
+
+        def finished():
+            _LIVE_TASKS.discard(t)
+            if t in owner._tasks:
+                owner._tasks.remove(t)
+        t.finished.connect(finished)
+        _LIVE_TASKS.add(t)
+        self._tasks.append(t)
+        # low: background work the window must never wait for (cover loading): on a weak or busy PC Windows gives
+        # the window its turn first - on one core, loading covers while flinging through a big library held
+        # scroll frames up to ~170 ms (the loader's time slices)
+        t.start(QThread.Priority.LowPriority if low else QThread.Priority.InheritPriority)
+        return t
 
 
 def sync_state(engine: SyncEngine, game: Game, machine: str) -> str:
@@ -2927,6 +3014,15 @@ def frame_time() -> float:
     return now + (nxt - count.value) / freq
 
 
+def frame_period() -> float:
+    """Seconds between the screen's refreshes (as of the last frame_time(); 1/60 where Windows can't say)."""
+    if not _FRAME_TIMING:
+        frame_time()                     # (asked before any frame: read Windows' timing first, not a 60 Hz guess)
+    if _FRAME_TIMING and _FRAME_TIMING[0] is not None and _FRAME_TIMING[3].qpcRefreshPeriod:
+        return _FRAME_TIMING[3].qpcRefreshPeriod / _FRAME_TIMING[2]
+    return 1 / 60
+
+
 class _VsyncHub(QObject):
     """The one background thread behind every VsyncClock: it waits for Windows' next screen composition (DwmFlush:
     once per refresh, whatever the screen's rate) and then ticks every running clock, all in the same frame. It
@@ -3628,10 +3724,10 @@ class PopupsToFront(QObject):
             # the focus comes AFTER it's shown (_reveal): taking it first turned the main window's title bar grey -
             # right under where the pop-up was about to appear - for 1-3 frames (owner: "flickers")
             obj.setAttribute(Qt.WA_ShowWithoutActivating, True)
-            QTimer.singleShot(250, lambda d=obj: self._reveal(d, True))            # (in case one never comes)
+            QTimer.singleShot(250, obj, lambda d=obj: self._reveal(d, True))            # (in case one never comes)
         elif t == QEvent.Paint and isinstance(obj, QDialog) and obj.property("cloaked"):
             obj.setProperty("painted", True)
-            QTimer.singleShot(0, lambda d=obj: self._reveal(d))   # (after this paint reaches its window)
+            QTimer.singleShot(0, obj, lambda d=obj: self._reveal(d))   # (after this paint reaches its window)
         return False
 
     @staticmethod
@@ -4285,7 +4381,8 @@ class CardDelegate(QStyledItemDelegate):
             self._placeholders[key] = pm
         return pm
 
-    def _clipped(self, p: QPainter, cover: QRectF, e: float, draw, key: Optional[tuple] = None) -> None:
+    def _clipped(self, p: QPainter, cover: QRectF, e: float, draw, key: Optional[tuple] = None,
+                 lifted: Optional[tuple] = None) -> None:
         """Draw a tile's contents (draw(painter, rect)) inside its rounded outline. While it's hovered,
         the contents (cover + dark fade + text) are first painted together on a separate layer and then
         cut out once: cutting out each piece separately leaves faint light pixels along the rounded
@@ -4328,15 +4425,28 @@ class CardDelegate(QStyledItemDelegate):
         else:
             dev = p.device()
             dpr = dev.devicePixelRatioF() if dev is not None else 1.0
-            layer = QPixmap(max(1, math.ceil(cover.width() * dpr)), max(1, math.ceil(cover.height() * dpr)))
-            layer.setDevicePixelRatio(dpr)
-            layer.fill(Qt.transparent)
-            lp = QPainter(layer)
-            lp.setRenderHint(QPainter.Antialiasing)
-            lp.setRenderHint(QPainter.SmoothPixmapTransform)
-            lp.setRenderHint(QPainter.TextAntialiasing)
-            draw(lp, QRectF(0, 0, cover.width(), cover.height()))
-            lp.end()
+            # fully lifted: the finished layer is kept like a still tile's - made again every frame it cost ~1 ms
+            # (the cover resampled, the fade, the text), the most of any frame while a dragged game's edge scroll
+            # lifts the cover under it (2026-10-24)
+            full = key is not None and lifted is not None and e >= 1.0
+            lkey = key + lifted + (cover.width(), cover.height(), dpr, "lifted") if full else None
+            layer = self._flat.get(lkey) if full else None
+            if layer is None:
+                layer = QPixmap(max(1, math.ceil(cover.width() * dpr)), max(1, math.ceil(cover.height() * dpr)))
+                layer.setDevicePixelRatio(dpr)
+                layer.fill(Qt.transparent)
+                lp = QPainter(layer)
+                lp.setRenderHint(QPainter.Antialiasing)
+                lp.setRenderHint(QPainter.SmoothPixmapTransform)
+                lp.setRenderHint(QPainter.TextAntialiasing)
+                draw(lp, QRectF(0, 0, cover.width(), cover.height()))
+                lp.end()
+                if full:
+                    self._flat[lkey] = layer
+                    while len(self._flat) > FLAT_TILES:
+                        self._flat.popitem(last=False)
+            elif full:
+                self._flat.move_to_end(lkey)
             p.setClipPath(clip)
             p.drawPixmap(cover, layer, QRectF(layer.rect()))
         p.restore()
@@ -4515,7 +4625,10 @@ class CardDelegate(QStyledItemDelegate):
                 # placeholders already show the title in the middle
                 self._overlay(q, option, rect, e, game.title if pm else "", play_line)
 
-        self._clipped(p, cover, e, draw, ("g", src.cacheKey()))
+        # (fully lifted: what its text shows is part of the key - day_text changes with the date)
+        lifted = (game.title if pm else "", game.total_playtime, game.last_played, game.status, self.w.quiet(gid),
+                  self.w.settings.show_stats, i18n.language(), option.font.key(), time.strftime("%Y%m%d"))
+        self._clipped(p, cover, e, draw, ("g", src.cacheKey()), lifted)
         if self.w.bookmark_alpha > 0:                    # (fades when the bookmark button is pressed)
             p.setOpacity(ease(self.w.bookmark_alpha))
             paint_bookmark(p, cover, game.status, width=GRID["cover_w"])
@@ -5504,6 +5617,8 @@ class ThemedCombo(QComboBox):
         return self._goes_up(need)
 
     def _update_arrow(self) -> None:
+        if not shiboken6.isValid(self):
+            return                                 # (its window closed and deleted before this came round)
         up = self._opens_up()
         if bool(self.property("opens_up")) != up:
             self.setProperty("opens_up", up)
@@ -5519,7 +5634,7 @@ class ThemedCombo(QComboBox):
                 self._watched.removeEventFilter(self)
             win.installEventFilter(self)
             self._watched = win
-        QTimer.singleShot(0, self._update_arrow)
+        QTimer.singleShot(0, self, self._update_arrow)
 
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
@@ -5529,7 +5644,7 @@ class ThemedCombo(QComboBox):
         # (Qt may call this while the drop-down is still being built: nothing to watch yet then)
         if obj is getattr(self, "_watched", None) and ev.type() in (QEvent.Move, QEvent.Resize, QEvent.Show,
                                                                      QEvent.ScreenChangeInternal):
-            QTimer.singleShot(0, self._update_arrow)
+            QTimer.singleShot(0, self, self._update_arrow)
         return False
 
     def showPopup(self) -> None:
@@ -5658,13 +5773,19 @@ class DragGhost(QWidget):
         mouse move, and most of the lifting-size one would be empty."""
         k = 2.2 if self._mode == "lift" else self.SMALL + 0.1
         w, h = int(self.full.width() * k), int(self.full.height() * k)
-        self.setGeometry(int(self.cursor.x()) - w // 2, int(self.cursor.y()) - h // 2, w, h)
+        if self.width() == w and self.height() == h:
+            self.move(int(self.cursor.x()) - w // 2, int(self.cursor.y()) - h // 2)   # (no new picture needed)
+        else:
+            self.setGeometry(int(self.cursor.x()) - w // 2, int(self.cursor.y()) - h // 2, w, h)
 
     def follow(self, global_pos: QPoint) -> None:
+        if QPointF(global_pos) == self.cursor and self._mode == "drag":
+            return                   # (the edge scroll asks every frame: moving the window again cost ~0.4 ms)
         self.cursor = QPointF(global_pos)
         if self._mode != "land":
             self._place()
-            self.update()
+            if self._mode != "drag":
+                self.update()        # (dragging size: the cover sits still inside its window - moving it is enough)
 
     def set_faded(self, on: bool) -> None:
         target = self.OVER_TRASH if on else self.NORMAL
@@ -5692,7 +5813,7 @@ class DragGhost(QWidget):
         done, self._done = self._done, None
         if done is not None:
             done()
-        QTimer.singleShot(40, self._vanish)
+        QTimer.singleShot(40, self, self._vanish)
 
     def _vanish(self) -> None:
         self.hide()
@@ -6324,34 +6445,21 @@ class UpdateDialog(QDialog):
         super().reject()
 
 
-class EasterEgg(QWidget):
-    """Click the logo: the window goes dark with two boxes in the middle. Clicking anywhere else
+class DimLayer(QWidget):
+    """The window goes dark with boxes in the middle (the easter egg, a game's notes). Clicking anywhere else
     (or Esc) brings the library back."""
     DARK = 175            # how dark the cover gets (0-255)
     FADE_S = 0.3          # darkening / brightening, with the boxes fading alongside
 
-    def __init__(self, window: QWidget):
+    def __init__(self, window: QWidget, boxes: list):
         super().__init__(window)
         self.setGeometry(window.rect())
         self.setFocusPolicy(Qt.StrongFocus)
         self._alpha, self._target = 0.0, float(self.DARK)
-        self.boxes = [WobbleBox(f"Ver. {APP_VERSION}", rock=False), WobbleBox(tr("egg.title"), rock=True)]   # top, bottom
-        settings = getattr(window, "settings", None)
-        self.anki_path = settings.anki_path if settings else ""
-        if self.anki_path:                       # the reward for hunting (Settings > Anki)
-            anki = AnkiBox(tr("egg.anki"))
-            anki.clicked.connect(self._open_anki)
-            self.boxes.insert(0, anki)           # above the version
+        self.boxes = boxes
         for b in self.boxes:
             b.setParent(self)
         self._place()
-        # hovering the rocking "Easter Egg" box makes every cover in the library rock with it
-        self._rocker = next(b for b in self.boxes if isinstance(b, WobbleBox) and b.rock)
-        self._rumble = VsyncClock(self)   # (once per screen refresh, at any rate)
-        self._rumble.setTimerType(Qt.PreciseTimer)   # (a normal timer ticks unevenly on Windows: 16 / 31 ms)
-        self._rumble.setInterval(16)
-        self._rumble.timeout.connect(self._rumble_step)
-        self._rumble.start()
         window.installEventFilter(self)          # follow the window's size
         self._fade = VsyncClock(self)   # (once per screen refresh, at any rate)
         self._fade.setInterval(16)
@@ -6401,6 +6509,98 @@ class EasterEgg(QWidget):
             b.move((self.width() - b.width()) // 2, y)
             y += b.height() + gap
 
+    def eventFilter(self, obj, ev) -> bool:
+        if obj is self.parent() and ev.type() == QEvent.Resize:
+            self.setGeometry(self.parent().rect())
+            self._place()
+            if self._snap is not None:              # (the picture no longer fits: the live window, darkened)
+                self._thaw()
+                if self._target:
+                    for b in self.boxes:
+                        b.show()
+        return False
+
+    def _step(self) -> None:
+        # placed by when the frame reaches the screen (see frame_time), a fixed length, eased out: even steps
+        s = min(1.0, max(0.0, (frame_time() - self._t0) / self.FADE_S))
+        self._alpha = self._from + (self._target - self._from) * (1 - (1 - s) ** 3)
+        if s >= 1.0:
+            self._alpha = self._target
+            self._fade.stop()
+            if self._target == 0:                # faded away: gone
+                self.parent().removeEventFilter(self)
+                self.deleteLater()
+                return
+            self._thaw()                         # settled dark: the live window (lights, rocking covers) again
+            for b in self.boxes:
+                b.show()
+            self._settled()
+        self.update()
+
+    def _settled(self) -> None:
+        """Faded in: the boxes are live now."""
+
+    def dismiss(self) -> None:
+        if self._target != 0:
+            self._target = 0.0
+            if self._snap is None:               # (still opening: its picture is the window as it is anyway)
+                boxes = [(b.geometry().topLeft(), self._box_picture(b)) for b in self.boxes]
+                for b in self.boxes:
+                    b.hide()                     # (not in the picture: they fade on top of it)
+                self._grabbing = True            # (this layer draws nothing into the picture)
+                try:
+                    snap = self.parent().grab()
+                finally:
+                    self._grabbing = False
+                self._freeze(snap)
+                self._box_snaps = boxes
+            self._begin_fade()
+
+    def paintEvent(self, _ev) -> None:
+        if self._grabbing:
+            return
+        p = QPainter(self)
+        if self._snap is not None:
+            p.drawPixmap(self.rect(), self._snap)
+        p.fillRect(self.rect(), QColor(0, 0, 0, int(self._alpha)))
+        if self._box_snaps:
+            p.setOpacity(min(1.0, self._alpha / self.DARK))
+            for at, pm in self._box_snaps:
+                p.drawPixmap(at, pm)
+        p.end()
+
+    def mousePressEvent(self, ev) -> None:      # (the boxes take their own clicks, so this is "elsewhere")
+        self.dismiss()
+
+    def keyPressEvent(self, ev) -> None:
+        if ev.key() == Qt.Key_Escape:
+            self.dismiss()
+        else:
+            super().keyPressEvent(ev)
+
+
+class EasterEgg(DimLayer):
+    """Click the logo: the window goes dark with two boxes in the middle."""
+
+    def __init__(self, window: QWidget):
+        boxes = [WobbleBox(f"Ver. {APP_VERSION}", rock=False), WobbleBox(tr("egg.title"), rock=True)]   # top, bottom
+        settings = getattr(window, "settings", None)
+        anki_path = settings.anki_path if settings else ""
+        if anki_path:                            # the reward for hunting (Settings > Anki)
+            anki = AnkiBox(tr("egg.anki"))
+            boxes.insert(0, anki)                # above the version
+        super().__init__(window, boxes)
+        self.anki_path = anki_path
+        if anki_path:
+            boxes[0].clicked.connect(self._open_anki)
+        # hovering the rocking "Easter Egg" box makes every cover in the library rock with it
+        self._rocker = next(b for b in self.boxes if isinstance(b, WobbleBox) and b.rock)
+        self._rumble = VsyncClock(self)   # (once per screen refresh, at any rate)
+        self._rumble.setTimerType(Qt.PreciseTimer)   # (a normal timer ticks unevenly on Windows: 16 / 31 ms)
+        self._rumble.setInterval(16)
+        self._rumble.timeout.connect(self._rumble_step)
+        self._rumble.start()
+
     def _rumble_step(self) -> None:
         b, w = self._rocker, self.parent()
         grid = getattr(w, "grid", None)
@@ -6436,72 +6636,80 @@ class EasterEgg(QWidget):
             return
         self.dismiss()
 
-    def eventFilter(self, obj, ev) -> bool:
-        if obj is self.parent() and ev.type() == QEvent.Resize:
-            self.setGeometry(self.parent().rect())
-            self._place()
-            if self._snap is not None:              # (the picture no longer fits: the live window, darkened)
-                self._thaw()
-                if self._target:
-                    for b in self.boxes:
-                        b.show()
-        return False
+    def dismiss(self) -> None:
+        if self._target != 0:
+            super().dismiss()
+            self._rumble_step()                  # (boxes hidden: the covers settle straight back)
+            self._rumble.stop()
 
-    def _step(self) -> None:
-        # placed by when the frame reaches the screen (see frame_time), a fixed length, eased out: even steps
-        s = min(1.0, max(0.0, (frame_time() - self._t0) / self.FADE_S))
-        self._alpha = self._from + (self._target - self._from) * (1 - (1 - s) ** 3)
-        if s >= 1.0:
-            self._alpha = self._target
-            self._fade.stop()
-            if self._target == 0:                # faded away: gone
-                self.parent().removeEventFilter(self)
-                self.deleteLater()
-                return
-            self._thaw()                         # settled dark: the live window (lights, rocking covers) again
-            for b in self.boxes:
-                b.show()
-        self.update()
+
+class NotesLayer(DimLayer):
+    """A game's notes (right-click > Notes): a big text box over the darkened window. Saved when it closes
+    (a click outside or Esc; owner's choice: no saving while typing)."""
+    SIZE = 0.725          # of the window, each way
+
+    def __init__(self, window: QWidget, title: str, text: str, save):
+        box = QFrame(objectName="notes_box")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        head = ElidedLabel(title, objectName="notes_title")      # (the library's font, like everything else)
+        head.setTextFormat(Qt.PlainText)
+        head.setMinimumWidth(1)                           # (a long title ends in "..." instead of widening the box)
+        lay.addWidget(head)
+        self.head = head
+        # (a QTextEdit, not QPlainTextEdit: that one scrolls by whole lines - the wheel glide (SmoothWheel) and
+        # wheel-press scrolling need a bar that moves by the pixel)
+        self.editor = QTextEdit(objectName="notes")
+        self.editor.setAcceptRichText(False)              # (pasted text arrives plain)
+        self.editor.setPlainText(text)
+        self.editor.setPlaceholderText(tr("notes.placeholder"))
+        self.editor.moveCursor(QTextCursor.End)
+        lay.addWidget(self.editor, 1)
+        self._text, self._save = text, save
+        super().__init__(window, [box])
+        self.editor.installEventFilter(self)              # (the window's keys stay out while typing: see eventFilter)
+
+    def eventFilter(self, obj, ev) -> bool:
+        # every key but Esc belongs to the notes: the window's own (F5 refresh, Alt+Left back) did their thing behind
+        # the open notes
+        if obj is self.editor and ev.type() == QEvent.ShortcutOverride and ev.key() != Qt.Key_Escape:
+            ev.accept()
+            return False
+        return super().eventFilter(obj, ev)
+
+    def _place(self) -> None:
+        # the text box is 72.5 % of the window; it and the title above it are centred together
+        w, h = round(self.width() * self.SIZE), round(self.height() * self.SIZE)
+        h += self.head.sizeHint().height() + self.boxes[0].layout().spacing()
+        self.boxes[0].setGeometry((self.width() - w) // 2, (self.height() - h) // 2, w, h)
+
+    def _settled(self) -> None:
+        self.editor.setFocus()
+
+    def keyPressEvent(self, ev) -> None:
+        if ev.key() != Qt.Key_Escape and ev.text().isprintable() and ev.text() and self._target:
+            self.editor.insertPlainText(ev.text())        # typed while it was still fading in: not lost
+        else:
+            super().keyPressEvent(ev)
+
+    def refresh(self, text: str) -> None:
+        """Newer notes from the cloud folder (the other device wrote them): shown, unless typing has begun here."""
+        if text != self._text and self.editor.toPlainText() == self._text and self._target:
+            self._text = text
+            self.editor.setPlainText(text)
+            self.editor.moveCursor(QTextCursor.End)
+
+    def save_now(self, wait: bool = False) -> None:
+        text = self.editor.toPlainText()
+        if text != self._text:
+            self._text = text
+            self._save(text, wait)
 
     def dismiss(self) -> None:
         if self._target != 0:
-            self._target = 0.0
-            if self._snap is None:               # (still opening: its picture is the window as it is anyway)
-                boxes = [(b.geometry().topLeft(), self._box_picture(b)) for b in self.boxes]
-                for b in self.boxes:
-                    b.hide()                     # (not in the picture: they fade on top of it)
-                self._grabbing = True            # (this layer draws nothing into the picture)
-                try:
-                    snap = self.parent().grab()
-                finally:
-                    self._grabbing = False
-                self._freeze(snap)
-                self._box_snaps = boxes
-            self._rumble_step()                  # (boxes hidden: the covers settle straight back)
-            self._rumble.stop()
-            self._begin_fade()
-
-    def paintEvent(self, _ev) -> None:
-        if self._grabbing:
-            return
-        p = QPainter(self)
-        if self._snap is not None:
-            p.drawPixmap(self.rect(), self._snap)
-        p.fillRect(self.rect(), QColor(0, 0, 0, int(self._alpha)))
-        if self._box_snaps:
-            p.setOpacity(min(1.0, self._alpha / self.DARK))
-            for at, pm in self._box_snaps:
-                p.drawPixmap(at, pm)
-        p.end()
-
-    def mousePressEvent(self, ev) -> None:      # (the boxes take their own clicks, so this is "elsewhere")
-        self.dismiss()
-
-    def keyPressEvent(self, ev) -> None:
-        if ev.key() == Qt.Key_Escape:
-            self.dismiss()
-        else:
-            super().keyPressEvent(ev)
+            self.save_now()
+            super().dismiss()
 
 
 class Logo(QLabel):
@@ -6620,12 +6828,218 @@ class LiveColour:
         self.parts = []
 
 
-class ThemeDialog(QDialog):
-    """Custom theme: every colour role with a swatch and a hex box; changes preview live."""
+class ThemeGrid(QWidget):
+    """Custom Theme's Saved Themes, two to a row: each a small drawing of the library in its colours, background and
+    font, its name underneath, and the big + (save the current look) last. One widget draws them all: as separate
+    widgets, every live preview step re-styled each of them (40 themes: 245 ms a step instead of 65)."""
+    CARD_H, NAME, GAP, COLUMNS = 150, 26, 12, 2
 
-    def __init__(self, colors: dict, preview: Callable[[dict], None], parent=None, solo: bool = False):
+    def __init__(self, dialog: "ThemeDialog"):
+        super().__init__()
+        self.dialog = dialog
+        self.items: list = []
+        self.chosen: Optional[str] = None          # the id of the theme being tried
+        self.hovered = -1                          # the card under the mouse (index; len(items) = the +)
+        self._pics: dict = {}                      # theme id -> its background cropped to the drawing's size
+        self._look: dict = {}                      # theme id -> (colours, crop, font family)
+        self.setMouseTracking(True)
+
+    def set_items(self, items: list) -> None:
+        self.items = items
+        self._look = {it["theme"]["id"]: (theme_colors("custom", _colour_map(it["theme"].get("colors"))),
+                                          theme_crop(it["theme"]), self.dialog._theme_font(it, i18n.language()))
+                      for it in items}
+        self._pics = {k: v for k, v in self._pics.items() if k in self._look}
+        rows = (len(items) + 1 + self.COLUMNS - 1) // self.COLUMNS
+        self.setFixedHeight(rows * self.CARD_H + (rows - 1) * self.GAP)
+        self._set_hovered(self._index_at(self.mapFromGlobal(QCursor.pos())) if self.underMouse() else -1)
+        self.update()
+
+    def card_rect(self, i: int) -> QRectF:
+        w = (self.width() - self.GAP * (self.COLUMNS - 1)) / self.COLUMNS
+        row, col = divmod(i, self.COLUMNS)
+        return QRectF(col * (w + self.GAP), row * (self.CARD_H + self.GAP), w, self.CARD_H)
+
+    def _index_at(self, pos) -> int:
+        for i in range(len(self.items) + 1):
+            if self.card_rect(i).contains(QPointF(pos)):
+                return i
+        return -1
+
+    def _set_hovered(self, i: int) -> None:
+        if i != self.hovered:
+            for k in (self.hovered, i):
+                if k >= 0:
+                    self.update(self.card_rect(k).toAlignedRect().adjusted(-2, -2, 2, 2))
+            self.hovered = i
+            self.setCursor(Qt.PointingHandCursor if i >= 0 else Qt.ArrowCursor)
+            self.setToolTip(tr("themes.add_tip") if i == len(self.items) else "")
+
+    def mouseMoveEvent(self, e) -> None:
+        self._set_hovered(self._index_at(e.position()))
+
+    def leaveEvent(self, e) -> None:
+        self._set_hovered(-1)
+
+    def mouseReleaseEvent(self, e) -> None:
+        i = self._index_at(e.position())
+        if e.button() == Qt.LeftButton and i >= 0:
+            self.dialog._card_clicked(i)
+
+    def contextMenuEvent(self, e) -> None:
+        i = self._index_at(e.pos())
+        if 0 <= i < len(self.items):
+            self.dialog._card_menu(self.items[i], e.globalPos())
+
+    def paintEvent(self, e) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        for i in range(len(self.items) + 1):
+            card = self.card_rect(i)
+            if card.intersects(QRectF(e.rect()).adjusted(-2, -2, 2, 2)):
+                self._paint_card(p, i, card)
+        p.end()
+
+    def _paint_card(self, p: QPainter, i: int, card: QRectF) -> None:
+        r = QRectF(card.left() + 1, card.top() + 1, card.width() - 2, card.height() - self.NAME - 2)
+        hot = i == self.hovered
+        if i == len(self.items):
+            self._paint_plus(p, r, hot)
+            name, colour = tr("themes.add"), COLORS["text"] if hot else COLORS["muted"]
+        else:
+            t = self.items[i]["theme"]
+            shape = QPainterPath()
+            shape.addRoundedRect(r, 8, 8)
+            p.save()
+            p.setClipPath(shape)
+            self._paint_library(p, r, self.items[i])
+            p.restore()
+            chosen = t["id"] == self.chosen
+            p.setPen(QPen(QColor(COLORS["select"] if chosen else COLORS["focus"] if hot else COLORS["border"]),
+                          2 if chosen else 1))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(shape)
+            name, colour = str(t.get("name", "")), COLORS["text"]
+        p.setFont(ui_font(10))
+        p.setPen(QColor(colour))
+        text = p.fontMetrics().elidedText(name, Qt.ElideRight, int(card.width()) - 8)
+        p.drawText(QRectF(card.left(), card.bottom() - self.NAME, card.width(), self.NAME), Qt.AlignCenter, text)
+
+    @staticmethod
+    def _paint_plus(p: QPainter, r: QRectF, hot: bool) -> None:
+        p.setPen(QPen(QColor(COLORS["focus"] if hot else COLORS["border"]), 1.5, Qt.DashLine))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(r, 8, 8)
+        p.setPen(QPen(QColor(COLORS["text"] if hot else COLORS["muted"]), 3, Qt.SolidLine, Qt.RoundCap))
+        c, arm = r.center(), 16
+        p.drawLine(QPointF(c.x() - arm, c.y()), QPointF(c.x() + arm, c.y()))
+        p.drawLine(QPointF(c.x(), c.y() - arm), QPointF(c.x(), c.y() + arm))
+
+    def _paint_library(self, p: QPainter, r: QRectF, item: dict) -> None:
+        tid = item["theme"]["id"]
+        c, crop, family = self._look[tid]
+        p.fillRect(r, QColor(c["bg"]))
+        image = item["image"]
+        if not image.isNull():
+            size = r.size().toSize()
+            pic = self._pics.get(tid)
+            if pic is None or pic.size() != size:              # (made once per size; never the cloud's file)
+                _, zoom, x, y = crop
+                part, _, _ = crop_rect(image.width(), image.height(), zoom, x, y,
+                                       aspect=size.width() / max(1, size.height()))
+                pic = self._pics[tid] = QPixmap.fromImage(image.copy(part.toAlignedRect()).scaled(
+                    size, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+            p.setOpacity(crop[0])
+            p.drawPixmap(r.topLeft(), pic)
+            p.setOpacity(1.0)
+        p.setPen(Qt.NoPen)
+        top, bottom = r.height() * 0.14, r.height() * 0.24
+        p.fillRect(QRectF(r.left(), r.top(), r.width(), top), QColor(c["band"]))
+        p.fillRect(QRectF(r.left(), r.bottom() - bottom, r.width(), bottom), QColor(c["band"]))
+        p.setBrush(QColor(c["input"]))                                  # the search box
+        p.drawRoundedRect(QRectF(r.left() + r.width() * 0.3, r.top() + top * 0.25, r.width() * 0.4, top * 0.5), 3, 3)
+        gap = r.width() * 0.05                                          # a row of covers
+        w = (r.width() - gap * 5) / 4
+        h = min(w * 1.4, r.height() - top - bottom - gap * 2)
+        y = r.top() + top + (r.height() - top - bottom - h) / 2
+        for k in range(4):
+            box = QRectF(r.left() + gap + k * (w + gap), y, w, h)
+            grad = QLinearGradient(box.topLeft(), box.bottomLeft())
+            grad.setColorAt(0, QColor(c["placeholder_top"]))
+            grad.setColorAt(1, QColor(c["placeholder_bottom"]))
+            p.setBrush(grad)
+            p.drawRoundedRect(box, 3, 3)
+        band = QRectF(r.left(), r.bottom() - bottom, r.width(), bottom)  # the Read button and some text in the font
+        play = QRectF(band.left() + gap, band.top() + band.height() * 0.22, r.width() * 0.22, band.height() * 0.56)
+        p.setBrush(QColor(c["play"]))
+        p.drawRoundedRect(play, 4, 4)
+        f = QFont()
+        f.setFamilies([family, *ui_families()] if family else ui_families())
+        f.setPointSizeF(9)
+        p.setFont(f)
+        p.setPen(QColor(c["text"]))
+        p.drawText(QRectF(play.right() + gap, band.top(), band.right() - play.right() - gap * 2, band.height()),
+                   Qt.AlignVCenter | Qt.AlignLeft, "Aa あア漢")
+
+
+def _number(v, default: float) -> float:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else default
+
+
+def _colour_map(colors) -> dict:
+    """A saved theme's colours, only the valid ones (a damaged entry falls back to Dark's)."""
+    if not isinstance(colors, dict):
+        return {}
+    return {k: v for k, v in colors.items() if isinstance(k, str) and isinstance(v, str) and QColor.isValidColorName(v)
+            and v.startswith("#") and len(v) == 7}
+
+
+def theme_crop(theme: dict) -> tuple:
+    """A saved theme's background (opacity, zoom, x, y), kept within what the Library Background window allows."""
+    bg = theme.get("bg") if isinstance(theme.get("bg"), dict) else {}
+    return (max(0.0, min(1.0, _number(bg.get("opacity"), 0.35))), max(1.0, min(4.0, _number(bg.get("zoom"), 1.0))),
+            max(0.0, min(1.0, _number(bg.get("x"), 0.5))), max(0.0, min(1.0, _number(bg.get("y"), 0.5))))
+
+
+def load_saved_themes(root: str, protect: frozenset = frozenset()) -> list[dict]:
+    """(In the background.) The saved themes, each with this computer's copies of its picture and fonts and the picture
+    decoded small enough for its preview: {"theme", "picture", "fonts", "image"}. protect: copies being used now."""
+    from PySide6.QtGui import QImageReader
+    items = themes.local_copies(root, default_app_dir() / "theme_cache", themes.load(root), protect)
+    for item in items:
+        img = QImage()
+        if item["picture"]:
+            reader = QImageReader(item["picture"])
+            reader.setAutoTransform(True)
+            size = reader.size()
+            if size.isValid() and max(size.width(), size.height()) > 800:      # (decoded small: 4x quicker for big JPEGs)
+                reader.setScaledSize(size.scaled(800, 800, Qt.KeepAspectRatio))
+            img = reader.read()
+        item["image"] = img
+    return items
+
+
+_PREVIEW_FONTS: dict[str, list] = {}       # font file -> its families, loaded once for showing saved themes
+
+
+class ThemeDialog(TaskOwner, QDialog):
+    """Custom theme: every colour role with a swatch and a hex box; changes preview live. With a library
+    root, a Saved Themes tab too (themes.py): saved looks to pick from, and a + to save the current one. The cloud
+    folder is only ever touched in the background (it can stall for seconds): the list starts loading as the window
+    opens, into copies on this computer, so the tab and picking a theme never wait for it."""
+
+    def __init__(self, colors: dict, preview: Callable[[dict], None], parent=None, solo: bool = False,
+                 root: str = ""):
         super().__init__(parent)
         from PySide6.QtWidgets import QScrollArea
+        self.root = root
+        self.chosen: Optional[dict] = None            # a saved theme picked here: {"theme", "bg", "fonts", "files"}
+        self._own_fonts = dict(FONT_CHOICE)           # (a saved theme's font this device can't get: keep these)
+        self.grid: Optional[ThemeGrid] = None
+        self.saved: Optional[list] = None             # the loaded saved themes (None: still loading)
+        self._saved_busy = False                      # saving / renaming / deleting one right now
+        self.saved_scroll = None
         self.solo = solo                              # (a solo device has no sync lights: their colours aren't listed)
         self.setWindowTitle(tr("theme.title"))
         self.setMinimumSize(430, 560)
@@ -6642,6 +7056,45 @@ class ThemeDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 18, 22, 16)
         lay.setSpacing(10)
+
+        if root:
+            tabs = QHBoxLayout()
+            tabs.setSpacing(6)
+            group = QButtonGroup(self)
+            for i, key in enumerate(("theme.tab_colours", "theme.tab_saved")):
+                b = QPushButton(tr(key), objectName="seg")
+                b.setCheckable(True)
+                group.addButton(b, i)
+                tabs.addWidget(b)
+            tabs.addStretch()
+            group.button(0).setChecked(True)
+            group.idClicked.connect(self._tab)
+            self.tabs = group
+            lay.addLayout(tabs)
+            lay.addSpacing(18 - lay.spacing())    # (as much room under the tabs as above them: the window's top margin)
+        self.pages = QStackedWidget()
+        page = QWidget()
+        outer, lay = lay, QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        self.pages.addWidget(page)
+        outer.addWidget(self.pages, 1)
+        if root:
+            self.saved_scroll = QScrollArea()
+            self.saved_scroll.setWidgetResizable(True)
+            self.saved_scroll.setFrameShape(QFrame.NoFrame)
+            body = QWidget(objectName="scrollbody")
+            col = QVBoxLayout(body)
+            col.setContentsMargins(0, 2, 0, 0)
+            # room beside the scroll bar only while there is one: the cards' right edge lines up with Save otherwise
+            self.saved_scroll.verticalScrollBar().rangeChanged.connect(
+                lambda _lo, hi, col=col: col.setContentsMargins(0, 2, 8 if hi > 0 else 0, 0))
+            self.grid = ThemeGrid(self)
+            col.addWidget(self.grid)
+            col.addStretch()
+            self.saved_scroll.setWidget(body)
+            self.pages.addWidget(self.saved_scroll)
+            self._run(lambda: load_saved_themes(root), self._saved_loaded, lambda _e: self._saved_loaded([]))
 
         top = QHBoxLayout()
         top.setSpacing(6)
@@ -6675,6 +7128,7 @@ class ThemeDialog(QDialog):
         scroll.setWidget(body)
         lay.addWidget(scroll, 1)
         self.scroll = scroll
+        lay = outer
 
         self.warning = QLabel(objectName="hint")
         self.warning.setWordWrap(True)
@@ -6692,7 +7146,7 @@ class ThemeDialog(QDialog):
         btns.addWidget(save)
         lay.addLayout(btns)
         self._load(self.colors)
-        QTimer.singleShot(0, self._fit)
+        QTimer.singleShot(0, self, self._fit)
 
     def _fit(self) -> None:
         """Make the window exactly tall enough for the main colours (no scrolling slack); the extra
@@ -6747,7 +7201,7 @@ class ThemeDialog(QDialog):
         self.more.setVisible(show)
         self.more_btn.setText(tr("theme.less" if show else "theme.more"))
         if show:      # bring the newly shown colours into view
-            QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(
+            QTimer.singleShot(0, self, lambda: self.scroll.verticalScrollBar().setValue(
                 self.more.mapTo(self.scroll.widget(), self.more.rect().topLeft()).y() - 8))
 
     def _load(self, colors: dict) -> None:
@@ -6812,6 +7266,126 @@ class ThemeDialog(QDialog):
             if live is not None:
                 self.preview(self.colors)          # the real look underneath, then the layer goes (same frame)
                 live.finish()
+
+    # ------------------------------------------------------------------ saved themes
+    def _tab(self, i: int) -> None:
+        self.pages.setCurrentIndex(i)
+        self.tabs.button(i).setChecked(True)
+
+    def _saved_loaded(self, items: list) -> None:
+        self.saved = items
+        self._saved_busy = False
+        self._fill_saved()
+
+    def _fill_saved(self) -> None:
+        self.grid.chosen = self.chosen["theme"]["id"] if self.chosen else None
+        self.grid.set_items(self.saved or [])
+
+    def _theme_font(self, item: dict, lang: str) -> Optional[str]:
+        """A saved theme's font for this language, if this device has it or its copy (loaded just for showing it -
+        Save adds it for good). None: the device keeps its own."""
+        fam = item["theme"].get(f"font_{lang}")
+        if not isinstance(fam, str) or not fam:
+            return None
+        if fam in FONTS:
+            return fam
+        f = item["fonts"].get(fam)
+        if f and f not in _PREVIEW_FONTS:
+            fid = QFontDatabase.addApplicationFont(f)
+            _PREVIEW_FONTS[f] = QFontDatabase.applicationFontFamilies(fid) if fid >= 0 else []
+        return fam if f and fam in _PREVIEW_FONTS[f] else None
+
+    def _card_clicked(self, i: int) -> None:
+        items = self.grid.items
+        if i == len(items):
+            self._save_current()
+            return
+        item = items[i]
+        self.grid.chosen = item["theme"]["id"]
+        self.grid.update()
+        opacity, zoom, x, y = theme_crop(item["theme"])
+        fonts = {lang: self._theme_font(item, lang) or self._own_fonts[lang] for lang in ("en", "ja")}
+        self.chosen = {"theme": item["theme"], "bg": (item["picture"], opacity, zoom, x, y), "fonts": fonts,
+                       "files": dict(item["fonts"])}
+        apply_fonts(fonts["en"], fonts["ja"])
+        self._load(theme_colors("custom", _colour_map(item["theme"].get("colors"))))   # (restyles everything shortly)
+        bg, pic = self.chosen["bg"], item["picture"]
+        if pic and pic not in _bg_source:
+            # the full picture decoded in the background first: the library decoding it while drawing froze the
+            # window for 50-100 ms (a 4K photo)
+            self._run(lambda: QImage(pic), lambda img: self._picture_ready(img, bg))
+        else:
+            apply_background(*bg)
+
+    def _picture_ready(self, img: QImage, bg: tuple) -> None:
+        if self.chosen and self.chosen["bg"] == bg:                 # (still the one being tried)
+            if not img.isNull():
+                _bg_source.clear()
+                _bg_source[bg[0]] = img
+            apply_background(*bg)
+
+    def _ask_name(self, title: str, name: str = "") -> str:
+        d = NameDialog(title, name, self, label=tr("themes.name"))
+        try:
+            return d.name() if d.exec() else ""
+        finally:
+            discard(d)
+
+    def _change_saved(self, change: Callable[[], None], after: Callable[[], None] = lambda: None) -> None:
+        """Save / rename / delete in the background, then load the list again (the other device may have changed it
+        too). One at a time."""
+        self._saved_busy = True
+        root = self.root
+        c = self.chosen
+        protect = frozenset([c["bg"][0], *c["files"].values()] if c else [])
+
+        def work():
+            change()
+            return load_saved_themes(root, protect)
+
+        def done(items):
+            self._saved_loaded(items)
+            after()
+
+        def failed(e):
+            self._saved_busy = False
+            message(self, tr("themes.failed", error=e))
+        self._run(work, done, failed)
+
+    def _save_current(self) -> None:
+        if self._saved_busy or self.saved is None:
+            return
+        name = self._ask_name(tr("themes.save_title"))
+        if not name:
+            return
+        b = BACKGROUND
+        bg = (b["path"], b["opacity"], b["zoom"], b["x"], b["y"]) if b["path"] else None
+        root, colors, fonts, files = self.root, dict(self.colors), dict(FONT_CHOICE), dict(FONT_FILES)
+        bar = self.saved_scroll.verticalScrollBar()
+        self._change_saved(lambda: themes.add(root, name, colors, fonts["en"], fonts["ja"], bg, files),
+                           lambda: QTimer.singleShot(0, bar, lambda: bar.setValue(bar.maximum())))   # (the new one: last)
+
+    def _card_menu(self, item: dict, pos: QPoint) -> None:
+        if self._saved_busy:
+            return
+        m = QMenu(self)
+        m.addAction(tr("themes.rename"), lambda: self._rename(item["theme"]))
+        m.addAction(tr("themes.delete"), lambda: self._delete(item["theme"]))
+        m.exec(pos)
+
+    def _rename(self, t: dict) -> None:
+        name = self._ask_name(tr("themes.rename_title"), t.get("name", ""))
+        if name and name != t.get("name") and not self._saved_busy:
+            root, tid = self.root, t["id"]
+            self._change_saved(lambda: themes.rename(root, tid, name))
+
+    def _delete(self, t: dict) -> None:
+        if heading_message(self, tr("game.remove_sure"), tr("themes.delete_body", name=t.get("name", "")),
+                           [("no", tr("game.cancel")), ("yes", tr("game.remove_yes"))], dismiss="no") != "yes":
+            return
+        if not self._saved_busy:
+            root, tid = self.root, t["id"]
+            self._change_saved(lambda: themes.delete(root, tid))
 
 
 class FontSample(QWidget):
@@ -7253,7 +7827,7 @@ class FitsScreen:
         # the estimate above can be a few pixels short (wrapped hints): then a scroll bar with nothing to
         # scroll appeared. Once laid out, grow by whatever is left over, as far as the screen allows.
         self._top_ups = 3
-        QTimer.singleShot(0, self._top_up)
+        QTimer.singleShot(0, self, self._top_up)
 
     def _height_cap(self) -> int:
         """Tallest the whole window (frame included) may open; 0 = only the screen limits it."""
@@ -7300,7 +7874,7 @@ class FitsScreen:
         extra = scroll.verticalScrollBar().maximum()
         if extra > 0 and self.height() < self._most:
             self._set_fit_height(self.width(), min(self.height() + extra, self._most))
-            QTimer.singleShot(0, self._top_up)
+            QTimer.singleShot(0, self, self._top_up)
         else:
             self._no_half_rows(scroll)
 
@@ -7333,7 +7907,7 @@ class FitsScreen:
         super().showEvent(ev)
         self._aligning = True                   # only while opening: a window moved by hand stays put
         self._fit_height()
-        QTimer.singleShot(400, lambda: setattr(self, "_aligning", False))
+        QTimer.singleShot(400, self, lambda: setattr(self, "_aligning", False))
 
 
 class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
@@ -7644,7 +8218,8 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
     def _choose_theme(self, name: str) -> None:
         if name == "custom":
             start = theme_colors("custom", self.custom) if self.custom else theme_colors(self.theme)
-            d = ThemeDialog(start, lambda c: self._preview("custom", c), self, solo=self._solo)
+            d = ThemeDialog(start, lambda c: self._preview("custom", c), self, solo=self._solo,
+                            root=self.current.library_root if self.current is not None else "")
             root = self
             while root.parentWidget() is not None:
                 root = root.parentWidget()
@@ -7654,8 +8229,12 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
                     self.theme, self.custom = "custom", d.colors
                     self._persist(theme="custom", custom_colors=dict(self.custom))
                     self._orig_theme, self._orig_custom = self.theme, dict(self.custom)
-                # cancelled: keep whatever was chosen before (and its look)
+                    if d.chosen:
+                        self._take_saved_theme(d.chosen)
+                # cancelled: keep whatever was chosen before (and its look, background and fonts)
                 self.theme_btns[self.theme].setChecked(True)
+                apply_fonts(self.fonts["en"], self.fonts["ja"])
+                apply_background(self.bg_path, self.bg_opacity, *self.bg_crop)
                 self._preview(self.theme, self.custom)
             finally:
                 discard(d)                       # (before the sheet moves back: no restyling a closed window)
@@ -7663,6 +8242,26 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             return
         self.theme = name
         self._preview(name, self.custom)
+
+    def _take_saved_theme(self, chosen: dict) -> None:
+        """Keep a saved theme's background (none = no background) and fonts, picked in Custom Theme. A font
+        this device doesn't have comes from the cloud's copy; if that's missing too, this device keeps its own."""
+        t = chosen["theme"]
+        for lang in ("en", "ja"):
+            fam = t.get(f"font_{lang}")
+            if isinstance(fam, str) and fam and fam not in FONTS and chosen["files"].get(fam):
+                try:
+                    add_user_font(chosen["files"][fam])  # (this computer's copy of the cloud's)
+                except OSError:
+                    pass
+            self.fonts[lang] = fam if fam in FONTS else self.fonts[lang]
+        path, opacity, zoom, x, y = chosen["bg"]
+        self.bg_path, self.bg_opacity, self.bg_crop = path, opacity, (zoom, x, y)
+        if self.current is not None:
+            self.bg_path = self._store_background()      # (our own copy of the picture)
+        self._persist(font_en=self.fonts["en"], font_ja=self.fonts["ja"], bg_image=self.bg_path,
+                      bg_opacity=round(opacity, 2), bg_zoom=round(zoom, 4), bg_x=round(x, 4), bg_y=round(y, 4))
+        self._orig_bg = (self.bg_path, self.bg_opacity, *self.bg_crop)
 
     @guarded
     def _ikemen_sync(self) -> None:
@@ -7949,50 +8548,6 @@ def _download_cover(url: str) -> str:
     return vndb.download(url, str(d / f"vndb_{int(time.time() * 1000)}{ext}"))
 
 
-_LIVE_TASKS: set = set()          # every background task still running, whoever started it
-
-
-def wait_for_tasks(seconds: float) -> bool:
-    """Give running background tasks up to `seconds` to finish (at exit). True if all did."""
-    end = time.monotonic() + seconds
-    for t in list(_LIVE_TASKS):
-        t.wait(max(0, int((end - time.monotonic()) * 1000)))
-    return not any(t.isRunning() for t in _LIVE_TASKS)
-
-
-class TaskOwner:
-    """Mixin: run work in the background. A task belongs to the program, not to the window that
-    started it: closing the window never waits for it (no freeze) and never deletes it mid-run
-    (which would make Qt abort the program); if the window is gone, the result is simply dropped."""
-
-    def _run(self, fn, done, failed=None, low=False):
-        import shiboken6
-        if not hasattr(self, "_tasks"):
-            self._tasks = []
-        t = Task(fn)
-        owner = self
-
-        def deliver(callback):
-            def call(value):
-                if callback is not None and shiboken6.isValid(owner):
-                    callback(value)
-            return call
-        t.done.connect(deliver(done))
-        t.failed.connect(deliver(failed))
-
-        def finished():
-            _LIVE_TASKS.discard(t)
-            if t in owner._tasks:
-                owner._tasks.remove(t)
-        t.finished.connect(finished)
-        _LIVE_TASKS.add(t)
-        self._tasks.append(t)
-        # low: background work the window must never wait for (cover loading): on a weak or busy PC Windows gives
-        # the window its turn first - on one core, loading covers while flinging through a big library held
-        # scroll frames up to ~170 ms (the loader's time slices)
-        t.start(QThread.Priority.LowPriority if low else QThread.Priority.InheritPriority)
-
-
 class CoverPickerDialog(TaskOwner, QDialog):
     """All of a VN's covers on VNDB as thumbnails; pick one."""
 
@@ -8115,7 +8670,7 @@ class VndbDialog(TaskOwner, QDialog):
             row.addWidget(b)
         lay.addLayout(row)
         if query.strip():
-            QTimer.singleShot(0, self.search)
+            QTimer.singleShot(0, self, self.search)
 
     def done(self, r):
         super().done(r)          # (background tasks finish on their own; see TaskOwner)
@@ -8610,13 +9165,13 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
 class NameDialog(QDialog):
     """Ask for a folder name."""
 
-    def __init__(self, title: str, name: str, parent=None):
+    def __init__(self, title: str, name: str, parent=None, label: str = ""):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumWidth(380)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 18, 22, 18)
-        lay.addWidget(section(tr("folder.name")))
+        lay.addWidget(section(label or tr("folder.name")))
         self.edit = QLineEdit(name)
         self.edit.selectAll()
         lay.addWidget(self.edit)
@@ -9649,7 +10204,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 self.move(self.x(), max(room.top(), room.bottom() - h - frame))
 
     def easter_egg(self) -> None:
-        if self.findChild(EasterEgg) is None:
+        if self.findChild(DimLayer) is None:
             EasterEgg(self)
 
     def share_settings(self) -> None:
@@ -10250,9 +10805,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """The grid scrolled: get the covers around the view ready (once per moment, not per scroll step), and the
         cover now under the pointer is the hovered one (it only followed mouse moves: with the wheel's glide, the
         lifted cover slid away under a still pointer - browsers and Steam follow the scroll too)."""
-        if self.grid.scroll_settling():
+        if self._ghost is not None:
+            pass                                        # (a game being dragged sets its own target)
+        elif self.grid.scroll_settling():
             self._set_hovered(None)                     # (lifts once scrolling has stopped - LibraryGrid._end_glide)
-        elif self._ghost is None:                       # (a game being dragged sets its own target)
+        else:
             vp = self.grid.viewport()
             pos = vp.mapFromGlobal(QCursor.pos())
             it = self.grid.itemAt(pos) if vp.rect().contains(pos) and vp.underMouse() else None
@@ -10472,8 +11029,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._apply_filter(after_rebuild=self.grid.scrollToTop)
 
     def close_folder(self) -> None:
-        egg = self.findChild(EasterEgg)
-        if egg is not None:                         # Esc on the logo's dark screen: back to the library
+        egg = self.findChild(DimLayer)
+        if egg is not None:                         # Esc on the dark screen (easter egg, notes): back to the library
             egg.dismiss()
             return
         if self._ghost is not None:                 # Esc while dragging a game: put it back
@@ -10600,7 +11157,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.no_results = 0.0                        # (not on screen: nothing to fade)
         if animate:                                      # (also from an empty grid: "No Results Found" -> results)
             moved = self._slide_from(before, appear=True, restyled=restyled)
-            kept ={self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
+            kept = {self.grid.item(i).data(GAME_ID_ROLE) for i in range(self.grid.count())}
             gone = []
             for iid, r in rects.items():
                 if (iid not in kept or iid in moved) and not r.isEmpty():
@@ -11204,7 +11761,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             elif t == QEvent.MouseMove:
                 pos = ev.position().toPoint()
                 if self._ghost is not None:                     # dragging a game (the grid keeps the mouse)
-                    self._move_game_drag(ev.globalPosition().toPoint())
+                    self._drag_moved = True                     # (handled once a frame: _drag_autoscroll)
                     return True
                 if self._press and ev.buttons() & Qt.LeftButton and self.worker is None and \
                         (pos - self._press[0]).manhattanLength() >= QApplication.startDragDistance():
@@ -11212,7 +11769,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     self._press = None
                     self._start_game_drag(gid)
                     return True
-                it = self.grid.itemAt(pos)
+                # (a held button keeps the mouse past the grid's edge: over the bottom bar, the row hidden under it lifted)
+                it = self.grid.itemAt(pos) if self.grid.viewport().rect().contains(pos) else None
                 if self.grid.auto_scrolling():
                     it = None                       # (the mouse steers the scrolling: no cover lifts meanwhile)
                 self._set_hovered(it.data(GAME_ID_ROLE) if it else None)
@@ -11314,6 +11872,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._dragging = gid
         self._dim_gid = gid
         self._drag_racing = False
+        self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_pos, self._drag_scroll_n = 0.0, 0.0, None, 0
+        self._drag_scroll_t = frame_time()
+        self._drag_moved = False
         self._ghost = DragGhost(img, start)
         self._ghost.follow(QCursor.pos())
         self._ghost.show()
@@ -11335,41 +11896,101 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     def _drag_autoscroll(self) -> None:
         """While a game is dragged near the top or bottom of the grid (or past it), the library scrolls:
         slowly at the start of the zone, faster the deeper you go, fastest well beyond the edge."""
-        now = time.monotonic()
-        dt = min(0.05, now - getattr(self, "_drag_scroll_t", now - 1 / 60))
+        # placed by when the frame reaches the screen (frame_time), not by when this step happens to run, from a
+        # float position, with the speed eased in and out: whole pixels from uneven step times jerked along
+        # (owner, 2026-10-21: make it as smooth as the wheel). It counts as a glide, so the strips draw it.
+        now = frame_time()
+        dt = min(0.05, max(0.0, now - getattr(self, "_drag_scroll_t", now - 1 / 60)))
         self._drag_scroll_t = now
         if self._ghost is None:
             return
         gp = QCursor.pos()
-        kind, _ = self._drag_hit(gp)
-        if kind in ("trash", "back"):
-            return                                   # aiming at a button, not scrolling
         vp = self.grid.viewport()
         top_left = vp.mapToGlobal(QPoint(0, 0))
-        if not (top_left.x() - 40 <= gp.x() <= top_left.x() + vp.width() + 40):
-            return
         y = gp.y() - top_left.y()
-        if y < DRAG_SCROLL_ZONE:
-            depth, direction = (DRAG_SCROLL_ZONE - y) / DRAG_SCROLL_ZONE, -1
-        elif y > vp.height() - DRAG_SCROLL_ZONE:
-            depth, direction = (y - vp.height() + DRAG_SCROLL_ZONE) / DRAG_SCROLL_ZONE, 1
-        else:
+        target = 0.0                                 # px per 1/60 s, + down
+        kind = self._drag_hit(gp, aim=False)[0]
+        if kind in ("trash", "back"):
+            pass                                     # aiming at a button, not scrolling
+        elif not (top_left.x() - 40 <= gp.x() <= top_left.x() + vp.width() + 40):
+            pass
+        elif y < DRAG_SCROLL_ZONE or y > vp.height() - DRAG_SCROLL_ZONE:
+            up = y < DRAG_SCROLL_ZONE
+            depth = ((DRAG_SCROLL_ZONE - y) if up else (y - vp.height() + DRAG_SCROLL_ZONE)) / DRAG_SCROLL_ZONE
+            # inside the zone: depth 0..1 (gentle start); past the edge it keeps growing up to 3
+            depth = min(depth, 3.0)
+            speed = DRAG_SCROLL_MIN + (DRAG_SCROLL_MAX - DRAG_SCROLL_MIN) * (depth / 3.0) ** 1.6
+            # (never under a whole pixel a refresh: below it, some refreshes move and some don't - a stutter)
+            target = (-1 if up else 1) * max(speed, 1 / (60 * frame_period()))
+        g, sb = self.grid, self.grid.verticalScrollBar()
+        pos = starting = getattr(self, "_drag_scroll_pos", None)
+        if pos is None or abs(pos - sb.value()) >= 1:
+            pos = float(sb.value())                  # (just starting, or something else moved the grid)
+        # the speed follows the pointer's like a critically damped spring: its acceleration builds up and dies away
+        # smoothly too (a plain ease jumped straight to full acceleration - owner, 2026-10-24: it lurched into motion)
+        v, acc = getattr(self, "_drag_scroll_v", 0.0), getattr(self, "_drag_scroll_a", 0.0)
+        k = 2.0 / DRAG_SCROLL_EASE_S
+        for _ in range(max(1, math.ceil(dt / 0.004))):           # (small steps: stable at any frame time)
+            h = dt / max(1, math.ceil(dt / 0.004))
+            acc += (k * k * (target - v) - 2 * k * acc) * h
+            v += acc * h
+        # and it brakes into the end of the library like the wheel does, instead of slamming into it (a short
+        # library is mostly ends: the owner's scrolls ~650 px)
+        room = (sb.maximum() - pos) if (v or target) > 0 else (pos - sb.minimum())
+        cap = math.sqrt(2 * DRAG_SCROLL_BRAKE * max(0.0, room)) / 60          # (px per 1/60 s)
+        if abs(v) > cap:
+            v, acc = math.copysign(cap, v), 0.0
+        self._drag_scroll_a = acc
+        # a whole number of pixels every refresh, kept until the speed clearly leaves it: a speed like 1.4 px a
+        # refresh, rounded each time, went 1, 2, 1, 1, 2 - the judder of a slow drag (owner, 2026-10-24). The wheel
+        # rarely sits at such speeds; this holds them at an even 1 or 2.
+        frames = max(1, round(dt / frame_period())) if dt > 0 else 0
+        per = v * frame_period() * 60                                  # (px a refresh)
+        n = getattr(self, "_drag_scroll_n", 0)
+        if abs(per - n) > 0.7:
+            n = round(per)
+        self._drag_scroll_n = n
+        new = min(float(sb.maximum()), max(float(sb.minimum()), round(pos) + n * frames))
+        # the mouse's moves are handled here, once a frame (the cover's window placed, what's under it worked out): a
+        # mouse reports hundreds a second, ~1 ms each, and handled as they came they piled up into late frames
+        # whenever the hand moved (dragbench 2026-10-24: a still pointer 3 late frames in 3 s, a moving one 8+)
+        moved, self._drag_moved = self._drag_moved, False
+        if (target == 0 and abs(v) < 0.1) or (n * frames and new == round(pos)):
+            self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_pos = 0.0, 0.0, None   # stopped / at the end:
+            self._drag_scroll_n = 0                                                           # back to normal drawing
+            if starting is not None and g._glide_to is not None:     # (ours: a wheel glide is left alone)
+                g._heading = 0
+                g._end_glide()
+            if self._drag_racing:
+                self._drag_racing, moved = False, True
+            if moved:
+                self._move_game_drag(gp)
             return
-        # inside the zone: depth 0..1 (gentle start); past the edge it keeps growing up to 3
-        depth = min(depth, 3.0)
-        speed = DRAG_SCROLL_MIN + (DRAG_SCROLL_MAX - DRAG_SCROLL_MIN) * (depth / 3.0) ** 1.6
-        # (speed is px per 1/60 s: scaled by the real time since the last step, so any screen rate scrolls alike;
-        # the fraction carries over, or slow scrolling would round to nothing at high rates)
-        self._drag_scroll_carry = getattr(self, "_drag_scroll_carry", 0.0) + direction * speed * dt * 60
-        step = int(self._drag_scroll_carry)
-        self._drag_scroll_carry -= step
-        sb = self.grid.verticalScrollBar()
+        self._drag_scroll_v, self._drag_scroll_pos = v, new
+        if starting is None:                         # (like wheel-press scrolling: _AutoScroll._begin)
+            g._end_glide()                           # (a wheel glide running: this takes over)
+            g._glide_clock_ready()
+            g._rehover_timer().stop()
+        g._heading = 1 if v > 0 else -1
+        g._glide_to = new
         before = sb.value()
-        sb.setValue(before + step)
-        racing = speed > DRAG_AIM_SPEED and sb.value() != before
-        if racing != self._drag_racing or sb.value() != before:
-            self._drag_racing = racing
-            self._move_game_drag(gp)                 # what's under the mouse changed
+        g._gliding = True
+        try:
+            sb.setValue(round(new))
+        finally:
+            g._gliding = False
+        if sb.value() != before and g.layer_active():
+            # drawn NOW, before the mouse's work below (that only matters from the next frame on): drawn after it, a
+            # frame often finished just past the refresh and showed one late - filmed 2026-10-24, the screen showed
+            # steps of 4, 13, 8, 9, 4, 13 px while the app drew every frame on time (the wheel: an even 11-12)
+            g.viewport().repaint()
+        # no aiming while it scrolls, at any speed (owner, 2026-10-24): the cover under the pointer lifting and the drop
+        # line moving every frame were the drag's only difference from the wheel - measured: without them 0-1 uneven
+        # steps in 3 s, as the wheel; with them 21-31. They come back once the scroll has eased to a stop.
+        racing = True
+        if moved or racing != self._drag_racing or (sb.value() != before and not racing):
+            self._drag_racing = racing               # what's under the mouse changed (racing: nothing to aim at)
+            self._move_game_drag(gp, (kind, None) if racing or kind != "grid" else None)
 
     def _start_folder_drag(self, iid: str) -> None:
         """A folder picked up (only to rearrange it): its tile, small, follows the mouse."""
@@ -11392,8 +12013,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if self._ghost is not None and not (QApplication.mouseButtons() & Qt.LeftButton):
             self._end_game_drag(QCursor.pos(), drop=False)
 
-    def _drag_hit(self, gp: QPoint) -> tuple:
-        """What a dragged game is over: ("trash", None), ("back", None), ("grid", target or None) or (None, None)."""
+    def _drag_hit(self, gp: QPoint, aim: bool = True) -> tuple:
+        """What a dragged game is over: ("trash", None), ("back", None), ("grid", target or None) or (None, None).
+        aim=False: the grid's spot isn't worked out (rows racing past: nothing is shown to aim at)."""
         def over(w) -> bool:
             return w.isVisible() and w.rect().contains(w.mapFromGlobal(gp))
         folder = is_folder(self._dragging)
@@ -11403,7 +12025,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return "back", None
         vp = self.grid.viewport()
         if over(vp):
-            return "grid", self._drop_spot(vp.mapFromGlobal(gp))
+            return "grid", self._drop_spot(vp.mapFromGlobal(gp)) if aim else None
         return None, None
 
     def _drop_spot(self, pos) -> Optional[tuple]:
@@ -11441,10 +12063,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         return ("between", index, QRectF(x - 2, c.top() + 6, 4, c.height() - 12))
 
     _drag_racing = False      # the edge scroll is going fast: rows race past, nothing to aim at (no line / lift)
+    _drag_moved = False       # the mouse moved since the last frame (dragging a game: handled once a frame)
 
-    def _move_game_drag(self, gp: QPoint) -> None:
+    def _move_game_drag(self, gp: QPoint, hit: Optional[tuple] = None) -> None:
         self._ghost.follow(gp)
-        kind, spot = self._drag_hit(gp)
+        kind, spot = hit or self._drag_hit(gp, aim=not self._drag_racing)
         if self._drag_racing and kind == "grid":
             # (owner, 2026-10-19: the drop line "flickers like crazy" - with the rows racing past a still pointer it
             # switched on over every gap and off over every cover, and the covers under it lifted and dropped)
@@ -11457,14 +12080,20 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def _end_game_drag(self, gp: QPoint, drop: bool) -> None:
         gid = self._dragging
-        # (let go while the rows race past: nothing was shown to aim at - it goes back where it was)
-        kind, spot = self._drag_hit(gp) if drop and not self._drag_racing else (None, None)
+        # (let go while the rows race past: nothing was shown to aim at - it goes back where it was; scrolling slowly,
+        # it lands under the pointer as usual)
+        fast = self._drag_racing and abs(getattr(self, "_drag_scroll_v", 0.0)) > DRAG_AIM_SPEED
+        kind, spot = self._drag_hit(gp) if drop and not fast else (None, None)
         self._drag_racing = False
         self.grid.set_marker(None)
         if self._ghost is None:
             return
         self._drag_watch.stop()
         self._drag_scroll.stop()
+        if getattr(self, "_drag_scroll_pos", None) is not None:   # (dropped mid edge-scroll: it stops there)
+            self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_pos, self._drag_scroll_n = 0.0, 0.0, None, 0
+            self.grid._heading = 0
+            self.grid._end_glide()
         QApplication.instance().removeEventFilter(self._esc)
         ghost, self._ghost = self._ghost, None
         self._landing = ghost
@@ -12543,6 +13172,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         a = m.addAction(tr("menu.play"), lambda: self.play_selected())
         a.setEnabled(self.play_btn.isEnabled() and self.worker is None)
         m.addAction(tr("menu.edit"), self.edit_selected)
+        m.addAction(tr("menu.notes" if g.notes.strip() else "menu.add_notes"), lambda: self.open_notes(g.game_id))
         sm = m.addMenu(tr("menu.status"))
         sm.setObjectName("ticks")       # (its words start where the other menus' do; the tick on the right: MenuLines)
         for s in STATUSES:
@@ -12610,17 +13240,87 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """A new reading status: saved, then shown at once (its bookmark, the folder mosaic, the filter)
         without re-reading the whole library."""
         g = self.library.update(gid, status=status)
-        self.games[gid] = g
-        for games in self.folder_games.values():
-            for i, old in enumerate(games):
-                if old.game_id == gid:
-                    games[i] = g
+        self._replace_game(g)
         if self.settings.status_filter != "all":
             self._rebuild()
         else:
             self.grid.viewport().update()
             self._update_details()
         self._own_change()
+
+    def _replace_game(self, g: Game) -> None:
+        """A game just saved here: the copies in memory follow (no re-reading the whole library)."""
+        self.games[g.game_id] = g
+        for games in self.folder_games.values():
+            for i, old in enumerate(games):
+                if old.game_id == g.game_id:
+                    games[i] = g
+
+    # a game's notes: opened at once from memory and saved in the background (the cloud folder can stall for seconds -
+    # never in the middle of the fade); saves of one game are written one after another, the latest last
+    _notes_saving: frozenset = frozenset()       # games whose notes are being written now
+    _notes_queue: dict = {}                      # game -> notes waiting for the write before them
+
+    def open_notes(self, gid: str) -> None:
+        g = self.games.get(gid)
+        if g is None or self.findChild(DimLayer) is not None:
+            return
+        layer = NotesLayer(self, g.title, g.notes, lambda text, wait=False: self._save_notes(gid, text, wait))
+        if gid in self._notes_saving or gid in self._notes_queue:
+            return                                   # (what's in memory is the newest: it's being written)
+        library = self.library
+
+        def fresh(new: Optional[Game]) -> None:      # the other device may have written some since the last look
+            if new is not None and shiboken6.isValid(layer) and gid not in self._notes_saving | set(self._notes_queue):
+                layer.refresh(new.notes)
+        self._run(lambda: library.get(gid), fresh, lambda _e: None)
+
+    def _save_notes(self, gid: str, text: str, wait: bool = False) -> None:
+        g = self.games.get(gid)
+        if g is not None:
+            self._replace_game(dataclasses.replace(g, notes=text))   # (at once: the menu says Notes, reopening shows them)
+        self._notes_queue = {**self._notes_queue, gid: text}
+        if wait:
+            self._flush_notes()
+        elif gid not in self._notes_saving:
+            self._write_notes(gid)
+
+    def _write_notes(self, gid: str) -> None:
+        queue = dict(self._notes_queue)
+        text = queue.pop(gid)
+        self._notes_queue = queue
+        self._notes_saving = self._notes_saving | {gid}
+        library = self.library
+
+        def finished() -> None:
+            self._notes_saving = self._notes_saving - {gid}
+            if gid in self._notes_queue:
+                self._write_notes(gid)               # (changed again meanwhile)
+
+        def done(g: Game) -> None:
+            if library is self.library and gid not in self._notes_queue:
+                self._replace_game(g)
+                self._own_change()
+            finished()
+
+        def failed(e) -> None:
+            finished()
+            if gid not in self._notes_saving:
+                # (KeyError: the other device removed the game meanwhile)
+                message(self, tr("notes.gone") if isinstance(e, KeyError) else tr("notes.failed", error=e))
+        self._notes_tasks = [t for t in getattr(self, "_notes_tasks", []) if t.isRunning()]
+        self._notes_tasks.append(self._run(lambda: library.update(gid, notes=text), done, failed))
+
+    def _flush_notes(self) -> None:
+        """Closing: every note still being written or waiting is on disk before the program goes."""
+        for t in getattr(self, "_notes_tasks", []):
+            t.wait(10000)
+        queue, self._notes_queue = dict(self._notes_queue), {}
+        for gid, text in queue.items():
+            try:
+                self.library.update(gid, notes=text)
+            except (KeyError, OSError):
+                pass
 
     def _own_change(self) -> None:
         """Note the library as it is after a change made here, so the live check doesn't take it for news
@@ -12797,6 +13497,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             message(self, tr("close.syncing"))      # stopping mid-sync could leave saves half-uploaded
             e.ignore()
             return
+        notes = self.findChild(NotesLayer)
+        if notes is not None:
+            notes.save_now(wait=True)               # (closed with a game's notes open: they're kept)
+        self._flush_notes()                         # (and any still being written)
         self._flush_view_choice()                   # (a view choice made just now)
         self._remember_position()
         show_hidden_explorer_windows()

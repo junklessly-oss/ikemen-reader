@@ -2294,6 +2294,337 @@ class AnkiButton(unittest.TestCase):
         w.close()
 
 
+class GameNotes(unittest.TestCase):
+    """Right-click > Notes: a text box over the darkened window, saved (once) when it closes; kept in the game file."""
+
+    def test_notes_saved_on_close_only_when_changed(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QWidget
+        import app
+        QApplication.instance() or QApplication([])
+        w = QWidget()
+        w.resize(800, 600)
+        saved = []
+        layer = app.NotesLayer(w, "Game", "old", lambda text, wait=False: saved.append(text))
+        layer.boxes[0].layout().activate()
+        box = layer.editor.geometry().translated(layer.boxes[0].pos())
+        self.assertEqual(box.size(), app.QSize(580, 435))        # the text box: 72.5 % of the window
+        block = layer.boxes[0].geometry()                        # title + text box: centred together
+        self.assertEqual(block.left(), 110)
+        self.assertLessEqual(abs(block.top() + block.bottom() - 599), 1)     # (odd heights: within a pixel)
+        layer.dismiss()
+        self.assertEqual(saved, [])                              # unchanged: nothing written
+        layer = app.NotesLayer(w, "Game", "old", lambda text, wait=False: saved.append(text))
+        layer.editor.setPlainText("\n".join(f"line {i}" for i in range(200)))
+        layer.editor.resize(600, 400)
+        sb = layer.editor.verticalScrollBar()
+        self.assertGreater(sb.maximum(), 1000)                  # long notes scroll, by the pixel (the wheel glides)
+        self.assertIs(app.SmoothWheel._area(layer.editor.viewport()), layer.editor)
+        layer.editor.setPlainText("new notes")
+        layer.dismiss()
+        layer.dismiss()                                          # (a second close saves nothing more)
+        self.assertEqual(saved, ["new notes"])
+        w.close()
+
+    def test_window_saves_notes_in_the_background_in_order(self):
+        """The fade never waits on the cloud folder: saved by a background task; reopening at once shows the new
+        notes; saves of one game land in order; closing the program writes whatever is still on its way."""
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            cloud = Path(tmp) / "cloud"
+            lib = Library(cloud)
+            exe = Path(tmp) / "g.exe"
+            exe.write_bytes(b"")
+            gid = lib.add_game("Notes Game", "PC", exe=str(exe)).game_id
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            w.refresh()
+            QApplication.processEvents()
+            w.open_notes(gid)
+            layer = w.findChild(app.NotesLayer)
+            self.assertIsNotNone(layer)
+            layer.editor.setPlainText("first")
+            layer.dismiss()
+            self.assertEqual(w.games[gid].notes, "first")             # in memory at once (menu: "Notes")
+            w._save_notes(gid, "second")                              # (changed again before the first landed)
+            w._save_notes(gid, "third")
+            end = time.monotonic() + 10
+            while (w._notes_saving or w._notes_queue) and time.monotonic() < end:
+                QApplication.processEvents()
+                time.sleep(0.01)
+            self.assertEqual(lib.get(gid).notes, "third")             # the latest, last
+            w._notes_queue = {gid: "on its way"}                      # closing with a save still waiting
+            w._flush_notes()
+            self.assertEqual(lib.get(gid).notes, "on its way")
+            app.wait_for_tasks(5)
+            w.close()
+
+    def test_newer_notes_from_the_other_device_shown_unless_typing(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QWidget
+        import app
+        QApplication.instance() or QApplication([])
+        w = QWidget()
+        w.resize(800, 600)
+        layer = app.NotesLayer(w, "Game", "old", lambda text, wait=False: None)
+        layer.refresh("from the laptop")
+        self.assertEqual(layer.editor.toPlainText(), "from the laptop")
+        layer.editor.setPlainText("typing here")
+        layer.refresh("newer still")
+        self.assertEqual(layer.editor.toPlainText(), "typing here")   # (what's typed is never replaced)
+        w.close()
+
+    def test_keys_stay_in_the_notes_and_long_titles_shorten(self):
+        """Typing notes never reaches the window behind: Enter doesn't open / read the selected game, F5 doesn't
+        refresh, Backspace in an empty box doesn't go back out of a folder; Esc still closes. A long title ends in
+        "..." (pointing at it shows it whole) instead of widening the box."""
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        import app
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as tmp:
+            cloud = Path(tmp) / "cloud"
+            lib = Library(cloud)
+            exe = Path(tmp) / "g.exe"
+            exe.write_bytes(b"")
+            gid = lib.add_game("A" * 300, "PC", exe=str(exe)).game_id
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            w.resize(1000, 700)
+            w.show()
+            w.refresh()
+            w._select(gid)
+            QApplication.processEvents()
+            fired = []
+            w.activate_selected = lambda *a: fired.append("enter")
+            w.refresh = lambda *a, **k: fired.append("F5")
+            w.close_folder = lambda *a: fired.append("back")
+            w.open_notes(gid)
+            layer = w.findChild(app.NotesLayer)
+            end = time.monotonic() + 1
+            while time.monotonic() < end:
+                QApplication.processEvents()
+            box = layer.boxes[0]
+            self.assertLessEqual(box.width(), round(w.width() * layer.SIZE))         # the box keeps its size
+            self.assertTrue(layer.head.toolTip())                                     # (shortened: the tip has it all)
+            QTest.keyClicks(layer.editor, "ab")
+            for k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_F5, Qt.Key_Backspace, Qt.Key_Backspace, Qt.Key_Backspace,
+                      Qt.Key_Backspace, Qt.Key_Backspace):
+                QTest.keyClick(layer.editor, k)
+            self.assertEqual((layer.editor.toPlainText(), fired), ("", []))
+            QTest.keyClick(layer.editor, Qt.Key_Escape)
+            self.assertEqual(fired, ["back"])                                         # Esc: the window's own "back"
+            layer.dismiss()
+            app.wait_for_tasks(5)
+            w.close()
+
+    def test_removal_warns_about_notes(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        import app
+        from library import Game, MachinePaths
+        g = Game("g", "Game", paths={"PC": MachinePaths("C:/g.exe")})
+        for notes, warned in (("", False), ("some notes", True)):
+            g.notes = notes
+            with mock.patch.object(app, "message", return_value="no") as ask:
+                app.confirm_remove(None, g, "PC")
+            self.assertEqual(app.i18n.tr("game.remove_notes") in ask.call_args[0][1], warned)
+
+    def test_notes_kept_in_game_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            lib = Library(d)
+            g = lib.add_game("Notes Test", "PC", exe="C:/x.exe")
+            lib.update(g.game_id, notes="line 1\n日本語")
+            lib.record_session(g.game_id, "PC", 60)              # (later writes keep them)
+            self.assertEqual(lib.get(g.game_id).notes, "line 1\n日本語")
+
+
+class SavedThemes(unittest.TestCase):
+    """Custom Theme > Saved Themes (themes.py): whole looks (colours, background, fonts) in the cloud folder."""
+
+    def test_add_rename_delete_and_files(self):
+        import themes
+        with tempfile.TemporaryDirectory() as tmp:
+            root, pic = Path(tmp) / "cloud", Path(tmp) / "p.png"
+            f1, f2 = Path(tmp) / "a" / "F.ttf", Path(tmp) / "b" / "F.ttf"
+            for f, data in ((pic, b"pic"), (f1, b"font one"), (f2, b"font two")):
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_bytes(data)
+            a = themes.add(str(root), "With All", {"bg": "#112233"}, "One", "Two", (str(pic), 0.5, 2.0, 0.1, 0.9),
+                           {"One": str(f1)})
+            b = themes.add(str(root), "Same File Name", {}, "Two", "Two", None, {"Two": str(f2)})
+            saved = {t["id"]: t for t in themes.load(str(root))}
+            self.assertEqual([t["name"] for t in themes.load(str(root))], ["With All", "Same File Name"])
+            self.assertEqual(saved[a]["bg"]["opacity"], 0.5)
+            self.assertEqual(themes.picture(str(root), saved[a]).read_bytes(), b"pic")
+            self.assertIsNone(themes.picture(str(root), saved[b]))                     # (no background)
+            # two different fonts with the same file name don't overwrite each other
+            self.assertEqual(themes.font_file(str(root), saved[a], "One").read_bytes(), b"font one")
+            self.assertEqual(themes.font_file(str(root), saved[b], "Two").read_bytes(), b"font two")
+            themes.rename(str(root), b, "Renamed")
+            self.assertEqual(themes.load(str(root))[1]["name"], "Renamed")
+            themes.delete(str(root), a)
+            self.assertEqual([t["id"] for t in themes.load(str(root))], [b])
+            left = sorted(p.name for p in (root / "themes").rglob("*") if p.is_file())
+            self.assertEqual(left, ["F_2.ttf", "themes.json"])                         # its picture and font went
+
+    def test_damaged_list_is_never_overwritten(self):
+        import themes
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "themes").mkdir()
+            (Path(tmp) / "themes" / "themes.json").write_text("{half a file", "utf-8")
+            self.assertEqual(themes.load(tmp), [])
+            with self.assertRaises(OSError):
+                themes.add(tmp, "New", {}, "F", "F", None, {})
+            self.assertEqual((Path(tmp) / "themes" / "themes.json").read_text("utf-8"), "{half a file")
+
+    def test_local_copies_follow_the_cloud(self):
+        import themes
+        with tempfile.TemporaryDirectory() as tmp:
+            root, cache, pic = Path(tmp) / "cloud", Path(tmp) / "cache", Path(tmp) / "p.png"
+            pic.write_bytes(b"pic")
+            tid = themes.add(str(root), "T", {}, "F", "F", (str(pic), 0.4, 1, 0.5, 0.5), {})
+            items = themes.local_copies(str(root), cache, themes.load(str(root)))
+            local = Path(items[0]["picture"])
+            self.assertEqual((local.parent.name, local.read_bytes()), ("pictures", b"pic"))
+            (cache / "pictures" / "old.png").write_bytes(b"x")                         # a deleted theme's copy
+            (cache / "pictures" / "tried.png").write_bytes(b"x")                       # one being tried right now
+            themes.local_copies(str(root), cache, themes.load(str(root)),
+                                frozenset({str(cache / "pictures" / "tried.png")}))
+            self.assertEqual(sorted(p.name for p in (cache / "pictures").iterdir()), sorted([local.name, "tried.png"]))
+            themes.delete(str(root), tid)
+            self.assertEqual(themes.local_copies(str(root), cache, themes.load(str(root))), [])
+            self.assertEqual(list((cache / "pictures").iterdir()), [])
+
+    def test_solo_round_trip(self):
+        """Going solo takes the saved themes along; back to Dual, those saved / renamed / deleted while solo follow,
+        and a rename made on the other device meanwhile stands."""
+        import library
+        import themes
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            cloud = tmp / "cloud"
+            cloud.mkdir()
+            pic, font = tmp / "p.png", tmp / "f.ttf"
+            pic.write_bytes(b"pic")
+            font.write_bytes(b"font")
+            a, b, c = (themes.add(str(cloud), n, {}, "F", "F", None, {}) for n in ("A", "B", "C"))
+            solo = library.start_solo_library(str(cloud), app_dir=tmp)
+            self.assertEqual([t["name"] for t in themes.load(str(solo))], ["A", "B", "C"])
+            themes.rename(str(solo), a, "A2")
+            themes.delete(str(solo), b)
+            themes.add(str(solo), "New", {}, "Mine", "F", (str(pic), 0.5, 1, 0.5, 0.5), {"Mine": str(font)})
+            themes.rename(str(cloud), c, "C (laptop)")
+            library.merge_solo(str(cloud), "PC", app_dir=tmp)
+            back = themes.load(str(cloud))
+            self.assertEqual([t["name"] for t in back], ["A2", "C (laptop)", "New"])
+            self.assertEqual(themes.picture(str(cloud), back[2]).read_bytes(), b"pic")
+            self.assertEqual(themes.font_file(str(cloud), back[2], "Mine").read_bytes(), b"font")
+
+    def _dialog(self, root):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        seen = []
+        d = app.ThemeDialog(app.theme_colors("dark"), seen.append, root=root)
+        d.resize(450, 620)
+        d.show()
+        end = time.monotonic() + 10
+        while root and d.saved is None and time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        QApplication.processEvents()
+        return app, d, seen
+
+    def test_tabs_sit_left_with_equal_room_above_and_below(self):
+        from PySide6.QtWidgets import QPushButton
+        with tempfile.TemporaryDirectory() as tmp:
+            app, d, _ = self._dialog(tmp)
+            tabs = [b for b in d.findChildren(QPushButton) if b.isCheckable() and b.text() in
+                    (app.tr("theme.tab_colours"), app.tr("theme.tab_saved"))]
+            self.assertEqual(len(tabs), 2)
+            first = min(tabs, key=lambda b: b.x())
+            self.assertEqual(first.x(), d.layout().contentsMargins().left())             # on the left
+            above = first.y()
+            below = d.pages.y() - (first.y() + first.height())
+            self.assertEqual(above, below)                                                # centred in its band
+            d.close()
+            _, d2, _ = self._dialog("")                                                   # no library yet: no tabs
+            self.assertFalse(any(b.text() == app.tr("theme.tab_saved") for b in d2.findChildren(QPushButton)))
+            d2.close()
+
+    def test_tab_loads_in_the_background_and_picking_previews_everything(self):
+        import themes
+        from PySide6.QtGui import QImage, QColor
+        from PySide6.QtWidgets import QApplication
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "cloud"
+            pic = Path(tmp) / "p.png"
+            img = QImage(300, 200, QImage.Format_RGB32)
+            img.fill(QColor("#884422"))
+            img.save(str(pic))
+            themes.add(str(root), "Pictured", {"bg": "#112233"}, "Zen Maru Gothic", "Zen Maru Gothic",
+                       (str(pic), 0.5, 1.5, 0.4, 0.6), {})
+            themes.add(str(root), "Plain", {"bg": "#AA0000"}, "Zen Maru Gothic", "Zen Maru Gothic", None, {})
+            app, d, seen = self._dialog(str(root))
+            d._tab(1)
+            self.assertEqual([it["theme"]["name"] for it in d.grid.items], ["Pictured", "Plain"])
+            self.assertEqual(d.grid.height(), 2 * d.grid.CARD_H + d.grid.GAP)               # 2 to a row, + last
+            self.assertEqual(max(d.grid.items[0]["image"].width(), d.grid.items[0]["image"].height()), 300)
+            d.grid.grab()                                                                   # (draws)
+            d._card_clicked(0)
+            self.assertEqual(d.grid.chosen, d.grid.items[0]["theme"]["id"])
+            local = d.chosen["bg"][0]
+            end = time.monotonic() + 10
+            while app.BACKGROUND["path"] != local and time.monotonic() < end:           # (decoded in the background)
+                QApplication.processEvents()
+                time.sleep(0.01)
+            self.assertIn(local, app._bg_source)
+            self.assertNotIn(str(root), local)                                            # this computer's copy
+            self.assertEqual((app.BACKGROUND["path"], app.BACKGROUND["opacity"], d.colors["bg"]),
+                             (local, 0.5, "#112233"))
+            d._card_clicked(1)
+            self.assertEqual(app.BACKGROUND["path"], "")                                  # a theme without one: none
+            d.close()
+            app.apply_background("", 0.35)
+
+class ClosedWindowsLeaveNothingBehind(unittest.TestCase):
+    """A window closed and deleted a moment after opening: work it had put off "until the next moment" (a drop-down's
+    arrow, Settings fitting itself to the screen, Custom Theme's sizing) is dropped with it, not run on a deleted
+    window (found by the 2.0.0 fuzz: an error, and once a hard crash)."""
+
+    def test_settings_and_custom_theme_deleted_at_once(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        errors = []
+        old = sys.excepthook
+        sys.excepthook = lambda k, v, tb: errors.append(f"{k.__name__}: {v}")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                for _ in range(3):
+                    d = app.SettingsDialog(LocalSettings("PC", tmp))
+                    d.show()
+                    app.discard(d)
+                    t = app.ThemeDialog(app.theme_colors("dark"), lambda c: None, root=tmp)
+                    t.show()
+                    t._toggle_more()
+                    app.discard(t)
+                    end = time.monotonic() + 0.3
+                    while time.monotonic() < end:
+                        QApplication.processEvents()
+                app.wait_for_tasks(5)
+                QApplication.processEvents()
+        finally:
+            sys.excepthook = old
+        self.assertEqual(errors, [])
+
+
 class SmoothAnimations(unittest.TestCase):
     """The animation work of 2026-10-15: only covers in view are walked each frame, covers are prepared in the
     background, search / filter changes glide (new covers fade in, removed ones fade out), bookmarks fade."""
@@ -3207,6 +3538,9 @@ class SmoothHoverPopups(unittest.TestCase):
                 w.settings.pulse = True
                 w.anim.stop()
                 self._run(0.3)                                                    # (pending redraws done)
+                # (a whole-grid redraw in that pause - background cover loading finishing, under a full run - rightly
+                # skips the next lights-only frame: _tick's painted_all. The frame after it is the one tested.)
+                w.grid.painted_all = False
                 w._tick()
                 self.assertIsNotNone(w.grid.light_frame)                         # a lights-only frame...
                 w.grid.viewport().repaint(w.grid.light_frame["region"])
@@ -4390,6 +4724,7 @@ class AuditFixes(unittest.TestCase):
         finally:
             holder.kill()
             holder.wait()
+            holder.stdout.close()
 
     def test_window_opens_with_its_real_picture(self):
         # Windows' open animation faded in a WHITE window: the first paint came too late (owner, 2026-10-18). Now the
@@ -5036,6 +5371,13 @@ class WheelGlide(unittest.TestCase):
                         QApplication.processEvents()
                         time.sleep(0.005)
 
+                # (the window's own start-up work first: under a busy full run a library read landing mid-glide
+                # rebuilt the grid, which rightly ends a glide - the test then saw it stop short)
+                app.wait_for_tasks(5)
+                end = time.monotonic() + 0.8
+                while time.monotonic() < end:
+                    QApplication.processEvents()
+                    time.sleep(0.005)
                 step = round(w.grid.notch_px())
                 sb.setValue(0)
                 wheel(-120)
@@ -5122,6 +5464,59 @@ class GlideStrips(unittest.TestCase):
                     g._drop_layer()
             finally:
                 app.hold_pulse(False)
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_drag_edge_scroll_glides(self):
+        """2026-10-24 (owner: edge-scrolling with a cover in hand as smooth as the wheel): placed by the frame clock
+        with eased speed (even steps, no jerks), drawn by the strips (the picked-up cover live, faded, looking as
+        normal drawing does); easing out ends the glide, and so does dropping mid-scroll."""
+        from unittest import mock
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QCursor
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp)
+            try:
+                g, sb, vp = w.grid, w.grid.verticalScrollBar(), w.grid.viewport()
+                sb.setValue(0)
+                gid = g.item(1).data(app.GAME_ID_ROLE)
+                w._start_game_drag(gid)
+                w._drag_watch.stop(); w._drag_scroll.stop()    # (stepped by hand below)
+                w.drag_dim = 1.0
+                at = {"p": vp.mapToGlobal(QPoint(vp.width() // 4, vp.height() - 10)), "t": 100.0}
+
+                class Cursor(QCursor):
+                    pos = staticmethod(lambda: at["p"])
+                with mock.patch.object(app, "QCursor", Cursor), mock.patch.object(app, "frame_time", lambda: at["t"]):
+                    w._drag_scroll_t = at["t"]
+                    values = []
+                    for _ in range(40):
+                        at["t"] += 1 / 60
+                        w._drag_autoscroll()
+                        values.append(sb.value())
+                    self.assertTrue(g.layer_active())          # gliding with a cover in hand: the strips draw it
+                    steps = [b - a for a, b in zip(values, values[1:])]
+                    self.assertTrue(all(s >= 0 for s in steps) and values[-1] > 0)
+                    self.assertTrue(all(abs(b - a) <= 2 for a, b in zip(steps, steps[1:])))   # eased, even
+                    layered = vp.grab().toImage()
+                    keep, g._glide_to = g._glide_to, None
+                    normal = vp.grab().toImage()
+                    g._glide_to = keep
+                    self.assertLessEqual(self._worst(normal, layered), 3)
+                    at["p"] = vp.mapToGlobal(QPoint(vp.width() // 4, vp.height() // 2))   # out of the zone
+                    for _ in range(60):
+                        at["t"] += 1 / 60
+                        w._drag_autoscroll()
+                    self.assertIsNone(g._glide_to)              # eased to a stop: normal drawing again
+                    at["p"] = vp.mapToGlobal(QPoint(vp.width() // 4, vp.height() - 10))
+                    for _ in range(5):
+                        at["t"] += 1 / 60
+                        w._drag_autoscroll()
+                    self.assertIsNotNone(g._glide_to)
+                    w._end_game_drag(at["p"], drop=False)       # let go mid-scroll
+                    self.assertIsNone(g._glide_to)
+            finally:
                 w.close()
                 app.wait_for_tasks(5)
 

@@ -31,13 +31,15 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - `sync_engine.py`, `regsync.py` (registry export/import + safety rules), `library.py` (settings, games,
   device slots, sorting), `launcher.py` (run/watch, window titles, Luna/LE, first-play detection),
   `detect.py` (save-location detection), `luna.py`, `vndb.py`, `titles.py` (title cleaning), `lnk.py`
-  (shortcut reader; follows Luna `--Exec` shortcuts to the game), `vn.py` (small CLI), `outside.py` (starts
+  (shortcut reader; follows Luna `--Exec` shortcuts to the game), `vn.py` (small CLI), `themes.py` (saved custom
+  themes in `<library root>/themes/`), `outside.py` (starts
   every outside program: games, Luna, LE, admin prompt).
 - `assets/`: `Logo.png`, `Icon.png`, `Font.otf` (Hiragino Maru Gothic ProN W4, owner-supplied; the owner has legal permission for all
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 277 tests (2026-10-20, 1.1.7: + smooth wheel / wheel-press everywhere; under a full run WheelGlide and SmoothHoverPopups.test_deselect... can flake on timing - pass alone), all pass on
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 291 tests (2026-10-24, 2.0.0: + notes, saved themes, closed-window timers; the two old timing flakes fixed at
+  the root), all pass on
   the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
@@ -67,6 +69,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   low-contrast warning (WCAG < 3:1), Qt QColorDialog (Japanese via qtbase_ja.qm, set_qt_language()).
   Logo/star recolour: themed_image() + _recolour() (greyscale → 256-entry colour table → original alpha;
   on-screen identical to per-pixel within 1/255, ~0.4 s); used by top-bar logo, StarButtons, window icon.
+  Saved Themes (2.0.0): Custom Theme tabs "Colours | Saved Themes" (left, 18 px above and below). ThemeGrid (one
+  widget) of previews, 2 a row, + last (asks a name). A saved theme = colours + background (picture/opacity/crop; none =
+  removes yours) + fonts; shared via the cloud (themes.py), solo copies/merges it. Click previews all, Save keeps,
+  Cancel restores; right-click Rename / Delete. Cloud only touched in the background (theme_cache). See NOTES.md.
 - Library background (Settings → Theme → "Library Background..."): BackgroundDialog (Choose/Change Image,
   Remove, Opacity slider shown once an image is chosen, preview box + live window preview). Per device:
   LocalSettings.bg_image (our copy in %APPDATA%\IkemenReader\background\) + bg_opacity. Drawn by Backdrop
@@ -152,7 +158,10 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "1.1.7" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.0" in app.py (build.py reads it).
+- Notes (2.0.0): right-click a game -> "Add Notes" / "Notes" (under Edit) -> NotesLayer (DimLayer, like the easter
+  egg): 72.5 % text box + elided title, saved on close only (owner), in Game.notes (synced with the game file), saved in
+  the background in order, flushed on exit; every key but Esc stays in the box. Removal warns about notes.
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.

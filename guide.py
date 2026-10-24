@@ -155,6 +155,12 @@ GUIDE = {
             "you type is kept (the window title won't replace it).",
             "- Set a game's reading status (Reading, Finished, Plan to Read, Dropped) in the bottom bar or by "
             "right-clicking it.",
+            "§- Notes: right-click a game and choose Add Notes (Notes, once it has some). A text box opens over the "
+            "darkened library; click outside it or press Esc to close it. Your notes are saved when it closes and are "
+            "shared with the other device. Removing a game removes its notes too (you're told first).",
+            "¤- Notes: right-click a game and choose Add Notes (Notes, once it has some). A text box opens over the "
+            "darkened library; click outside it or press Esc to close it. Your notes are saved when it closes. "
+            "Removing a game removes its notes too (you're told first).",
             "- A game with a reading status gets a little bookmark in that status's colour in the top-right corner "
             "of its cover (also inside folders and on a folder's cover). The bookmark button next to the trash can "
             "hides or shows them; your choice is remembered. The colours can be changed in a custom theme.",
@@ -186,6 +192,12 @@ GUIDE = {
             "and titles from VNDB, and safe covers only.",
             "- Custom Library Background: choose a picture, set its opacity and zoom, and drag it into place.",
             "- Theme: Dark, Light, or Custom, where you choose every colour yourself.",
+            "§- Saved Themes (in Custom, at the top): press the big + to save your current look (colours, library "
+            "background and fonts) under a name. Click a saved theme to try it, then Save to keep it; right-click one to "
+            "rename or delete it. Saved themes are shared with the other device, fonts you added included.",
+            "¤- Saved Themes (in Custom, at the top): press the big + to save your current look (colours, library "
+            "background and fonts) under a name. Click a saved theme to try it, then Save to keep it; right-click one to "
+            "rename or delete it.",
             "- Updates: when a new version of Ikemen Reader is out, you're asked whether to update when Ikemen "
             "Reader opens. With Install Updates Automatically ticked, it downloads by itself and offers Restart Now "
             "(otherwise it's installed when you close Ikemen Reader). Updates never touch your library, saves or "
@@ -289,6 +301,12 @@ GUIDE = {
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーの読書時間と最後に読んだ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",
             "- 下部のバーでゲームやフォルダーの名前をクリックすると、その場で名前を変更できます。Enterで保存、Escで取り消します。入力した名前はそのまま保持されます（ゲーム画面のタイトルで置き換わりません）。",
             "- プレイ状況（プレイ中・読了・積みゲー・中断）は、下部のバーか右クリックで設定します。",
+            "§- メモ：ゲームを右クリックして「メモを追加」（メモがあるゲームでは「メモ」）を選ぶと、そのゲームのメモを書けます。"
+            "暗くなったライブラリの上に入力欄が開き、外側をクリックするかEscで閉じると、メモが保存され、もう一方の端末にも共有されます。"
+            "ゲームを削除するとメモも削除されます（事前にお知らせします）。",
+            "¤- メモ：ゲームを右クリックして「メモを追加」（メモがあるゲームでは「メモ」）を選ぶと、そのゲームのメモを書けます。"
+            "暗くなったライブラリの上に入力欄が開き、外側をクリックするかEscで閉じると、メモが保存されます。"
+            "ゲームを削除するとメモも削除されます（事前にお知らせします）。",
             "- プレイ状況を設定したゲームには、カバーの右上にその状況の色のしおりが付きます（フォルダーの中やフォルダーのカバーにも表示されます）。"
             "ゴミ箱の隣にあるしおりのボタンで表示・非表示を切り替えられます。この設定は次回以降も保持されます。色はカスタムテーマで変更できます。",
             "- フォルダー：ゲームを別のゲームの中央にドラッグすると、2つをまとめた新しいフォルダーができます。フォルダーにドラッグすると追加されます。フォルダーの中では、ゲームを「‹ ライブラリ」"
@@ -313,6 +331,11 @@ GUIDE = {
             "§- アクセシビリティ：同期ランプの点滅、Discordへのアクティビティ表示、Windows起動時の自動起動、アップデートの自動インストール、VNDBからのカバー画像とタイトルの自動取得、安全なカバーのみの表示を設定できます。",
             "- ライブラリの背景をカスタマイズ：画像を選び、不透明度とズームを調整して、ドラッグで位置を合わせます。",
             "- テーマ：ダーク、ライト、またはすべての色を自分で選べるカスタムから選べます。",
+            "§- 保存したテーマ（カスタムの上部）：大きな＋を押すと、現在の見た目（色・ライブラリの背景・フォント）を名前を付けて保存できます。"
+            "保存したテーマをクリックすると試せて、「保存」で確定します。右クリックで名前の変更や削除ができます。"
+            "保存したテーマは、追加したフォントも含めて、もう一方の端末にも共有されます。",
+            "¤- 保存したテーマ（カスタムの上部）：大きな＋を押すと、現在の見た目（色・ライブラリの背景・フォント）を名前を付けて保存できます。"
+            "保存したテーマをクリックすると試せて、「保存」で確定します。右クリックで名前の変更や削除ができます。",
             "- アップデート：イケメンリーダーの新しいバージョンが出ると、起動時にアップデートするか尋ねます。「アップデートを自動でインストール」をオンにすると、"
             "自動でダウンロードして「今すぐ再起動」を提案します（再起動しない場合は、イケメンリーダーを閉じたときにインストールされます）。"
             "アップデートでライブラリ・セーブ・設定が変わることはなく、ゲームの実行中に行われることもありません。",

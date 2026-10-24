@@ -1216,6 +1216,21 @@ before changing it.
   pick / rename / delete saved ones (e.g. in Custom Theme next to Start From Dark / Light). Details not discussed yet
   (per device or shared by Ikemen Sync, whether the background picture / fonts belong to a saved theme).
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
+- Background writes (owner, 2026-10-24: idea pile; "is it seriously worth it?" - verdict: worth it eventually, not
+  urgent). Window-thread cloud writes that freeze the window while Google Drive stalls: reading status, renames (game /
+  folder), folder drops / Add to / Remove From / Rename / Remove Folder, rearranging + sort, remove + Undo, the VNDB
+  auto cover, Edit / Add Game saves. Plan: ONE ordered background write line (generalise _write_notes), memory updated
+  at once, failure -> message + re-read; live poll waits while writes are queued; Undo after its removal; flush on
+  close (incl. the os._exit path); tests with a fake 2 s-per-write cloud + fuzz. ~1 day (quick actions 3-4 h, Edit /
+  Add Game 1-2 h, tests 1 h). Likeliest moment it bites: marking a game Finished / moving it right after closing it,
+  while Drive uploads its saves. No freeze from a write has been reported yet (all seen stalls were reads, fixed):
+  decide from data first (a write-timing log), do status / renames / folder drops first if it shows up.
+- Cover size slider (owner, 2026-10-24: back to the idea pile, NOT in 2.0.0). See the 2026-10-18 entry below. Re-
+  assessed 2026-10-24: ~half a day now - everything since caches at the current size (wheel strips, covers decoded
+  at size + prefetch, _flat tiles, placeholders, first-screen prepaint, START_ROWS height, drag ghost, mosaics,
+  bookmarks / lights / hover text at small sizes); live preview must scale existing pictures while dragging and
+  re-decode on release. Open questions for the owner: Settings slider and/or Ctrl+wheel; per device (lean) or shared;
+  smallest ~60 %.
 - Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +
   Custom edits; restyle_all / MainWindow.restyle -> app_icon()), and an unpinned taskbar button shows it (owner
   confirmed). A PINNED button (owner's: `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\
@@ -1321,3 +1336,64 @@ before changing it.
 - Long drop-down lists (60 rows, real wheel): per-pixel glide, 1-2 late of ~110 frames, list paint 2.4-3.3 ms.
   ThemedCombo lists scroll per pixel from the start; _AreaAutoScroll._begin switches any item view to per pixel (same
   row kept on top) - wheel-press in a list moved whole rows before. In an open list it scrolls, the list stays open.
+
+## Session 2026-10-24: hover bug, smooth drag edge-scroll, even wheel steps
+- Bottom-row hover bug: while a mouse button is held the grid keeps the mouse past its edge, so itemAt() found the row
+  hidden under the bottom bar and lifted it. The viewport MouseMove handler now only hovers inside viewport().rect().
+- Drag edge-scroll (owner: "make it as smooth as scrolling"): strips (layer_active) now stay on during a drag; the
+  picked-up game is drawn live with its light then faded (_sync_skip adds _dim_gid), the drop line is drawn on top of
+  the strips, set_marker keeps the layer (dropping it cost an 8 ms hitch at scroll start). _drag_autoscroll: speed eases
+  with a critically damped spring (DRAG_SCROLL_EASE_S 0.16), brakes before the end (DRAG_SCROLL_BRAKE 5000 px/s^2),
+  moves a WHOLE number of px per refresh with hysteresis (no 1,2,1,2 judder when slow; minimum 1 px per refresh),
+  timed by frame_time() / frame_period(), repaints right after setValue (before the mouse work). Mouse moves during a
+  drag are handled once per frame (_drag_moved), the ghost only moves (no repaint). Owner's choice: no drop aiming while
+  scrolling (the aiming work was the last difference from the wheel); only letting go while scrolling fast
+  (> DRAG_AIM_SPEED) sends the game back. Measured on the owner's library: steps constant mid-scroll, late frames
+  ~= the wheel (1-2 per 3 s).
+- Wheel glide steps: per-frame step now changes by at most 1 px and only in the glide's direction (within 1.5 px of the
+  curve): one notch 1,2,2,3,3,4,4,4,5..5,4,4,4,3,2,2,2,1 instead of jumps like 4,4,4,4,6.
+- Bench tools in ..\claude-tools: dragbench.py (real-window drag scenes, env DB_*), film.py (samples the real screen
+  each refresh; it disturbs timing itself, so late counts with it on are inflated), dragprof.py.
+- DROPPED by the owner: "keep the saves from before a Find It While Reading session" (rare case; the setup-saves
+  marking from 2026-10-19 already covers the real problem). Don't re-propose.
+
+## Session 2026-10-24 (cont.): Notes, Saved Themes, the 2.0.0 sweep
+- Notes (owner's spec): right-click a game -> "Add Notes" ("Notes" once it has some), under Edit. NotesLayer (DimLayer
+  base, shared with EasterEgg: frozen-picture fade, click outside / Esc closes): ElidedLabel title 20pt in the text
+  colour + QTextEdit (per-pixel scrolling, so SmoothWheel glides it) 72.5 % of the window each way, both centred
+  together, size follows the window. Saved on CLOSE only (owner's choice), only if changed. Game.notes (last field).
+  Opens at once from memory; a background read shows newer notes from the other device unless typing has begun
+  (NotesLayer.refresh). Saved in the background (never during the fade): in memory at once, then written; saves of one
+  game queue in order (_notes_queue / _notes_saving); closing the program writes anything pending (_flush_notes, also
+  before the "game still running" os._exit). Every key but Esc stays in the box (ShortcutOverride accepted: F5 /
+  Alt+Left / Enter / Backspace never reach the window). Removing a game warns that its notes go too (both-devices
+  wording when shared). Other device removed the game meanwhile: notes.gone message.
+- Saved Themes (owner's spec): Custom Theme gets two tabs (left, centred between the window top and the content: 18 px
+  above and below) "Colours | Saved Themes". Saved page: ThemeGrid (ONE widget draws every card - 41 widgets made each
+  live restyle 245 ms instead of 65): 2 per row, each a small drawing of the library in its colours / background (crop +
+  opacity) / font, name below (elided), the big dashed + last ("Save Current Theme" -> name asked). Click = preview
+  everything (colours, background, fonts); Save keeps it, Cancel restores all. A theme without a background REMOVES the
+  current one (owner). Right-click: Rename / Delete (Are You Sure?). Shared via the cloud: themes.py,
+  <library root>/themes/themes.json + pictures/<id>.<ext> + fonts/<file> (same-name different fonts -> _2 suffix).
+  A damaged list is never overwritten (strict read before writes). The cloud is touched ONLY in the background:
+  the list loads as the window opens (load_saved_themes: local copies in %APPDATA%\IkemenReader\theme_cache - only
+  new/changed files copied, unused ones tidied, the one being tried protected - pictures decoded small with
+  QImageReader.setScaledSize, 4x faster); save / rename / delete run in the background then reload; picking a theme
+  with a picture decodes it in the background first (the library decoding a 4K picture while drawing froze 50-100 ms).
+  Fonts: shown from the cached copy (_PREVIEW_FONTS, loaded once), added for good (add_user_font) only on Save;
+  missing everywhere -> this device keeps its own. Solo: going solo copies themes (SOLO_PARTS), back to Dual merges
+  (themes.merge: added / renamed / deleted while solo; a rename made on the other device meanwhile stands).
+  Measured (40 themes, 4K pictures): open 40 ms, background load 0.48 s cold / 0.3 s warm, cards 0.4 ms to lay out,
+  ~1 ms each to draw, scroll frames <= 4 ms, picking = the same restyle as any colour change.
+- 2.0.0 sweep: APP_VERSION 2.0.0. pyflakes clean; every tr() key exists in EN + JA, placeholders match; review of all
+  changes since the 1.1.0 audit. Fuzz (claude-tools fuzz200.py = fuzz110 + notes, saved themes, drag edge-scrolls,
+  faulthandler on) found: delayed calls running on windows already deleted (ThemedCombo._update_arrow, FitsScreen
+  _top_up, VndbDialog.search, PopupsToFront._reveal, DragGhost, Custom Theme) - now QTimer.singleShot(ms, context,
+  fn): dropped with their window. The silent hard crashes (exit 127) were the HARNESS: QTest.keyClicks with
+  Japanese text hits a Qt test-library assert (qasciikey.cpp) - fuzz200 types ASCII only; qInstallMessageHandler now
+  logs Qt's own messages (an assert's text), faulthandler on.
+  Test fix: SmoothHoverPopups.test_deselect... flaked when a whole-grid redraw landed in its pause (painted_all, by
+  design) - the test now starts from a known state. Notes title elides; saved-themes grid lines up with Save when no
+  scroll bar shows; tab buttons follow any page switch; theme menu "Rename" like the folder menu's.
+- Bench tools added: claude-tools themebench.py (saved themes latency / stress), notesbench.py (notes / egg fades in a
+  real window), bench2\ (a copy of the owner's library + settings pointed at it, for real-window benches).
