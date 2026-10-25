@@ -92,7 +92,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -4610,7 +4610,7 @@ class CardDelegate(QStyledItemDelegate):
 
     def _paint_item(self, p: QPainter, option: QStyleOptionViewItem, index) -> None:
         gid = index.data(GAME_ID_ROLE)
-        if gid == self.w._dim_gid and self.w._landing is not None:
+        if gid == self.w._dim_gid and self.w._landing is not None and self.w._asking_gid != gid:
             return                                       # the dropped cover is gliding onto this spot
         off = self.w.slide_offset(gid)
         if off is not None:                              # sliding into its new place after a drop
@@ -9581,6 +9581,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                                                        # adds one; earlier ones finish their fade, never cut short)
         self._slide_t0 = 0.0
         self._dim_gid: Optional[str] = None           # the picked-up game, faded in its place
+        self._asking_gid: Optional[str] = None        # dropped on the trash: stays faded while Are You Sure? asks
         self.drag_dim = 0.0                           # 0..1 how far it has faded
         self.rumble = 0.0                             # how far the covers rock, in degrees (easter egg)
         self.rumble_t = 0.0                           # the rocking's clock (one per frame for all covers)
@@ -9652,10 +9653,20 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.back_btn.setAcceptDrops(True)
         self.back_btn.installEventFilter(self)
         fb.addWidget(self.back_btn)
-        self.folder_title = QLabel(objectName="title")
+        self.folder_title = ElidedLabel(objectName="title")
         self.folder_title.setTextFormat(Qt.PlainText)
+        self.folder_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.folder_title.clickable = True          # click the name to rename the folder, like the bottom bar's name
+        self.folder_title.setMouseTracking(True)
+        self.folder_title.clicked.connect(lambda: self._start_rename(top=True))
         fb.addSpacing(6)
         fb.addWidget(self.folder_title, 1)
+        self.f_title_edit = QLineEdit(self.folderbar, objectName="title_edit")
+        self.f_title_edit.hide()
+        self.f_title_edit.editingFinished.connect(lambda: self._finish_rename(True))
+        self.f_title_edit.textChanged.connect(lambda _t: self._place_title_edit())
+        self.f_title_edit.installEventFilter(self)
+        self._f_click_away = ClickAway(self.f_title_edit, lambda: self._finish_rename(True))
         self.folderbar.hide()
         root.addWidget(self.folderbar)
 
@@ -9740,6 +9751,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.d_title_edit.textChanged.connect(lambda _t: self._place_title_edit())
         self.d_title_edit.installEventFilter(self)
         self._renaming: Optional[tuple] = None      # ("game" | "folder", id) while the name is being edited
+        self._rename_top = False                    # renaming from the folder bar's name (not the bottom bar's)
         self._click_away = ClickAway(self.d_title_edit, lambda: self._finish_rename(True))
         line = QHBoxLayout()                   # sync status, then time read + last read
         line.setSpacing(0)
@@ -11599,36 +11611,46 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         g = self.bar_game()
         return ("game", g.game_id) if g else None
 
-    def _start_rename(self) -> None:
-        target = self._rename_target()
+    def _rename_parts(self) -> tuple:
+        """(the rename box, the name it covers, its click-away) for the bar being renamed from."""
+        if self._rename_top:
+            return self.f_title_edit, self.folder_title, self._f_click_away
+        return self.d_title_edit, self.d_title, self._click_away
+
+    def _start_rename(self, top: bool = False) -> None:
+        """top: the folder bar's name (the folder being viewed); else the bottom bar's name."""
+        target = (("folder", self.current_folder) if self.current_folder else None) if top else self._rename_target()
         if target is None or self._renaming:
             return
-        self._renaming = target
-        e = self.d_title_edit
+        self._renaming, self._rename_top = target, top
+        e, lab, away = self._rename_parts()
         e.setText(self.folder_name(target[1]) if target[0] == "folder" else self.games[target[1]].title)
-        self.d_title.blank = True
-        self.d_title.update()
+        lab.blank = True
+        lab.update()
         self._place_title_edit()
         e.show()
         e.raise_()
         e.setFocus()
         e.selectAll()
-        QApplication.instance().installEventFilter(self._click_away)   # a click anywhere else saves
+        QApplication.instance().installEventFilter(away)   # a click anywhere else saves
 
     def _place_title_edit(self) -> None:
         """The box sits round the name with the usual text-box gaps, the text exactly where the name was;
         as wide as what's typed (at least a little), never past the drop-down."""
-        e = self.d_title_edit
         if not self._renaming:
             return
+        e, label, _away = self._rename_parts()
         pad_x = 3                                    # border 1 + Qt's own 2: text lands where the name was, and the
                                                      # space beside it matches the space above / below (owner)
-        lab = self.d_title.geometry()                # (in the bar's coordinates: the bar is its parent)
+        lab = label.geometry()                       # (in the bar's coordinates: the bar is its parent)
         top_left = lab.topLeft()
         h = e.sizeHint().height()                    # (padding 2 above / 1 below: clear of the line beneath)
         text_w = e.fontMetrics().horizontalAdvance(e.text() or " ") + 2      # (+ room for the cursor)
-        right_edge = (self.d_status.geometry().left() if self.d_status.isVisible()
-                      else self.edit_btn.geometry().left()) - 12
+        if self._rename_top:
+            right_edge = lab.right()
+        else:
+            right_edge = (self.d_status.geometry().left() if self.d_status.isVisible()
+                          else self.edit_btn.geometry().left()) - 12
         x = top_left.x() - pad_x
         w = max(40, min(text_w + 2 * pad_x, right_edge - x))
         e.setGeometry(x, top_left.y() + lab.height() + 3 - h, w, h)   # text level with the name (measured, to the pixel)
@@ -11639,13 +11661,14 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not self._renaming:
             return
         (kind, iid), self._renaming = self._renaming, None
-        QApplication.instance().removeEventFilter(self._click_away)
-        text = self.d_title_edit.text().strip()
-        if self.d_title_edit.hasFocus():
+        e, lab, away = self._rename_parts()
+        QApplication.instance().removeEventFilter(away)
+        text = e.text().strip()
+        if e.hasFocus():
             self.grid.setFocus()                    # (not the Read button: a later Enter / Space would start the game)
-        self.d_title_edit.hide()
-        self.d_title.blank = False
-        self.d_title.update()
+        e.hide()
+        lab.blank = False
+        lab.update()
         if not save or not text:
             return
         try:
@@ -11765,7 +11788,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not hasattr(self, "anim"):       # still building the window
             return False
         t = ev.type()
-        if obj is self.d_title_edit and t in (QEvent.ShortcutOverride, QEvent.KeyPress):
+        if obj in (self.d_title_edit, self.f_title_edit) and t in (QEvent.ShortcutOverride, QEvent.KeyPress):
             # typing a name: Enter / Backspace / Esc belong to the box, not to the window's shortcuts
             # (open the game, leave the folder); Esc here cancels the rename
             if t == QEvent.ShortcutOverride and ev.key() in (Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter,
@@ -12196,7 +12219,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         to, end_opacity = None, 1.0
         if gid and kind == "trash":
             to, end_opacity = shrink_into(widget_rect(self.trash_btn)), 0.0
-            QTimer.singleShot(0, lambda: self.remove_game(gid))
+            self._asking_gid = gid
+            QTimer.singleShot(0, lambda: self.remove_game(gid, dropped=True))
         elif gid and kind == "back":
             self._drop_game(gid, None, True)
             to, end_opacity = shrink_into(widget_rect(self.back_btn)), 0.0
@@ -12213,21 +12237,29 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             # fades back in at its place the way covers arrive (owner, 2026-10-24: gliding back over the bars, or
             # toward a place scrolled out of view, wasn't clean). It starts from how faded it was (0.75 dimmed).
             to, end_opacity = ghost.current(), 0.0
-            self._dim_gid = None
-            t = time.monotonic()
-            back = -(1 - 0.75 ** (1 / 3)) * APPEAR_S             # (appear_fade = 0.75 now)
-            self.appearing = {**{k: d - (t - self._appear_t0) for k, d in self.appearing.items()}, gid: back}
-            self._returning = (self._returning & set(self.appearing)) | {gid}
-            self._appear_t0 = t
+            self._fade_back(gid, 0.75)
         self._slide_from(before, skip=gid)
         if to is None:                                       # (off screen) just fade where it is
             to, end_opacity = shrink_into(ghost.current(), 2.0), 0.0
         ghost.land(to, end_opacity, self._landed)
 
+    def _fade_back(self, gid: str, faded: float) -> None:
+        """A dropped game that stays: its cover fades back in at its place the way covers arrive, starting from how
+        faded it was (0.75 = dimmed while dragged)."""
+        self._dim_gid = None
+        t = time.monotonic()
+        back = -(1 - faded ** (1 / 3)) * APPEAR_S             # (appear_fade = 0.75 now)
+        self.appearing = {**{k: d - (t - self._appear_t0) for k, d in self.appearing.items()}, gid: back}
+        self._returning = (self._returning & set(self.appearing)) | {gid}
+        self._appear_t0 = t
+
     def _landed(self) -> None:
         """The dropped cover has arrived: the real one takes over (no fade: they're in the same place). Drawn
-        right now, before the landing cover goes."""
+        right now, before the landing cover goes. (Dropped on the trash: it stays faded while Are You Sure? asks.)"""
         self._landing = None
+        if self._asking_gid is not None and self._asking_gid == self._dim_gid:
+            self._update_anim()
+            return
         self.drag_dim = 0.0
         self._dim_gid = None
         self.grid.viewport().repaint()
@@ -12339,7 +12371,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         d = self.slides.get(iid)
         if d is None:
             return None
-        t = (time.monotonic() - self._slide_t0) / SLIDE_S
+        t = max(0.0, (time.monotonic() - self._slide_t0) / SLIDE_S)   # (may not have started yet: _fade_removed)
         if t >= 1:
             return None
         k = (1 - t) ** 2.2                               # ease out: quick start, gentle landing
@@ -12617,7 +12649,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 self.hover.pop(gid, None)
             else:
                 self.hover[gid] = new
-        dim_target = 1.0 if (self._ghost is not None or self._landing is not None) else 0.0
+        dim_target = 1.0 if (self._ghost is not None or self._landing is not None
+                             or self._asking_gid is not None) else 0.0
         if self.drag_dim != dim_target:
             d = (step * HOVER_MS) / 120                  # a quick fade, ~0.12 s
             self.drag_dim = min(dim_target, self.drag_dim + d) if dim_target > self.drag_dim \
@@ -12648,7 +12681,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         live = QRegion()                                  # what moves (hovers): drawn the usual way (see LibraryGrid.paintEvent)
         breathing = self._lights_moving()                 # (pulsing, or settling after being switched off)
         quiet = self.bookmark_alpha == mark and self.drag_dim in (0.0, 1.0) \
-            and self._ghost is None and self._landing is None and not self.rumble
+            and self._ghost is None and self._landing is None and not self.rumble             and self._asking_gid is None                  # (dropped on the trash: its light stays faded with it)
         lights_only = quiet and not moving
         layered = self.grid.layer_active()                # (gliding: every frame is drawn whole anyway)
         for i in (() if layered else self.grid.visible_range()):
@@ -12764,6 +12797,14 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def _add_files(self, files: list[str]) -> None:
         last = None
+        into = self.current_folder                  # adding while a folder is open: the games go into it
+
+        def file_in_folder(gid: str) -> None:
+            if into and into in self.library.list_folders():
+                try:
+                    self.library.set_folder(gid, into)
+                except (OSError, KeyError) as e:
+                    report_failure(self, e)
         for f in files:
             exe = lnk.resolve_game_exe(f)
             if not exe or not Path(exe).is_file():
@@ -12791,12 +12832,15 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                         continue
                     if GameDialog(self.library, self.settings, game, parent=self).exec():   # e.g. its save folder
                         self._ask_now.add(match.game_id)
+                    if not game.folder:                     # (already in a folder: it stays there)
+                        file_in_folder(match.game_id)
                     last = match.game_id
                     continue
             d = GameDialog(self.library, self.settings, exe=exe, parent=self)
             if d.exec() and d.saved_id:
                 last = d.saved_id
                 self._ask_now.add(d.saved_id)
+                file_in_folder(d.saved_id)
         self.refresh()
         if last:
             self._select(last)
@@ -12855,8 +12899,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         discard(d)                                          # (else restyled on every theme change from now on)
         if ok:
             if removed:                                     # the Edit window's Remove From Library
+                before, picture = self._positions(), self._removal_picture(g.game_id)
                 self.clear_selection()
                 self.refresh()
+                self._fade_removed(g.game_id, before, picture)
                 self._offer_undo(g.title, removed, removed_how)
                 return
             if mine(self.library.get(g.game_id)) != before:     # save folder set up / changed here: ask right away
@@ -13312,18 +13358,58 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         m.exec(self.grid.viewport().mapToGlobal(pos))
 
     @guarded
-    def remove_game(self, gid: str) -> None:
+    def remove_game(self, gid: str, dropped: bool = False) -> None:
+        """dropped: it was dropped on the trash (faded meanwhile, as when picked up): kept -> it fades back in."""
         g = self.games.get(gid)
-        if g is None or self.worker is not None:
-            return
-        how = confirm_remove(self, self.library.get(gid) or g, self.settings.machine_name, solo=self.settings.solo)
+        how = None
+        try:
+            if g is not None and self.worker is None:
+                how = confirm_remove(self, self.library.get(gid) or g, self.settings.machine_name,
+                                     solo=self.settings.solo)
+        finally:
+            if dropped:
+                self._asking_gid = None
+                if not how:
+                    self.drag_dim = 0.0
+                    self._fade_back(gid, 0.75)
+                self.grid.viewport().update()
+                self._update_anim()
         if how:
-            before = self._positions()
+            before, picture = self._positions(), self._removal_picture(gid)
             removed = remove_game_from(self.library, gid, self.settings.machine_name, how)
             self.clear_selection()
             self.refresh()
-            self._slide_from(before)                     # the others close the gap
+            self._fade_removed(gid, before, picture)
             self._offer_undo(g.title, removed, how)
+
+    def _removal_picture(self, gid: str) -> Optional[tuple]:
+        """Just before a game is removed: (picture of the grid, its cover's spot in it, where the grid was), for
+        _fade_removed; None if it isn't on screen."""
+        if not self.isVisible():
+            return None
+        item = next((self.grid.item(i) for i in self.grid.visible_range()
+                     if self.grid.item(i).data(GAME_ID_ROLE) == gid), None)
+        if item is None:
+            return None
+        r = self.grid.visualItemRect(item).adjusted(-2, -2, 2, 2) & self.grid.viewport().rect()
+        snap = self._grid_snapshot() if not r.isEmpty() else None
+        return (snap, r, self.grid.viewport().mapTo(self, QPoint(0, 0))) if snap is not None else None
+
+    def _fade_removed(self, gid: str, before: dict, picture: Optional[tuple]) -> None:
+        """After a removal (owner, 2026-10-25): its cover fades out where it was (from how it looked: faded, if it
+        was dropped on the trash), the way covers a search takes away do, THEN the others slide into the gap.
+        Still in the grid (removed from this device only, both devices shown): nothing fades."""
+        still = any(self.grid.item(i).data(GAME_ID_ROLE) == gid for i in range(self.grid.count()))
+        if picture is None or still:
+            self._slide_from(before)
+            return
+        snap, r, vp_before = picture
+        shift = vp_before - self.grid.viewport().mapTo(self, QPoint(0, 0))
+        self._leaving = (self._leaving + [(snap, [r], time.monotonic(), shift)])[-MAX_LEAVING_GROUPS:]
+        self._slide_from(before)
+        if self.slides:
+            self._slide_t0 = time.monotonic() + LEAVE_S      # (the others wait in place until it has gone)
+        self._update_anim()
 
     def _offer_undo(self, title: str, removed: dict, how: str = "both") -> None:
         """'Removed X. Undo' on the status line for 10 s (owner, 2026-10-17): one click puts the game back - file,
@@ -13334,9 +13420,16 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             except OSError as e:
                 report_failure(self, e)
                 return
+            before, view = self._positions(), self.current_folder
             self.refresh()
             if g is not None:
                 self._select(g.game_id)
+                if g.game_id not in before and self.current_folder == view:
+                    # (owner, 2026-10-25) the reverse of a removal: the others make room, then it fades back in
+                    self._slide_from(before, skip=g.game_id)
+                    self._fade_back(g.game_id, 1.0)
+                    self.appearing[g.game_id] = SLIDE_S if self.slides else 0.0
+                    self._update_anim()
                 self.statusBar().showMessage(tr("status.restored", title=g.title), 6000)
         key = "status.removed_here" if removed.get("here") else "status.removed"   # (only here / gone everywhere)
         self.statusBar().show_action(tr(key, title=title), tr("status.undo"), undo, 10000)

@@ -166,7 +166,8 @@ GUIDE = {
             "hides or shows them; your choice is remembered. The colours can be changed in a custom theme.",
             "- Folders: drag a game onto the middle of another game to put them both in a new folder, or onto a folder to add "
             "it. Inside a folder, drag a game onto \"‹ Library\" to take it out. Right-click a folder to rename or "
-            "remove it (its games go back to the library).",
+            "remove it (its games go back to the library), or click its name at the top while it's open to rename it "
+            "there. Games you add while a folder is open go into it.",
             "- Click an empty space or press Esc to deselect.",
             "- Press the mouse wheel in the library, or in any window or list that scrolls, to scroll by moving the mouse up or down (the further, the faster). "
             "Hold it and let go to stop, or click it once and click again to stop.",
@@ -310,7 +311,8 @@ GUIDE = {
             "- プレイ状況を設定したゲームには、カバーの右上にその状況の色のしおりが付きます（フォルダーの中やフォルダーのカバーにも表示されます）。"
             "ゴミ箱の隣にあるしおりのボタンで表示・非表示を切り替えられます。この設定は次回以降も保持されます。色はカスタムテーマで変更できます。",
             "- フォルダー：ゲームを別のゲームの中央にドラッグすると、2つをまとめた新しいフォルダーができます。フォルダーにドラッグすると追加されます。フォルダーの中では、ゲームを「‹ ライブラリ」"
-            "にドラッグすると外に出せます。フォルダーを右クリックすると、名前の変更や解除ができます（中のゲームはライブラリに戻ります）。",
+            "にドラッグすると外に出せます。フォルダーを右クリックすると、名前の変更や解除ができます（中のゲームはライブラリに戻ります）。"
+            "開いているフォルダーは、上の名前をクリックしても名前を変更できます。フォルダーを開いたまま追加したゲームは、そのフォルダーに入ります。",
             "- 何もないところをクリックするか、Escキーを押すと選択を解除できます。",
             "- ライブラリやスクロールできるウィンドウ・リストでマウスホイールを押し込むと、マウスを上下に動かしてスクロールできます（離すほど速くなります）。押したまま動かした場合は離すと止まり、一度クリックした場合はもう一度クリックすると止まります。",
         ]),

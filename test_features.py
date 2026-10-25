@@ -6018,3 +6018,143 @@ class TitleBarPress(unittest.TestCase):
                 w._press_watch.stop()
         finally:
             w.close()
+
+
+class FolderAddRenameAndRemovalFades(unittest.TestCase):
+    """2026-10-25 (2.0.2): a game added while a folder is open goes into it; clicking the folder's name at the top
+    renames it in place (like the bottom bar's name); a game dropped on the trash stays faded while Are You Sure?
+    asks (Cancel fades it back); a removed game fades out first, then the others slide into the gap."""
+
+    def _window(self, tmp, games=3):
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        cloud = Path(tmp) / "cloud"
+        cloud.mkdir()
+        lib = Library(cloud)
+        ids = [lib.add_game(f"Game {i}", "PC", exe=rf"C:\g{i}\g{i}.exe").game_id for i in range(games)]
+        w = app.MainWindow(LocalSettings("PC", str(cloud)))
+        w.resize(1200, 800)
+        w.show()
+        w.refresh()
+        QApplication.processEvents()
+        return app, w, lib, cloud, ids
+
+    def test_added_inside_a_folder_goes_into_it(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w, lib, cloud, ids = self._window(tmp, 2)
+            try:
+                fid = lib.create_folder("Box")
+                for gid in ids:
+                    lib.set_folder(gid, fid)
+                w.refresh()
+                w.open_folder(fid)
+
+                class Dialog:                                   # (stands in for the game settings window: Save)
+                    def __init__(self, library, settings, game=None, exe="", parent=None):
+                        self.library, self.exe, self.saved_id = library, exe, None
+
+                    def exec(self):
+                        self.saved_id = self.library.add_game(Path(self.exe).stem, "PC", exe=self.exe).game_id
+                        return True
+
+                exe = Path(tmp) / "Novel.exe"
+                exe.write_bytes(b"MZ")
+                with mock.patch.object(app, "GameDialog", Dialog):
+                    w._add_files([str(exe)])
+                    new = Library(cloud).find_by_exe(str(exe))
+                    self.assertEqual(new.folder, fid)
+                    self.assertEqual(w.current_folder, fid)     # (still inside, the new game selected)
+                    w.close_folder()
+                    other = Path(tmp) / "Other.exe"
+                    other.write_bytes(b"MZ")
+                    w._add_files([str(other)])                   # from the library itself: no folder
+                    self.assertEqual(Library(cloud).find_by_exe(str(other)).folder, "")
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_folder_name_at_the_top_renames(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtCore import QPoint, Qt
+            from PySide6.QtTest import QTest
+            from PySide6.QtWidgets import QApplication
+            app, w, lib, cloud, ids = self._window(tmp, 1)
+            try:
+                fid = lib.create_folder("Box")
+                lib.set_folder(ids[0], fid)
+                w.refresh()
+                w.open_folder(fid)
+                QApplication.processEvents()
+                e, lab = w.f_title_edit, w.folder_title
+
+                def rename(text, key):
+                    QTest.mouseClick(lab, Qt.LeftButton, pos=QPoint(10, lab.height() // 2))
+                    QApplication.processEvents()
+                    self.assertTrue(e.isVisible())
+                    self.assertTrue(lab.blank)
+                    e.selectAll()
+                    QTest.keyClicks(e, text)
+                    with mock.patch.object(w, "close_folder") as closed:
+                        QTest.keyClick(e, key)                  # (Esc / Enter: the box's, not the window's)
+                        QApplication.processEvents()
+                        self.assertFalse(closed.called)
+                    self.assertFalse(e.isVisible())
+                    self.assertFalse(lab.blank)
+
+                rename("Shelf", Qt.Key_Escape)
+                self.assertEqual(Library(cloud).list_folders()[fid], "Box")
+                rename("Shelf", Qt.Key_Return)
+                self.assertEqual(Library(cloud).list_folders()[fid], "Shelf")
+                self.assertEqual(lab.text(), "Shelf")
+                self.assertEqual(w.current_folder, fid)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_trash_drop_stays_faded_then_removal_fades_out(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtCore import QPoint
+            from PySide6.QtWidgets import QApplication
+            app, w, lib, cloud, ids = self._window(tmp, 3)
+            try:
+                first = w.grid.item(0).data(app.GAME_ID_ROLE)
+                seen = []
+
+                def asking(*_a, **_k):                          # while Are You Sure? is open
+                    seen.append((w._asking_gid, w._dim_gid))
+                    return None
+
+                w._dim_gid, w.drag_dim, w._asking_gid = first, 1.0, first   # (as after the drop on the trash)
+                w._landed()
+                self.assertEqual((w._dim_gid, w.drag_dim), (first, 1.0))      # landing keeps it faded
+                with mock.patch.object(app, "confirm_remove", side_effect=asking):
+                    w.remove_game(first, dropped=True)          # Cancel
+                self.assertEqual(seen, [(first, first)])
+                self.assertIsNone(w._asking_gid)
+                self.assertIn(first, w.appearing)               # fades back in at its place
+                self.assertIn(first, w._returning)
+                self.assertIn(first, w.games)
+
+                end = time.monotonic() + 0.5
+                while time.monotonic() < end:
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+                with mock.patch.object(app, "confirm_remove", return_value="both"):
+                    before = time.monotonic()
+                    w.remove_game(first)                        # Confirm
+                self.assertNotIn(first, w.games)
+                self.assertTrue(w._leaving)                     # its cover fades out where it was...
+                self.assertTrue(w.slides)
+                self.assertGreater(w._slide_t0, before)         # ...before the others start closing the gap
+                moving = next(iter(w.slides))
+                self.assertEqual(w.slide_offset(moving), QPoint(*w.slides[moving]))   # (held in place meanwhile)
+            finally:
+                w.close()
+                app.wait_for_tasks(5)

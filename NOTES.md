@@ -1421,3 +1421,18 @@ before changing it.
   scroll bar shows; tab buttons follow any page switch; theme menu "Rename" like the folder menu's.
 - Bench tools added: claude-tools themebench.py (saved themes latency / stress), notesbench.py (notes / egg fades in a
   real window), bench2\ (a copy of the owner's library + settings pointed at it, for real-window benches).
+
+## Session 2026-10-25: 2.0.2 (folders: add into, rename at the top; removal fades)
+- Adding while a folder is open (drag-drop .exe/.lnk or + Add game): the saved game goes into that folder
+  (_add_files `into`); setting up the other device's game here only files it if it has no folder yet.
+- Folder bar name = ElidedLabel (clickable) -> same in-place rename as the bottom bar's name (_start_rename(top=True);
+  its own box f_title_edit + ClickAway; _rename_parts picks box / label / click-away).
+- Dropped on the trash: the cover STAYS FADED in place (as while dragged, owner: not hidden) while Are You Sure? asks
+  (_asking_gid; _landed keeps the dim; the lights-only quiet frame is off meanwhile - it drew the light at full).
+  Cancel -> _fade_back(gid, 0.75) (same as a failed drop).
+- Every removal (trash click / drop, right-click, Edit): the cover fades + shrinks out from a grid snapshot (the
+  search's _leaving pictures), THEN the others slide into the gap (_slide_t0 moved LEAVE_S ahead; slide_offset clamps
+  t >= 0). Still in the grid after (removed here only, both devices shown): nothing fades. Undo = the reverse: the others
+  make room, then it fades back in (appearing delayed SLIDE_S).
+- Full suite now ~7-8 min on the PC with the app open (was ~3): no test hangs (watchdog run, 45 s per test); earlier
+  "hang" = just my 500 s timeout. Run it in two halves or give it 10 min.

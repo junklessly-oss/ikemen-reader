@@ -38,9 +38,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 293 tests (2026-10-24, 2.0.1: + drag-scroll turns / scroll guard / bars wait / fade-back / held cover while a
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 296 tests (2026-10-25, 2.0.2: + add into open folder / folder-bar rename / trash-drop fade + removal fade; full run now ~7-8 min; 2.0.1: + drag-scroll turns / scroll guard / bars wait / fade-back / held cover while a
   session ends, title-bar press focuses; 2.0.0: notes, saved themes, closed-window timers), all pass on
-  the PC (Python 3.14, `py -m unittest`; ~3 min) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
+  the PC (Python 3.14, `py -m unittest`; ~7-8 min with the app open) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
 - Local data: `%APPDATA%\IkemenReader` (settings.json, state/, backups/, registry/, downloads/). On first
   run it is copied from the old `%APPDATA%\VNLauncher` (old folder left as a safety copy).
@@ -158,7 +158,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.1" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.2" in app.py (build.py reads it).
 - Notes (2.0.0): right-click a game -> "Add Notes" / "Notes" (under Edit) -> NotesLayer (DimLayer, like the easter
   egg): 72.5 % text box + elided title, saved on close only (owner), in Game.notes (synced with the game file), saved in
   the background in order, flushed on exit; every key but Esc stays in the box. Removal warns about notes.
