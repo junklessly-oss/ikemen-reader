@@ -2177,7 +2177,9 @@ class SortingAndCustomOrder(unittest.TestCase):
                 self.assertEqual(shown(), [ids["Zeta"], ids["Alpha"], ids["Mid"]])  # recent, like the library
                 w.choose_sort("title")
                 self.assertEqual(shown(), [ids["Alpha"], ids["Mid"], ids["Zeta"]])
-                self.assertEqual(lib.folder_sort(fid), "title")
+                own = lambda: lib.view_orders("PC")["folder_sorts"].get(fid, "")
+                self.assertEqual(own(), "title")                                   # this device's own sort...
+                self.assertEqual(lib.folder_sort(fid), "")                         # ...the shared one untouched
                 w.close_folder()
                 w.choose_sort("hours")                  # the library's sort changes...
                 w.open_folder(fid)
@@ -2185,11 +2187,11 @@ class SortingAndCustomOrder(unittest.TestCase):
                 w._dragging = ids["Zeta"]
                 w._move_to(ids["Zeta"], 0)                                         # arrange inside: Custom
                 w._dragging = None
-                self.assertEqual(lib.folder_sort(fid), "custom")
+                self.assertEqual(own(), "custom")
                 self.assertEqual(shown()[0], ids["Zeta"])
                 self.assertEqual(w.folder_games[fid][0].game_id, ids["Zeta"])     # the mosaic follows it
                 w.choose_sort("follow")
-                self.assertEqual(lib.folder_sort(fid), "")
+                self.assertEqual(own(), "")
             finally:
                 w.close()
 
@@ -2233,7 +2235,7 @@ class DragAndDropFeel(unittest.TestCase):
                 f = app.FOLDER_PREFIX + fid
                 w._move_to(f, 0)                           # dragged to the front: My Arrangement from what was shown
                 self.assertEqual(w.settings.sort, "custom")
-                self.assertEqual(lib.library_order()[0], f)
+                self.assertEqual(lib.view_orders("PC")["library"]["here"][0], f)     # (This Device: this PC's own)
                 # a real drop: lift, move between two covers, let go
                 w._start_game_drag(ids["A"])
                 w._drag_watch.stop()                          # (no real mouse button in a test)
@@ -2334,9 +2336,126 @@ class FolderArrangement(unittest.TestCase):
                 w._dragging = ids["Z"]
                 w._move_to(ids["Z"], 0)
                 w._dragging = None
-                self.assertEqual((lib.folder_sort(fid), w.sort.currentData()), ("custom", "custom"))
+                self.assertEqual((lib.view_orders("PC")["folder_sorts"][fid], w.sort.currentData()), ("custom", "custom"))
             finally:
                 w.close()
+
+
+class ArrangementPerView(unittest.TestCase):
+    """2026-10-25 (owner): My Arrangement in This Device / Other Device belongs to that computer - arranging it never
+    moves covers on the other device. Only Both Devices is shared. A folder's sort is per device (like the library's)."""
+
+    def test_this_device_is_its_own(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from unittest import mock
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            ids = []
+            for i in range(4):                                          # on both devices
+                g = lib.add_game(f"G{i}", "PC", exe=rf"C:\g{i}\g.exe")
+                lib.set_paths(g.game_id, "Laptop", exe=rf"D:\g{i}\g.exe")
+                ids.append(g.game_id)
+            fid = lib.create_folder("Series")
+            inner = [lib.add_game(f"F{i}", "PC", exe=rf"C:\f{i}\g.exe").game_id for i in range(3)]
+            for gid in inner:
+                lib.set_folder(gid, fid)
+            lib.set_library_order(ids + [app.FOLDER_PREFIX + fid])
+            s = LocalSettings("PC", str(cloud))
+            s.sort = "custom"
+            w = app.MainWindow(s)
+            shown = lambda: [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
+            try:
+                w.show()
+                w.refresh()
+                self.assertEqual(shown(), ids + [app.FOLDER_PREFIX + fid])    # starts from the shared arrangement
+                w._move_to(ids[3], 0)                                          # This Device (the default view)
+                self.assertEqual(shown()[0], ids[3])
+                self.assertEqual(lib.library_order(), ids + [app.FOLDER_PREFIX + fid])   # shared: untouched
+                w.open_folder(fid)
+                w._move_to(inner[2], 0)
+                self.assertEqual(lib.folder_order(fid), [])                    # shared folder order untouched
+                self.assertEqual(lib.folder_sort(fid), "")                     # and its shared sort
+                w.close_folder()
+                # the laptop, also on This Device: the shared arrangement, not the PC's
+                s2 = LocalSettings("Laptop", str(cloud))
+                s2.sort = "custom"
+                w2 = app.MainWindow(s2)
+                try:
+                    w2.show()
+                    w2.refresh()
+                    self.assertEqual([w2.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w2.grid.count())], ids)
+                finally:
+                    w2.close()
+                # Both Devices: the shared one, and arranging it is shared
+                w.filter.setCurrentIndex(w.filter.findData("dev:both"))
+                self.assertEqual(shown(), ids + [app.FOLDER_PREFIX + fid])
+                w._move_to(ids[2], 0)
+                self.assertEqual(lib.library_order()[0], ids[2])
+                w.filter.setCurrentIndex(w.filter.findData("dev:here"))
+                self.assertEqual(shown()[0], ids[3])                           # This Device kept its own
+                w.refresh()                                                    # (read back from the file)
+                self.assertEqual(shown()[0], ids[3])
+                w.library.set_folder(ids[3], fid)                              # into the folder: out of the view lists
+                self.assertNotIn(ids[3], lib.view_orders("PC")["library"]["here"])
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+
+class LanguageListFade(unittest.TestCase):
+    """2026-10-25 (owner's idea): Settings' Language list covered the buttons under it. Now only what it lies on (each
+    whole) fades out first, then the list opens; it closes, the new language goes in, THEN they fade back in."""
+
+    def test_in_order(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from unittest import mock
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication, QPushButton
+            from PySide6.QtCore import QPoint, QRect
+            import app
+            import i18n
+            QApplication.instance() or QApplication([])
+            i18n.set_language("en")
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+
+            def pump(s):
+                end = time.monotonic() + s
+                while time.monotonic() < end:
+                    QApplication.processEvents()
+                    time.sleep(0.003)
+            try:
+                w.show()
+                d = app.SettingsDialog(w.settings, w)
+                d.show()
+                pump(0.3)
+                v = d.lang.veil
+                d.lang.showPopup()
+                pump(0.03)
+                self.assertFalse(d.lang.view().isVisible())          # fading first...
+                pump(0.4)
+                self.assertTrue(d.lang.view().isVisible())           # ...then the list
+                covered = [b.text() for b in d.findChildren(QPushButton)
+                           if QRect(b.mapTo(d, QPoint(0, 0)), b.size()).adjusted(-1, -1, 1, 1) in v._rects]
+                self.assertIn("English", covered)                    # the buttons right under it
+                self.assertNotIn(app.tr("settings.save"), covered)   # nothing further down the page
+                d.lang.setCurrentIndex(1)                            # Japanese picked
+                d.lang.hidePopup()
+                self.assertEqual(i18n.language(), "ja")
+                self.assertGreater(v._a, 0.99)                       # (in place before anything shows again)
+                pump(0.4)
+                self.assertFalse(v.isVisible())                      # back in
+                d.reject()
+            finally:
+                i18n.set_language("en")
+                w.close()
+                app.wait_for_tasks(5)
 
 
 class AnkiButton(unittest.TestCase):
@@ -5105,9 +5224,11 @@ class DeviceFilter(unittest.TestCase):
                 # rearranging in a view: the games it hides keep their places
                 pick("dev:here")
                 order = [w.grid.item(i).data(app.GAME_ID_ROLE) for i in range(w.grid.count())]
-                full_before = app.merge_order(w.library_order + w._all_top_ids(), order)
+                full_before = app.merge_order(w._lib_order() + w._all_top_ids(), order)
+                shared = lib.library_order()
                 w._move_to(order[-1], 0)
-                full = list(w.library_order)
+                full = list(w._lib_order())
+                self.assertEqual(lib.library_order(), shared)                # the other device sees no change
                 hidden = [i for i in full_before if i not in order]
                 self.assertEqual([i for i in full if i in hidden], hidden)    # hidden ones: same order...
                 for h in hidden:                                              # ...and same places
@@ -5948,7 +6069,7 @@ class DragFolderInPlace(unittest.TestCase):
                 before = sb.value()
                 target, dragged = ids[20], ids[3]
                 w._drop_game(dragged, target, False)
-                order = lib.library_order()
+                order = lib.view_orders("PC")["library"]["here"]      # (This Device: this PC's own arrangement)
                 folder = next(x for x in order if x.startswith(app.FOLDER_PREFIX))
                 self.assertEqual(order.index(folder), 20 - 1)          # (the dragged game left a place before it)
                 self.assertNotIn(dragged, order)

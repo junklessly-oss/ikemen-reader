@@ -737,6 +737,86 @@ class Library:
         _atomic_write(self.order_file, json.dumps({"library": [x for x in order if isinstance(x, str)]},
                                                   indent=1, ensure_ascii=False))
 
+    # -- this device's own arrangements (owner, 2026-10-25): This Device / Other Device are views from one computer,
+    # so My Arrangement in them (main page + inside folders) and every folder's sort belong to that computer alone;
+    # only Both Devices uses the shared order above. views/<slot>.json, written only by that device.
+    slot = ""                                            # this device's slot ("" = My Device: everything shared)
+
+    def _view_file(self, slot: str) -> Optional[Path]:
+        return self.root / "views" / f"{slot}.json" if slot in SLOTS else None
+
+    def view_orders(self, slot: str) -> dict:
+        """{"library": {view: [ids]}, "folders": {view: {fid: [ids]}}, "folder_sorts": {fid: sort} or None (never
+        chosen here: the shared ones apply)}. view = "here" / "other"; a view not listed uses the shared order."""
+        out = {"library": {}, "folders": {}, "folder_sorts": None}
+        path = self._view_file(slot)
+        try:
+            data = json.loads(path.read_text("utf-8")) if path else {}
+        except (OSError, ValueError):
+            return out
+        if not isinstance(data, dict):
+            return out
+
+        def ids(v) -> Optional[list]:
+            return [x for x in v if isinstance(x, str)] if isinstance(v, list) else None
+        for view in ("here", "other"):
+            lib = ids((data.get("library") or {}).get(view) if isinstance(data.get("library"), dict) else None)
+            if lib is not None:
+                out["library"][view] = lib
+            folders = (data.get("folders") or {}).get(view) if isinstance(data.get("folders"), dict) else None
+            if isinstance(folders, dict):
+                out["folders"][view] = {f: o for f, o in ((f, ids(o)) for f, o in folders.items()) if o is not None}
+        sorts = data.get("folder_sorts")
+        if isinstance(sorts, dict):
+            out["folder_sorts"] = {f: s for f, s in sorts.items() if s in SORTS or s == ""}
+        return out
+
+    def _write_view(self, slot: str, change) -> dict:
+        path = self._view_file(slot)
+        if path is None:
+            raise KeyError(slot)
+        data = self.view_orders(slot)
+        change(data)
+        _atomic_write(path, json.dumps({k: v for k, v in data.items() if v is not None}, indent=1, ensure_ascii=False))
+        return data
+
+    def set_view_order(self, slot: str, view: str, order: list[str], fid: str = "") -> None:
+        """My Arrangement of one of this device's views: its main page, or (fid) inside that folder."""
+        order = [x for x in order if isinstance(x, str)]
+
+        def change(d):
+            if fid:
+                d["folders"].setdefault(view, {})[fid] = order
+            else:
+                d["library"][view] = order
+        self._write_view(slot, change)
+
+    def set_own_folder_sort(self, slot: str, fid: str, sort: str) -> None:
+        """A folder's sort on this device ("" = same as the library). The first time, the shared ones are the start."""
+        def change(d):
+            if d["folder_sorts"] is None:
+                d["folder_sorts"] = {f: v["sort"] for f, v in self._folders_raw().items() if v["sort"]}
+            d["folder_sorts"][fid] = sort if sort in SORTS else ""
+        self._write_view(slot, change)
+
+    def _forget_in_views(self, game_id: str, left: str, joined: str) -> None:
+        """set_folder for this device's views: out of the folder's arrangement it left, out of the main page's when
+        it joined one (so it lands at the end of the new place, as in the shared order)."""
+        path = self._view_file(self.slot)
+        if path is None or not path.exists():
+            return
+        d = self.view_orders(self.slot)
+        changed = False
+        for view in ("here", "other"):
+            lists = ([d["library"].get(view)] if joined else []) + \
+                    ([d["folders"].get(view, {}).get(left)] if left else [])
+            for lst in lists:
+                if lst and game_id in lst:
+                    lst.remove(game_id)
+                    changed = True
+        if changed:
+            self._write_view(self.slot, lambda data: data.update({k: d[k] for k in ("library", "folders")}))
+
     def create_folder(self, name: str) -> str:
         import uuid
         folders = self.list_folders()
@@ -772,6 +852,8 @@ class Library:
                 self.set_folder_order(old, [x for x in self.folder_order(old) if x != game_id])
         if fid and game_id in self.library_order():
             self.set_library_order([x for x in self.library_order() if x != game_id])
+        if old != fid:
+            self._forget_in_views(game_id, old, fid)
         return game
 
     def _drop_folder_if_empty(self, fid: str) -> None:

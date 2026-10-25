@@ -1483,3 +1483,44 @@ before changing it.
      glide / edge scroll isn't ended by it). Top needs nothing (both ranges start at 0).
 - A cover pushed into another row by a drop slides in one cell from the edge beside its new place (was a diagonal
   slide across the whole grid). The drop line / drop also work in the grid's thin side margins (_drag_hit: over grid).
+
+## Arrangement per view (2026-10-25, owner)
+- Owner: "My Arrangement should not affect any arrangements on other devices apart from ... Both Devices" (they use
+  This Device on both computers; covers placed for one library moved in the other). Before: ONE shared order.json
+  (+ folders.json "order") written from every view on both computers (merge_order kept hidden games' places, but the
+  shown ones still moved on the other device).
+- Now: Both Devices = the shared order.json / folders.json orders (unchanged). This Device / Other Device = this
+  computer's own, in <cloud>/views/<slot>.json {"library": {view: ids}, "folders": {view: {fid: ids}},
+  "folder_sorts": {fid: sort}}, written only by that device (no Drive "(1)" copies). A view never arranged here starts
+  from the shared order (nothing jumps on update). Library.slot (set in the non-solo branch; My Device = "": all
+  shared, as before). MainWindow._own_view / _lib_order / _folder_order / _own_folder_sort / _set_*.
+- Other contradiction fixed: a folder's SORT was shared (folders.json "sort") while the library's sort is per device;
+  now per device too (first choice here starts from the shared sorts). Dragging inside a folder sets its sort to My
+  Arrangement on this device only.
+- Library.set_folder also takes the game out of THIS device's view lists (lands at the end, as in the shared order);
+  the other device's file is left alone (a stale id there is ignored by in_order).
+- Still shared on purpose (game data, not view): folder membership + names, statuses, titles, covers, notes. Owner
+  agreed 2026-10-25: folders stay shared (per-device folders would split one game between folders) - don't re-propose.
+  Test: ArrangementPerView.
+
+## Unfocused wheel scrolling (2026-10-25, measured, not fixed)
+- Owner: wheel scrolling less smooth while the window is unfocused (PC, desktop focused, "just less smooth").
+- claude-tools/screenwheel.py (SendInput wheel + 1-px screen column grabbed each refresh = what DWM shows): late
+  shown frames ~9-11 % focused vs ~21-23 % unfocused, and ~10 % fewer distinct pictures unfocused. The app's own
+  glide steps are identical both ways (abwheel_focus.py: 0 vs 2 late of ~1800) -> Windows presents them differently.
+- NO effect (tried, removed): main-thread priority HIGHEST, process HIGH_PRIORITY_CLASS, GPU scheduling priority
+  (D3DKMTSetProcessSchedulingPriorityClass HIGH, needs a real OpenProcess handle). DwmFlush returns ~0.13 ms after
+  vblank (phase.py). Sleeping in the vsync thread after DwmFlush halves the rate (bad experiment, ignore).
+- Left: the GPU route (QOpenGLWidget / flip-model viewport) - the bigger job from the 2026-10-20 plan.
+
+## Language list fade (2026-10-25, owner's idea; in 2.0.4)
+- Settings' Language list covered the Font / Ikemen Sync / About row. Owner rejected segmented buttons and opening
+  upward; their idea: what the list lies on fades out, picking fades it back. FIRST built WRONG (faded the whole page
+  below) - owner: only the things directly UNDER the list, layer-wise.
+- Veil (app.py): a mouse-transparent child of the window painting the window's bg colour over each leaf widget
+  (whole buttons / labels) that meets the list's reach (ThemedCombo._list_need) and starts below the box (not the
+  scroll bar). ThemedCombo.veil: showPopup -> veil.cover(then _show_list); hidePopup -> uncover on the NEXT event-loop
+  turn, so a picked language (relayout + _fit_height) is in place first and doesn't eat the 0.1 s fade. Rects found
+  again on every window resize. Test: LanguageListFade.
+- Still open: Cloud Folder section 31 px above / 20 below (the "cloud" rule's +11 is room for This Is's list).
+  Offered: give This Is the same Veil, then SETTINGS_RULES "cloud" back to 20/20 - owner hasn't answered yet.

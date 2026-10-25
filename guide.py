@@ -138,14 +138,16 @@ GUIDE = {
             "thin line shows where it will land). Doing that switches to My Arrangement, starting from exactly what "
             "you were looking at. It's kept when you switch to another sort: pick My Arrangement to get it back. New "
             "games go at the end; folders are dragged the same way. While dragging, hold the cover near the top or "
-            "bottom edge to scroll (the closer to the edge, the faster).",
+            "bottom edge to scroll (the closer to the edge, the faster). Each library has its own arrangement: This "
+            "Device and Other Device are this computer's own (arranging them never moves anything on the other "
+            "device), while Both Devices is the one arrangement both computers share.",
             "- In My Arrangement, the folder options re-place your folders, sorted by the sort you used last (Title, "
             "Most Played or Recently Played), while your games keep your order: First and Last group them, Mixed puts "
             "them in the spots that sort would give them. You can move them by hand afterwards.",
             "- Each folder has its own sort, found in the same menu while the folder is open. It starts as Same as "
             "Library and follows the library's sort until you pick something else for it. Dragging a game to a new spot "
-            "inside the folder gives the folder its own My Arrangement. A folder's own order and sort are shared "
-            "with the other device.",
+            "inside the folder gives the folder its own My Arrangement. A folder's sort is this computer's own, like "
+            "the library's sort; its arrangement follows the same rule as the library's (only Both Devices is shared).",
             "§- Covers show how long you've read a game and when you last read it (Today, 3 Days Ago, ...) when you "
             "point at them; the bottom bar shows the same for the selected game or folder. Point at the time to see it "
             "for each device, or at the day to see the date you last read it on each device.",
@@ -294,10 +296,11 @@ GUIDE = {
             "- 検索は、入力した文字がタイトルに沿っているものを表示します。英語・ローマ字は単語の先頭で一致し（「ind」でIndigo、「toki」でSakura no Toki）、複数の単語はその順番で一致します（「girls 1」など）。1文字だけのときは、その文字で始まる名前だけが表示されます。数字はその数そのものに一致します（「1」は1巻で、11は含みません）。かなはタイトルの先頭、漢字はタイトルのどこにあっても一致します。",
             "- 同じメニューの「フォルダーを先頭に」「フォルダーを末尾に」「フォルダーを混ぜる」で、タイトル順・プレイ時間順・最近プレイした順でのフォルダーの位置を選べます（先頭・末尾にまとめる、またはゲームの間に混ぜる。どれもその並び順で並びます）。別のものを選ぶまで保持されます。フォルダーがないときは選べません。",
             "§- 並べ替えの隣のメニューで、表示するライブラリを選べます：「この端末」（この端末で設定済みのゲーム）、「もう一方の端末」（もう一方の端末でのみ設定済みのゲーム）、「両方の端末」。どれもフォルダーを含むひとつのライブラリで、並べ替えや自分の並びもそのまま使えます。その下のプレイ状況を選ぶと、今のライブラリの中でその状況のゲームだけが表示されます。どちらも別のものを選ぶまで保持されます。",
-            "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。ドラッグ中にカバーを上端や下端に近づけるとスクロールします（端に近いほど速くなります）。",
+            "- 「自分の並び」は自分で決める並び順です。カバーを他の2つのカバーの間にドラッグすると、そこへ移動します（移動先に細い線が表示されます）。これを行うと、表示していた順番のまま「自分の並び」に切り替わります。他の並び順に切り替えても保存されているので、「自分の並び」を選ぶと元に戻ります。新しいゲームは最後に追加されます。フォルダーも同じようにドラッグできます。ドラッグ中にカバーを上端や下端に近づけるとスクロールします（端に近いほど速くなります）。"
+            "自分の並びはライブラリごとに別です。「この端末」と「もう一方の端末」はこのパソコンだけのもので（並べ替えてももう一方の端末には影響しません）、「両方の端末」の並びだけが両方の端末で共有されます。",
             "- 「自分の並び」のときにフォルダーの配置を選ぶと、最後に使った並び順（タイトル順・プレイ時間順・最近プレイした順）でフォルダーを並べ直します。ゲームは自分の並びのままです。「先頭に」「末尾に」はまとめて、「混ぜる」はその並び順でのフォルダーの位置に置きます。そのあとは自由に動かせます。",
             "- フォルダーごとに並び順があり、フォルダーを開いているときに同じメニューで選べます。最初は「ライブラリと同じ」で、別の並び順を選ぶまではライブラリの並び順に合わせます。"
-            "フォルダーの中でゲームをドラッグして動かすと、そのフォルダー専用の「自分の並び」になります。フォルダーの並び順はもう一方の端末とも共有されます。",
+            "フォルダーの中でゲームをドラッグして動かすと、そのフォルダー専用の「自分の並び」になります。フォルダーの並び順の選択はライブラリの並び順と同じくこのパソコンだけのもので、自分の並びはライブラリと同じ決まりです（共有されるのは「両方の端末」だけ）。",
             "§- カバーにマウスを合わせると、読書時間と最後に読んだ日（今日、3日前など）が表示されます。下部のバーには、選択中のゲームやフォルダーの同じ情報が表示されます。読書時間にマウスを合わせると端末ごとの時間が、日付の部分に合わせると端末ごとの最後に読んだ日付が表示されます。",
             "¤- カバーにマウスを合わせると、読書時間と最後に読んだ日（今日、3日前など）が表示されます。下部のバーには、選択中のゲームやフォルダーの同じ情報が表示されます。読書時間にマウスを合わせると「12時間5分」のような表記で、日付の部分に合わせると日付が表示されます。",
             "- 上部のメニューの右にある「統計を非表示」を押すと、カバーと下部のバーの読書時間と最後に読んだ日が非表示になります。「統計を表示」で元に戻せます。この設定は次回以降も保持されます。",

@@ -92,7 +92,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.4"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -5494,6 +5494,91 @@ def drop_shadow(w: int, h: int) -> QImage:
 _SHADOWS: dict = {}
 
 
+class Veil(QWidget):
+    """The things a drop-down's open list lies on top of, faded away under the window's own colour (owner's idea,
+    2026-10-25: Settings' Language list covered the buttons under it). Only those, each whole - a button or label
+    the list reaches fades entirely, nothing else on the page does. In order, so nothing ever overlaps: opening,
+    they fade out, THEN the list slides open; closing (a pick or not), the list goes, THEN they fade back in - a new
+    language is already in place under the cover by then."""
+    S = 0.1
+
+    def __init__(self, below: QWidget, reach: Callable[[], int]):
+        win = below.window()
+        super().__init__(win)
+        self.below = below
+        self.reach = reach                           # how far under it the list goes (px)
+        self._rects: list = []
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._a = self._from = self._to = 0.0
+        self._t0 = 0.0
+        self._after: Optional[Callable] = None
+        self._clock = VsyncClock(self)
+        self._clock.timeout.connect(self._step)
+        win.installEventFilter(self)                 # (the window resizes: a new language, the screen's room)
+        self.hide()
+
+    @property
+    def covering(self) -> bool:
+        return self._to == 1.0
+
+    def cover(self, after: Callable) -> None:
+        self._after = after
+        self._go(1.0)
+
+    def uncover(self) -> None:
+        self._after = None
+        if self._to != 0.0:
+            self._go(0.0)
+
+    def _go(self, to: float) -> None:
+        self._from, self._to, self._t0 = self._a, to, time.monotonic()
+        self._place()
+        self.show()
+        self.raise_()
+        self._clock.start()
+        self._step()
+
+    def _place(self) -> None:
+        """The whole window; only the widgets under the list's reach are painted over (found again after every
+        resize: a new language moves things)."""
+        win = self.parentWidget()
+        self.setGeometry(win.rect())
+        top = self.below.mapTo(win, QPoint(0, self.below.height()))
+        reach = QRect(top.x(), top.y() + 1, self.below.width(), self.reach())
+        self._rects = []
+        for w in win.findChildren(QWidget):
+            if w is self or w.isWindow() or not w.isVisible() or w is self.below or self.below.isAncestorOf(w)                     or any(isinstance(c, QWidget) and not c.isWindow() and c.isVisible() for c in w.children()):
+                continue                             # (whole widgets only: the smallest pieces - buttons, labels)
+            r = QRect(w.mapTo(win, QPoint(0, 0)), w.size())
+            if r.intersects(reach) and r.top() > top.y():   # (not the scroll bar down the side)
+                self._rects.append(r.adjusted(-1, -1, 1, 1))
+
+    def _step(self) -> None:
+        t = min(1.0, (time.monotonic() - self._t0) / self.S)
+        self._a = self._from + (self._to - self._from) * ease(t)
+        self.update()
+        if t < 1:
+            return
+        self._clock.stop()
+        if self._to == 0.0:
+            self.hide()
+        after, self._after = self._after, None
+        if after is not None:
+            after()
+
+    def eventFilter(self, obj, ev) -> bool:
+        if obj is self.parentWidget() and ev.type() in (QEvent.Resize, QEvent.LayoutRequest) and self.isVisible():
+            self._place()
+        return False
+
+    def paintEvent(self, ev) -> None:
+        p = QPainter(self)
+        c = QColor(COLORS["bg"])
+        c.setAlphaF(max(0.0, min(1.0, self._a)))
+        for r in self._rects:
+            p.fillRect(r, c)
+
+
 class _ListShadow(QWidget):
     """The drop shadow right of and below an open drop-down list, drawn by us inside the list's own window (Windows'
     shadow is switched off). Windows redrew its shadow around however much of the list the slide-open showed, a
@@ -5658,11 +5743,14 @@ class ThemedCombo(QComboBox):
         bottom = top + self.height()
         return bottom + need > room.bottom() + 1 and top - need >= room.top()
 
-    def _opens_up(self) -> bool:
-        """The arrow's guess before opening (the list's height from its rows, padding, frame, gap and shadow)."""
+    def _list_need(self) -> int:
+        """The open list's height from its rows, padding, frame, gap and shadow."""
         rows = min(self.count(), self.maxVisibleItems())
-        need = sum(self.view().sizeHintForRow(i) for i in range(rows)) + 10 + self.LIST_GAP + _ListShadow.SIZE
-        return self._goes_up(need)
+        return sum(self.view().sizeHintForRow(i) for i in range(rows)) + 10 + self.LIST_GAP + _ListShadow.SIZE
+
+    def _opens_up(self) -> bool:
+        """The arrow's guess before opening."""
+        return self._goes_up(self._list_need())
 
     def _update_arrow(self) -> None:
         if not shiboken6.isValid(self):
@@ -5695,7 +5783,16 @@ class ThemedCombo(QComboBox):
             QTimer.singleShot(0, self, self._update_arrow)
         return False
 
+    veil: Optional[Veil] = None                    # Settings' Language: all below fades away while the list is open
+
     def showPopup(self) -> None:
+        if self.veil is not None:
+            if not self.veil.covering:               # (a second press while it fades: once is enough)
+                self.veil.cover(lambda: self.isVisible() and self.veil.covering and self._show_list())
+            return
+        self._show_list()
+
+    def _show_list(self) -> None:
         box = self._box()
         box.setMask(QRegion(0, 0, 1, 1))             # hidden until the slide reveals it
         # opened before: its see-through window still holds the last picture (the whole list), which Windows showed
@@ -5745,6 +5842,8 @@ class ThemedCombo(QComboBox):
         self._slide_timer.stop()
         self._box().clearMask()
         super().hidePopup()
+        if self.veil is not None:                    # (the list is gone: what was under it comes back - once a pick's
+            QTimer.singleShot(0, self.veil, self.veil.uncover)   # new language is in place, or that work ate the fade)
 
     def _slide(self) -> None:
         box = self._box()
@@ -8010,6 +8109,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         self.lang.setCurrentIndex(1 if self._orig_lang == "ja" else 0)
         self.lang.currentIndexChanged.connect(self._switch_language)    # the whole window follows at once
         lay.addWidget(self.lang)
+        self.lang.veil = Veil(self.lang, self.lang._list_need)   # what its list lies on fades away meanwhile (owner)
 
         # Font: one per interface language ("日本語" is always written in Japanese)
         self.fonts = {"en": current.font_en if current else FONT_FALLBACKS[0],
@@ -9692,7 +9792,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.current_folder: Optional[str] = None     # folder id being viewed, None = the library
         self.folder_names: dict[str, str] = {}
         self.folder_meta: dict[str, dict] = {}         # folder id -> {"sort", "order"} (each folder's own sort)
-        self.library_order: list[str] = []            # the owner's own order (sort: Custom)
+        self.library_order: list[str] = []            # the owner's own order (sort: Custom; Both Devices, shared)
+        self.view_data: dict = {"library": {}, "folders": {}, "folder_sorts": None}   # this device's (Library.view_orders)
         self.folder_games: dict[str, list[Game]] = {}
         self._sort_mode: Optional[str] = "?"          # which choices the sort drop-down shows (a folder or the library)
         self._press: Optional[tuple] = None           # (position, game id) for starting a drag
@@ -10119,6 +10220,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             if back_from_solo:
                 self._merge_from_solo(settings)
             self.library = Library(settings.cloud_root)
+            self.library.slot = settings.machine_name        # (This Device / Other Device arrangements: kept per device)
             self.engine = SyncEngine(settings.cloud_root, self.app_dir, computers=self.library.known_computers)
             try:
                 owner = self.library.slot_owner(settings.machine_name)
@@ -10544,8 +10646,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         try:
             out["meta"] = {fid: {"sort": v["sort"], "order": v["order"]} for fid, v in library._folders_raw().items()}
             out["order"] = library.library_order()
+            out["views"] = library.view_orders(library.slot)
         except OSError:
-            out["meta"] = out["order"] = None
+            out["meta"] = out["order"] = out["views"] = None
         try:
             out["sig"] = library.change_signature() if signature else None
         except OSError:
@@ -10577,7 +10680,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.games = {g.game_id: g for g in games}
         self.folder_names = data["folders"]
         if data["meta"] is not None:
-            self.folder_meta, self.library_order = data["meta"], data["order"]
+            self.folder_meta, self.library_order, self.view_data = data["meta"], data["order"], data["views"]
         try:
             self._rebuild()
         finally:
@@ -10815,7 +10918,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 self.folder_games.setdefault(g.folder, []).append(g)
         for fid, gs in self.folder_games.items():       # each folder in its own sort (or the library's)
             fs = self.folder_sort(fid)
-            self.folder_games[fid] = in_order(gs, lambda g: g.game_id, self.folder_meta.get(fid, {}).get("order", [])) \
+            self.folder_games[fid] = in_order(gs, lambda g: g.game_id, self._folder_order(fid)) \
                 if fs == "custom" else sort_games(gs, fs)
         if self.current_folder and self.current_folder not in self.folder_games:
             self.current_folder = None                    # it was emptied or removed
@@ -10831,7 +10934,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         top = [("game", g) for g in sort_games(games, "recent") if not g.folder]
         top += [("folder", fid) for fid in self.folder_games]
         if sort == "custom":                             # My Arrangement: exactly your order
-            top = in_order(top, self._entry_id, self.library_order)
+            top = in_order(top, self._entry_id, self._lib_order())
         else:                                            # folders mixed in / first / last, by the same sort
             top = self._auto_order(top, sort, self.settings.folder_place)
         self._top_entries = top
@@ -11020,12 +11123,63 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.folder_meta = {fid: {"sort": v["sort"], "order": v["order"]}
                                 for fid, v in self.library._folders_raw().items()}
             self.library_order = self.library.library_order()
+            self.view_data = self.library.view_orders(self.library.slot)
         except OSError:
             pass
 
     def folder_sort(self, fid: str) -> str:
         """The sort a folder's games are shown in: its own, or the library's when it has none."""
-        return self.folder_meta.get(fid, {}).get("sort") or self.settings.sort
+        return self._own_folder_sort(fid) or self.settings.sort
+
+    # My Arrangement belongs to the view (owner, 2026-10-25): This Device / Other Device are this computer's own -
+    # arranging them never moves anything on the other device; Both Devices is the one arrangement both share.
+    # A folder's sort is a viewing choice like the library's sort: this device's own (shared on My Device).
+    def _own_view(self) -> str:
+        """"here" / "other" while a view of this device's own is shown, "" = Both Devices (the shared order)."""
+        dev = self._device_filter()
+        return dev if dev != "both" and self.library.slot else ""
+
+    def _lib_order(self) -> list[str]:
+        """The main page's My Arrangement in this view (one never arranged here starts from the shared one)."""
+        v = self._own_view()
+        own = self.view_data["library"].get(v) if v else None
+        return self.library_order if own is None else own
+
+    def _folder_order(self, fid: str) -> list[str]:
+        v = self._own_view()
+        own = self.view_data["folders"].get(v, {}).get(fid) if v else None
+        return self.folder_meta.get(fid, {}).get("order", []) if own is None else own
+
+    def _own_folder_sort(self, fid: str) -> str:
+        """The folder's own sort here, "" = Same as Library (never chosen on this device: the shared one)."""
+        own = self.view_data["folder_sorts"] if self.library.slot else None
+        return (self.folder_meta.get(fid, {}).get("sort") if own is None else own.get(fid)) or ""
+
+    def _set_lib_order(self, order: list[str]) -> None:
+        v = self._own_view()
+        if v:
+            self.library.set_view_order(self.library.slot, v, order)
+            self.view_data["library"][v] = list(order)
+        else:
+            self.library.set_library_order(order)
+            self.library_order = list(order)
+
+    def _set_folder_order(self, fid: str, order: list[str]) -> None:
+        v = self._own_view()
+        if v:
+            self.library.set_view_order(self.library.slot, v, order, fid)
+            self.view_data["folders"].setdefault(v, {})[fid] = list(order)
+        else:
+            self.library.set_folder_order(fid, order)
+            self.folder_meta.setdefault(fid, {"sort": "", "order": []})["order"] = list(order)
+
+    def _set_folder_sort(self, fid: str, sort: str) -> None:
+        if self.library.slot:
+            self.library.set_own_folder_sort(self.library.slot, fid, sort)
+            self.view_data = self.library.view_orders(self.library.slot)
+        else:
+            self.library.set_folder_sort(fid, sort)
+            self.folder_meta.setdefault(fid, {"sort": "", "order": []})["sort"] = sort
 
     # ------------------------------------------------------------------ the sort drop-down
     def _sort_choices(self, inside: bool) -> list:
@@ -11058,7 +11212,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """Show the sort in use (without rebuilding the list: rebuilding it on every pick made it slow to reopen)."""
         c = self.sort
         inside = self.current_folder is not None
-        current = (self.folder_meta.get(self.current_folder, {}).get("sort") or "follow") if inside else self.settings.sort
+        current = (self._own_folder_sort(self.current_folder) or "follow") if inside else self.settings.sort
         c.blockSignals(True)
         c.setCurrentIndex(max(0, c.findData(current)))
         has_folders = bool(self.folder_games)              # no folders: nothing for the folder options to do
@@ -11447,15 +11601,12 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             place = d[len("place:"):]
             self.settings.folder_place = place
             if self.settings.sort == "custom" and not self.current_folder:
-                order = merge_order(self.library_order + self._all_top_ids(), self._place_folders(place))
-                self.library.set_library_order(order)
-                self.library_order = order
+                self._set_lib_order(merge_order(self._lib_order() + self._all_top_ids(), self._place_folders(place)))
                 self._own_change()
         elif d in ("recent", "hours", "title") and not self.current_folder:
             self.settings.sort = self.settings.last_sort = d
         elif self.current_folder:                    # this folder's own sort ("follow" = the library's)
-            self.library.set_folder_sort(self.current_folder, "" if d == "follow" else d)
-            self._read_orders()
+            self._set_folder_sort(self.current_folder, "" if d == "follow" else d)
             self._own_change()
         else:                                        # My Arrangement (remembering the sort you came from)
             if self.settings.sort in ("recent", "hours", "title"):
@@ -12551,19 +12702,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         switched = False
         if self.current_folder:
             fid = self.current_folder
-            ids = merge_order(self.folder_meta.get(fid, {}).get("order", []) +
-                              [g.game_id for g in self.games.values() if g.folder == fid], ids)
-            self.library.set_folder_order(fid, ids)
-            meta = self.folder_meta.setdefault(fid, {"sort": "", "order": []})
-            meta["order"] = list(ids)
-            if meta.get("sort") != "custom":             # its own My Arrangement (even if "Same as Library"
-                self.library.set_folder_sort(fid, "custom")   # was already showing the library's)
-                meta["sort"] = "custom"
+            ids = merge_order(self._folder_order(fid) + [g.game_id for g in self.games.values() if g.folder == fid], ids)
+            self._set_folder_order(fid, ids)
+            if self._own_folder_sort(fid) != "custom":   # its own My Arrangement (even if "Same as Library"
+                self._set_folder_sort(fid, "custom")     # was already showing the library's)
                 switched = True
         else:
-            ids = merge_order(self.library_order + self._all_top_ids(), ids)
-            self.library.set_library_order(ids)
-            self.library_order = list(ids)
+            self._set_lib_order(merge_order(self._lib_order() + self._all_top_ids(), ids))
             if self.settings.sort != "custom":           # My Arrangement, starting from what was on screen
                 self.settings.last_sort = self.settings.sort   # (its folder options use the sort you came from)
                 self.settings.sort = "custom"
@@ -12659,10 +12804,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         fid = self.library.create_folder(tr("folder.new_name"))
         self.library.set_folder(target, fid)
         self.library.set_folder(gid, fid)
-        order = list(self.library_order)
+        order = list(self._lib_order())
         if target in order:                     # (My Arrangement: the folder takes the target's place - it went
             order[order.index(target)] = FOLDER_PREFIX + fid        # to the end, and the view jumped there)
-            self.library.set_library_order([x for x in order if x != gid])
+            self._set_lib_order([x for x in order if x != gid])
         self._reshow((gid, target))
         self._select_item(FOLDER_PREFIX + fid, glide=True)
 

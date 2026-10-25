@@ -39,7 +39,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 300 tests (2026-10-25, 2.0.3: + shortcut
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 302 tests (2026-10-25, 2.0.4: + arrangement per view, Language list fade; 2.0.3: + shortcut
   arguments, Choose VNDB Cover; 2.0.2: + add into open folder / folder-bar rename / trash-drop fade + removal fade; full run now ~7-8 min; 2.0.1: + drag-scroll turns / scroll guard / bars wait / fade-back / held cover while a
   session ends, title-bar press focuses; 2.0.0: notes, saved themes, closed-window timers), all pass on
   the PC (Python 3.14, `py -m unittest`; ~7-8 min with the app open) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
@@ -60,6 +60,9 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   Open / Rename... / Remove Folder (games go back). Double-click/Enter/the Open button opens it; "‹ Library"
   (also Esc/Backspace) goes back, and dropping a game on it takes it out. Search/status filter show games
   from inside folders directly.
+- My Arrangement belongs to the view (owner, 2026-10-25): This Device / Other Device are each computer's own
+  (`<cloud>/views/<slot>.json`, written only by that device; folder sorts per device too); only Both Devices uses the
+  shared order.json / folders.json orders. See NOTES.md "Arrangement per view".
 - Settings layout: ... Luna, then "Accessibility" (Pulsing Sync Lights, Launch Program on Startup, VNDB auto
   covers, Safe Covers Only), then "Display" with segmented buttons Light | Dark | Custom (selected one stays
   highlighted; Light/Dark preview at once; Settings Cancel always restores the original look).
@@ -160,7 +163,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.3" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.4" in app.py (build.py reads it).
 - Notes (2.0.0): right-click a game -> "Add Notes" / "Notes" (under Edit) -> NotesLayer (DimLayer, like the easter
   egg): 72.5 % text box + elided title, saved on close only (owner), in Game.notes (synced with the game file), saved in
   the background in order, flushed on exit; every key but Esc stays in the box. Removal warns about notes.
