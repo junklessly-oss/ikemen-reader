@@ -1464,3 +1464,22 @@ before changing it.
   make room, then it fades back in (appearing delayed SLIDE_S).
 - Full suite now ~7-8 min on the PC with the app open (was ~3): no test hangs (watchdog run, 45 s per test); earlier
   "hang" = just my 500 s timeout. Run it in two halves or give it 10 min.
+
+## Session 2026-10-25 (later): 2.0.3 redone - folder return, drag jumps (found with a drag recorder)
+- Back out of a folder: lands on the exact scroll value the library had when the folder opened (open_folder /
+  _select store _library_scroll); only if the folder tile is fully off screen there is it scrolled into view. Before:
+  scrollToItem only, which nudged a tile half under the bottom bar into full view = "a few rows off".
+- Drag recorder (temporary, removed; recreate if needed): per-frame scroll value / range / grid geometry / marker in
+  _drag_autoscroll, every scroll bar valueChanged with a short stack, every range change in updateGeometries, drop /
+  landing / slide offsets for 1.5 s after a drop. The stacks pointed straight at each cause:
+  1. "jumps quickly then snaps back": Qt's delayedAutoScroll (QAbstractItemView timer, ~doubleClickInterval after a
+     press) scrolls a pressed, partly hidden cover into view - mid-drag, 30-45 px. LibraryGrid.timerEvent sets
+     _in_timer; scrollTo ignores timer calls once `dragged` (set in _begin_drag, cleared on the next press).
+  2. "weird effect" placing a game: _move_to ended with _select_item -> scrollToItem: a game dropped under the bottom
+     bar scrolled the library up to 100 px at once, after _slide_from's "before" picture -> every cover slid. Now
+     _select_item(iid, scroll=False).
+  3. "auto scrolls up a bit" in the last rows: Qt's own updateGeometries range (no GRID_END_EXTRA, 36 px shorter)
+     clamped the value before ours widened it. updateGeometries now keeps the value (marked _gliding meanwhile so a
+     glide / edge scroll isn't ended by it). Top needs nothing (both ranges start at 0).
+- A cover pushed into another row by a drop slides in one cell from the edge beside its new place (was a diagonal
+  slide across the whole grid). The drop line / drop also work in the grid's thin side margins (_drag_hit: over grid).

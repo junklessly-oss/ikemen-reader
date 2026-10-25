@@ -1336,9 +1336,18 @@ class LibraryGrid(QListWidget):
         super().setSelection(rect.translated(0, -GRID_TOP_SHIFT), flags)
 
     def updateGeometries(self) -> None:
-        super().updateGeometries()
+        # Qt's own range (without GRID_END_EXTRA) comes first and pulled a view at the very bottom up 36 px before ours
+        # widened it again - every drop in the last rows nudged the library up (owner, 2026-10-25): the place is kept
         sb = self.verticalScrollBar()
-        sb.setRange(0, max(0, self.contentsSize().height() + GRID_END_EXTRA - self.viewport().height()))
+        before, was = sb.value(), self._gliding
+        self._gliding = True                    # (not "something else moved it": a glide / edge scroll carries on)
+        try:
+            super().updateGeometries()
+            sb.setRange(0, max(0, self.contentsSize().height() + GRID_END_EXTRA - self.viewport().height()))
+            if sb.value() != before:
+                sb.setValue(min(before, sb.maximum()))
+        finally:
+            self._gliding = was
 
     def _showing(self, index) -> Optional[int]:
         """The scroll position that brings this item into view (None: it's in view already)."""
@@ -1354,7 +1363,22 @@ class LibraryGrid(QListWidget):
             return sb.value() + cover_bottom - self.viewport().height()
         return None
 
+    _in_timer = False         # Qt's own timers running (see timerEvent)
+    dragged = False           # a game / folder was picked up since the last press
+
+    def timerEvent(self, ev) -> None:
+        self._in_timer = True
+        try:
+            super().timerEvent(ev)
+        finally:
+            self._in_timer = False
+
     def scrollTo(self, index, hint=QAbstractItemView.EnsureVisible) -> None:
+        if self._in_timer and self.dragged:
+            # Qt brings a pressed cover that's partly out of view into view ~0.6 s after the press - with that cover
+            # picked up, the library jumped 30-45 px mid-drag and back on the drop (owner, 2026-10-25, "jumps quickly
+            # and then immediately snaps back")
+            return
         to = self._showing(index)
         if to is not None:
             self.verticalScrollBar().setValue(to)
@@ -11170,6 +11194,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     def open_folder(self, fid: str) -> None:
         """Into a folder, the same way search changes the grid: the library fades out, then the folder's games
         fade in one after another (the "‹ Library" bar above them shows where you are)."""
+        if not self.current_folder:                 # (back out lands exactly here again - see close_folder)
+            self._library_scroll = self.grid.verticalScrollBar().value()
         self.current_folder = fid
         self.search.blockSignals(True)
         self.search.clear()
@@ -11186,13 +11212,26 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return
         if self.current_folder:
             # back out: the folder's games fade out, then the library fades in - the folder you came from first
-            # (and selected), so your eye lands where you left off
+            # (and selected), so your eye lands where you left off: the library scrolled exactly as it was when the
+            # folder opened (only scrolling the tile into view landed a few rows off - owner, 2026-10-25); if the
+            # library changed meanwhile so the tile is off screen there, it's scrolled into view instead
             fid, self.current_folder = self.current_folder, None
             tile = FOLDER_PREFIX + fid
+            back_to = getattr(self, "_library_scroll", None)
+            self._library_scroll = None
 
             def find_tile():
                 self.grid.doItemsLayout()
-                self.grid.scrollToItem(self.grid.currentItem()) if self.grid.currentItem() else None
+                self.grid._end_glide()
+                it = self.grid.currentItem()
+                if back_to is not None:
+                    self.grid.updateGeometries()    # (the range for the library, not the folder just left)
+                    sb = self.grid.verticalScrollBar()
+                    sb.setValue(min(sb.maximum(), back_to))
+                    # (a tile half under the bottom bar stays so: nudging it into full view was the few rows off)
+                    if it is None or self.grid.visualItemRect(it).intersects(self.grid.viewport().rect()):
+                        return
+                self.grid.scrollToItem(it) if it else None
             self._apply_filter(select=tile, after_rebuild=find_tile)
             if tile in self.appearing and len(self.appearing) > 1:
                 first = min(d for k, d in self.appearing.items() if k != tile)
@@ -11928,6 +11967,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return self._game_drag_event(obj, ev)
         if obj is self.grid.viewport():
             if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+                self.grid.dragged = False
                 it = self.grid.itemAt(ev.position().toPoint())
                 iid = it.data(GAME_ID_ROLE) if it else None
                 self._press = (ev.position().toPoint(), iid) if iid else None   # (folders: to rearrange)
@@ -12051,6 +12091,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         return None
 
     def _begin_drag(self, gid: str, img: QPixmap) -> None:
+        self.grid.dragged = True                        # (until the next press: LibraryGrid.scrollTo)
         if self._landing is not None:
             self._landing.finish()                      # the last drop is still gliding: put it down now
         start = self._cover_global(gid)
@@ -12239,7 +12280,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if self.current_folder and over(self.back_btn) and not folder:
             return "back", None
         vp = self.grid.viewport()
-        if over(vp):
+        if over(self.grid):                         # (the grid's thin side margins too: an edge drop lands, nearest cover)
             return "grid", self._drop_spot(vp.mapFromGlobal(gp)) if aim else None
         return None, None
 
@@ -12427,10 +12468,17 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.arrive_span = step * max(0, len(fresh) - 1)   # ...and settle with the last)
         else:
             self.slides = {}
+            cell = self.grid.gridSize().width()
             for iid, p in now.items():
                 old = before.get(iid)
                 if old is not None and iid != skip and old != p:
-                    self.slides[iid] = (old.x() - p.x(), old.y() - p.y())
+                    if old.x() != p.x() and old.y() != p.y():
+                        # into another row: in from the edge beside its new place, one cell sideways like its neighbours
+                        # (a slide straight there crossed the whole grid diagonally - owner, 2026-10-25, "jumpy" when
+                        # dropping near the left and right edges)
+                        self.slides[iid] = (-cell if p.y() > old.y() else cell, 0)
+                    else:
+                        self.slides[iid] = (old.x() - p.x(), old.y() - p.y())
             if self.slides:
                 self._slide_t0 = t
         self.grid.viewport().update()
@@ -12524,7 +12572,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._mark_sort()
         self._rebuild()
         self._own_change()
-        self._select_item(iid)
+        # (dropped where you could see it: no scrolling it fully into view - from under the bottom bar that moved the
+        # whole library up to 100 px at once, then every cover slid back - owner, 2026-10-25, "weird effect")
+        self._select_item(iid, scroll=False)
         if switched:
             self.statusBar().showMessage(i18n.line("status.now_custom"), 8000)
 
@@ -12630,18 +12680,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._rebuild()
         self._own_change()
 
-    def _select_item(self, iid: str, glide: bool = False) -> None:
-        """glide: brought into view by gliding there (after a drop), not a jump."""
+    def _select_item(self, iid: str, glide: bool = False, scroll: bool = True) -> None:
+        """glide: brought into view by gliding there (after a drop), not a jump. scroll=False: left where it is."""
         for i in range(self.grid.count()):
             if self.grid.item(i).data(GAME_ID_ROLE) == iid:
-                if glide:
+                if glide or not scroll:
                     self.grid.setAutoScroll(False)          # (Qt would scroll there at once)
                     try:
                         self.grid.setCurrentRow(i)
                     finally:
                         self.grid.setAutoScroll(True)
                     self.grid.item(i).setSelected(True)
-                    self.grid.glide_to_show(self.grid.model().index(i, 0))
+                    if glide:
+                        self.grid.glide_to_show(self.grid.model().index(i, 0))
                 else:
                     self.grid.setCurrentRow(i)
                     self.grid.item(i).setSelected(True)
@@ -12983,6 +13034,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if g is not None:
             want = g.folder or None
             if self.search.text().strip() == "" and not self._filtering() and want != self.current_folder:
+                if not self.current_folder:
+                    self._library_scroll = self.grid.verticalScrollBar().value()   # (see open_folder)
                 self.current_folder = want
                 self._rebuild(select=gid)
         for i in range(self.grid.count()):
