@@ -92,7 +92,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -711,9 +711,22 @@ class LibraryGrid(QListWidget):
         if done:
             self._end_glide()
 
-    def _scrolled_elsewhere(self, _value: int) -> None:
-        if not self._gliding:
-            self._end_glide()
+    def _scrolled_elsewhere(self, value: int) -> None:
+        if self._gliding:
+            return
+        w = getattr(self, "w", None)
+        held = getattr(w, "_drag_scroll_pos", None) if w is not None and w._ghost is not None else None
+        if held is not None and value != round(held):
+            # a game's edge scroll runs: only it moves the library. Right after a game closed one of Qt's own item-view
+            # timers moved it ~30 px at once, under the scroll (owner, 2026-10-24: a jump, then a stutter as the edge
+            # scroll set off again); put back before anything is drawn
+            self._gliding = True
+            try:
+                self.verticalScrollBar().setValue(round(held))
+            finally:
+                self._gliding = False
+            return
+        self._end_glide()
 
     def _end_glide(self) -> None:
         self._glide_prev = None
@@ -752,7 +765,7 @@ class LibraryGrid(QListWidget):
         return ((self._glide_to is not None or self._layer_hold) and not self.bare
                 and self.isVisible()
                 and w._landing is None and not w.slides
-                and not w._search_moving() and not w.rumble and w.no_results == 0
+                and not w._search_moving(returns=False) and not w.rumble and w.no_results == 0
                 and w.bookmark_alpha in (0.0, 1.0) and not BACKGROUND["live"])
 
     def _drop_layer(self, *_args) -> None:
@@ -784,7 +797,7 @@ class LibraryGrid(QListWidget):
         w = self.w
         dim = getattr(w, "_dim_gid", None)      # (the picked-up game: drawn live, faded, its light with it)
         skip = frozenset(gid for gid, h in w.hover.items() if h > 0) | ({w.hovered} if w.hovered else frozenset()) \
-            | ({dim} if dim else frozenset())
+            | ({dim} if dim else frozenset()) | (frozenset(w.appearing) & w._returning)
         if skip != self._layer_skip:
             changed, self._layer_skip = skip ^ self._layer_skip, skip
             self._patch_layer(changed)
@@ -802,7 +815,7 @@ class LibraryGrid(QListWidget):
         ready and never draws one mid-frame (that was most of the late frames while flicking quickly)."""
         w = self.w
         if (not self.isVisible() or w.isMinimized() or self._glide_to is not None or self.bare
-                or w.slides or w._search_moving() or w.rumble):
+                or w.slides or w._search_moving(returns=False) or w.rumble):
             return
         self._sync_skip()
         lo, hi = self._layer_keep()
@@ -996,9 +1009,13 @@ class LibraryGrid(QListWidget):
                 iid = index.data(GAME_ID_ROLE)
                 if iid in skip:
                     # (the picked-up game with its light, faded together - exactly as normal drawing does)
-                    delegate._skip_light = iid != w._dim_gid
+                    # (a dropped game fading back in likewise, drawn the way arriving covers are: under_pass)
+                    back = iid in w._returning and iid in w.appearing
+                    delegate._skip_light = iid != w._dim_gid and not back
+                    delegate.under_pass = back
                     delegate.paint(p, self._item_option(index), index)
                     delegate._skip_light = True
+                    delegate.under_pass = False
         finally:
             w.covers.no_decode = False
             delegate._skip_light = False
@@ -1006,7 +1023,7 @@ class LibraryGrid(QListWidget):
             index = self.model().index(i, 0)
             iid = index.data(GAME_ID_ROLE)
             centre = CardDelegate.light_center(CardDelegate.cover_rect(self.visualRect(index), w.hover.get(iid, 0.0)))
-            if iid == w._dim_gid and iid in skip:
+            if iid in skip and (iid == w._dim_gid or (iid in w._returning and iid in w.appearing)):
                 continue                                   # (drawn with its cover above, faded with it)
             if is_folder(iid):
                 paint_light(p, centre, w.folder_colours(iid[len(FOLDER_PREFIX):]), "calm", w.settings.pulse)
@@ -1134,7 +1151,7 @@ class LibraryGrid(QListWidget):
     def _layer_blocker(self) -> str:
         w = self.w
         checks = {"bare": self.bare, "hidden": not self.isVisible(), "landing": w._landing is not None,
-                  "slides": bool(w.slides), "search": w._search_moving(), "rumble": bool(w.rumble),
+                  "slides": bool(w.slides), "search": w._search_moving(returns=False), "rumble": bool(w.rumble),
                   "no_results": w.no_results != 0,
                   "bookmark": w.bookmark_alpha not in (0.0, 1.0), "bg_live": bool(BACKGROUND["live"])}
         return ",".join(k for k, v in checks.items() if v)
@@ -1628,6 +1645,7 @@ DRAG_SCROLL_MIN, DRAG_SCROLL_MAX = 2, 60   # ...this many px per frame, faster t
 DRAG_SCROLL_EASE_S = 0.16          # ... its speed eases towards the new one over about this long
 DRAG_SCROLL_BRAKE = 5000            # ... and slows into the library's end at this rate (px/s²)
 DRAG_AIM_SPEED = 8                  # let go scrolling faster than this: the game goes back (rows race past, nothing to aim at)
+DRAG_REST_S = 0.15                  # an edge scroll that stopped stays a glide this long (swinging edge to edge)
 LIGHT_R = 5.5
 LOGO_H = 30
 
@@ -3637,6 +3655,11 @@ class KeepsTitleBar:
         pt = wintypes.POINT()
         ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
         self._press_at = (pt.x, pt.y)
+        if not self.isActiveWindow():
+            # Windows focuses a window from this very press, which is kept from it here: a click on the title bar
+            # of the unfocused window left it unfocused (owner, 2026-10-24). The click is ours, so it may take focus
+            self.activateWindow()
+            self.raise_()
         if not hasattr(self, "_press_watch"):
             self._press_watch = QTimer(self, interval=8, timerType=Qt.PreciseTimer)
             self._press_watch.timeout.connect(self._watch_press)
@@ -5835,7 +5858,7 @@ class DragGhost(QWidget):
                 self._place()                                # (the smaller window)
             if self._mode == "drag" and self.opacity == self.target:
                 self._timer.stop()                           # still: redrawn when the mouse moves
-        if now - self._last_frame >= 0.007:
+        if now - self._last_frame >= 0.5 * frame_period():   # (was 7 ms: a 143 Hz refresh is 6.99, so every other frame)
             self._last_frame = now
             self.repaint()
 
@@ -11362,9 +11385,31 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         r = d.style().subControlRect(QStyle.CC_ComboBox, opt, QStyle.SC_ComboBoxEditField, d)
         return r.translated(d.mapTo(self.details, QPoint(0, 0)))
 
+    # While a game's edge scroll runs, the bars' changes wait until it stops: a game closing mid-scroll faded both bars,
+    # the status line and the Read button at once - nearly the whole window redrawn each frame for ~0.3 s, the scroll's
+    # frames 3.2 -> 5.6 ms (9.7 at worst; a 143 Hz refresh has 7). Owner's choice, 2026-10-24.
+    def _bars_wait(self) -> bool:
+        return self._ghost is not None and getattr(self, "_drag_scroll_pos", None) is not None
+
+    def _bars_later(self, key: str, fn: Callable[[], None]) -> bool:
+        """True: held until the edge scroll stops (the latest call per key)."""
+        if not self._bars_wait():
+            return False
+        pending = self.__dict__.setdefault("_bars_pending", {})
+        pending.pop(key, None)
+        pending[key] = fn                                 # (in the order they came)
+        return True
+
+    def _bars_flush(self) -> None:
+        pending, self._bars_pending = getattr(self, "_bars_pending", {}), {}
+        for fn in pending.values():
+            fn()
+
     def _update_details(self) -> None:
         """Bring the bar up to date; each piece whose content changed is blended by BarFader: the Read button
         cross-fades, every other piece fades out, then in (the status drop-down: only its words)."""
+        if self._bars_later("details", self._update_details):
+            return
         fade = self.details.isVisible() and not self._resizing and not getattr(self, "_renaming", None) \
             and hasattr(self, "_fader")
         # a language switch: every word in the window changes at once, so the bar does too (owner, 2026-10-18: Edit
@@ -11672,6 +11717,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def _update_sync_label(self) -> None:
         """The one-line status in the top bar. Details (device, cloud folder) live in Settings."""
+        if self._bars_later("sync", self._update_sync_label):
+            return
         checking = self.checker is not None and self.checker.isRunning() and not self._quiet_check
         conflicts = sum(1 for s in self.sync_states.values() if s == "conflict")
         tip = ""
@@ -11768,6 +11815,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     gid = self._press[1]
                     self._press = None
                     self._start_game_drag(gid)
+                    return True
+                if self._press and ev.buttons() & Qt.LeftButton and self.worker is not None:
+                    # a session still ending (no drag until it's done): handed to Qt, the held button became its own
+                    # drag-select, whose edge scroll moves the library in coarse jumps a few times a second (owner,
+                    # 2026-10-24: "a stuttery 3 frames per second mess"). Nothing happens; once it's done, the drag starts
                     return True
                 # (a held button keeps the mouse past the grid's edge: over the bottom bar, the row hidden under it lifted)
                 it = self.grid.itemAt(pos) if self.grid.viewport().rect().contains(pos) else None
@@ -11875,6 +11927,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_pos, self._drag_scroll_n = 0.0, 0.0, None, 0
         self._drag_scroll_t = frame_time()
         self._drag_moved = False
+        self._drag_rest_t = None
         self._ghost = DragGhost(img, start)
         self._ghost.follow(QCursor.pos())
         self._ghost.show()
@@ -11892,6 +11945,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._drag_scroll.setInterval(16)
         self._drag_scroll.timeout.connect(self._drag_autoscroll)
         self._drag_scroll.start()
+        # the strips for an edge scroll, made once the cover has lifted (the press dropped them: selection), not
+        # LAYER_QUIET_MS later - a quick drag to the edge otherwise found none and built them all in one frame
+        self.grid._prebuild_timer().start(int(DragGhost.LIFT_S * 1000) + 20)
 
     def _drag_autoscroll(self) -> None:
         """While a game is dragged near the top or bottom of the grid (or past it), the library scrolls:
@@ -11955,9 +12011,32 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         # mouse reports hundreds a second, ~1 ms each, and handled as they came they piled up into late frames
         # whenever the hand moved (dragbench 2026-10-24: a still pointer 3 late frames in 3 s, a moving one 8+)
         moved, self._drag_moved = self._drag_moved, False
+        if n * frames and new == round(pos) and target != 0 and not 0 <= y <= vp.height():
+            # at the end, still pushed past the edge: it stays a glide, held there (nothing to aim at out here). Ending
+            # it handed back to normal drawing and aiming, and swinging the other way set off from scratch - the
+            # late frames of a fast up-and-down drag were all at the turns (owner, 2026-10-24)
+            self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_n = 0.0, 0.0, 0
+            if moved:
+                self._move_game_drag(gp, (kind, None))
+            return
+        if target == 0 and abs(v) < 0.1 and starting is not None and g._glide_to is not None:
+            # stopped: it stays a glide a moment longer - swinging from one edge to the other crosses the middle, and
+            # ending there drew those frames the slow way (aiming, normal drawing) and set off again from scratch
+            rest = getattr(self, "_drag_rest_t", None)
+            if rest is None:
+                self._drag_rest_t = rest = now
+            if now - rest < DRAG_REST_S:
+                self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_n = 0.0, 0.0, 0
+                if moved:
+                    self._move_game_drag(gp, (kind, None))
+                return
+        else:
+            self._drag_rest_t = None
         if (target == 0 and abs(v) < 0.1) or (n * frames and new == round(pos)):
+            self._drag_rest_t = None
             self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_pos = 0.0, 0.0, None   # stopped / at the end:
             self._drag_scroll_n = 0                                                           # back to normal drawing
+            self._bars_flush()
             if starting is not None and g._glide_to is not None:     # (ours: a wheel glide is left alone)
                 g._heading = 0
                 g._end_glide()
@@ -12094,6 +12173,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self._drag_scroll_v, self._drag_scroll_a, self._drag_scroll_pos, self._drag_scroll_n = 0.0, 0.0, None, 0
             self.grid._heading = 0
             self.grid._end_glide()
+            self._bars_flush()
         QApplication.instance().removeEventFilter(self._esc)
         ghost, self._ghost = self._ghost, None
         self._landing = ghost
@@ -12128,8 +12208,17 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         elif gid and spot and spot[0] == "between":
             self._move_to(gid, spot[1])
             to = self._cover_global(gid)
-        else:
-            to = self._cover_global(gid) if gid else None      # nothing happened: back home
+        elif gid:
+            # nothing happened (let go where it can't land, Esc): the floating copy fades where it is and the cover
+            # fades back in at its place the way covers arrive (owner, 2026-10-24: gliding back over the bars, or
+            # toward a place scrolled out of view, wasn't clean). It starts from how faded it was (0.75 dimmed).
+            to, end_opacity = ghost.current(), 0.0
+            self._dim_gid = None
+            t = time.monotonic()
+            back = -(1 - 0.75 ** (1 / 3)) * APPEAR_S             # (appear_fade = 0.75 now)
+            self.appearing = {**{k: d - (t - self._appear_t0) for k, d in self.appearing.items()}, gid: back}
+            self._returning = (self._returning & set(self.appearing)) | {gid}
+            self._appear_t0 = t
         self._slide_from(before, skip=gid)
         if to is None:                                       # (off screen) just fade where it is
             to, end_opacity = shrink_into(ghost.current(), 2.0), 0.0
@@ -12187,6 +12276,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 base = max(base, self.no_results * NO_RESULTS_OUT_S + 0.02)
             step = min(APPEAR_STAGGER, APPEAR_STAGGER_MAX / max(1, len(fresh) - 1))
             self.appearing = {**keep, **{iid: base + i * step for i, iid in enumerate(fresh)}}
+            self._returning = set()                      # (a search's arrivals: drawn the search's way)
             self._appear_t0 = t
             self.arrive_wait = base                      # (the top drop-downs' words come in with the first cover...
             self.arrive_span = step * max(0, len(fresh) - 1)   # ...and settle with the last)
@@ -12501,8 +12591,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return 1.0
         return 0.0
 
-    def _search_moving(self) -> bool:
-        return bool(self.appearing) or bool(self._leaving) \
+    _returning: set = set()       # dropped games fading back into their places (see _end_game_drag)
+
+    def _search_moving(self, returns: bool = True) -> bool:
+        """returns=False: a dropped game fading back into its place doesn't count - the strips leave it out and draw
+        it live, so picking a game up meanwhile still edge-scrolls smoothly (it drew ~20 frames the slow way)."""
+        appearing = self.appearing if returns else [i for i in self.appearing if i not in self._returning]
+        return bool(appearing) or bool(self._leaving) \
             or self.no_results != self._no_results_target()
 
     def _tick(self) -> None:
@@ -12590,6 +12685,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self._hold_blocked_arrivals(now)
             if self.appearing and now - self._appear_t0 >= max(self.appearing.values()) + APPEAR_S:
                 self.appearing = {}
+                self._returning = set()
             target = self._no_results_target()
             if self.no_results != target:
                 # (at most two frames' worth: a slow first frame - the window just opened - mustn't jump the fade)
@@ -12624,6 +12720,12 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     # a hover moving while the lights breathe: the still picture + the lights, and only the
                     # moving part drawn the usual way (see LibraryGrid.paintEvent)
                     self.grid.light_frame = {"region": region, "lights": lights, "live": live}
+                elif self._ghost is not None and not self.slides and not self._search_moving(returns=False) and not self.rumble \
+                        and self.bookmark_alpha == mark:
+                    # dragging a game: only the lights, the picked-up cover and settling hovers are redrawn - all left
+                    # out of the strips - so they stay. Dropped on every frame, the edge scroll's first frame built them
+                    # all at once (~8 ms: the stutter as it set off; owner, 2026-10-24)
+                    self.grid._keep_layer = True
                 self.grid.viewport().update(region)
         self.grid.painted_all = False
         if breathing:
@@ -13012,17 +13114,21 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return
         msg = i18n.line(r.message) if r.message else ""
         bar = self.statusBar()                      # (fades in together with the bottom bar's new look)
+
+        def say(text: str) -> None:
+            if not self._bars_later("message", lambda: bar.show_with_bar(text, 15000)):
+                bar.show_with_bar(text, 15000)
         if r.seconds < INSTANT_CLOSE_S:
             # closed again straight away (something missing, a crash...): say so, rather than report a 3-second
             # "session" as if all was well (owner, 2026-10-17)
-            bar.show_with_bar(tr("status.closed_at_once"), 15000)
+            say(tr("status.closed_at_once"))
         else:
             # (strip: with no sync message - My Device - the line began with the gap meant to follow it)
-            bar.show_with_bar(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)).strip(), 15000)
+            say(tr("status.played_for", msg=msg, time=i18n.playtime(r.seconds)).strip())
         if game and r.seconds > 0:
             self._count_up = (game.game_id, max(0.0, game.total_playtime - r.seconds), time.monotonic())
         if r.new_title:
-            bar.show_with_bar(i18n.line("status.title_updated", title=r.new_title), 15000)
+            say(i18n.line("status.title_updated", title=r.new_title))
         self._update_details()                      # the bar at once (Stop -> Read); the new playtime etc. follow
         self._update_sync_label()                   # when the library has been re-read:
         self._lights_changed()

@@ -1211,10 +1211,46 @@ before changing it.
   across). AUTO_SCROLL_DEAD 12 -> 6 (owner: slow starts felt dead). Folder bar margins 14/10/16/12: the folder name
   17 px from the top bar and 17 px from where the covers are cut off (was 10 bottom 0: covers cut right under it).
 
+## Session 2026-10-24 (late): drag-scroll stutter, going home cleanly (uncommitted, after 2.0.0)
+- Edge-scroll stutter at set-off: while a game is held, MainWindow._tick redraws the lights / picked-up cover / settling
+  hovers each frame with a plain update; _paint_normal dropped the strips every frame, so reaching the edge built them
+  all in one frame (4 x ~2 ms -> late frame). The tick now sets grid._keep_layer during a drag (those parts are left
+  out of the strips anyway); _begin_drag starts _prebuild LIFT_S + 20 ms after pick-up. dragbench: strips built
+  mid-scroll 6 -> 0; remaining late frames 0-2 per 3 s (like the wheel).
+- DragGhost._step redrew at most every 7 ms: at 143 Hz (6.99 ms) every other frame -> lift / landing at ~70 fps.
+  Now 0.5 x frame_period(). Landing repaints 16 -> 26-29 per 0.22 s.
+- Let go where it can't land (or Esc): it glided home - over the bars, or toward a place scrolled out of view (it
+  swelled and faded where it was let go). Owner's choice: the floating copy now fades out where it is (land() to its
+  own rect, opacity 0) and the cover fades back in at its place with the usual arrival fade (appearing, started at
+  appear_fade 0.75 = how dimmed it was; _dim_gid cleared at once). Folders / trash / moves still glide.
+- Fast full-force up-and-down drags (owner: "max force, up and down, fast") - scratch yoyo.py: 11-13 late frames + 40
+  normal-way paints in 6 s, all at the turns: (1) at the end, still pushed past the edge, the glide ended; (2) the
+  swing to the other edge crosses the middle (target 0) and ended it there. Now: past the edge at the end it stays a
+  glide, held; stopped elsewhere it stays one for DRAG_REST_S (0.15 s) before handing back to aiming / normal drawing.
+  Result: normal-way 40 -> 4 (pick-up only), late 1 per 6 s once the app has settled. A cluster ~3.4 s into a run
+  started 1.5 s after opening = start-up work; gone when the run starts 10 s after opening.
+- Drag right after a game closed (owner: "stuttery 3 fps mess"): found with a recorder run in the owner's real app
+  (scratch recorder.py: every drag step + who moved the scroll bar). One of Qt's own item-view timers (QEvent.Timer
+  in LibraryGrid.event) moved the library ~30 px under the edge scroll right after _play_finished, which ended the glide
+  (_scrolled_elsewhere) -> a jump + a fresh start. setAutoScroll(False) did NOT stop it. Fix: _scrolled_elsewhere puts
+  the value back while a game's edge scroll runs (_drag_scroll_pos). Left: ~0.3 s after a close nearly the whole
+  window repaints each frame (bar cross-fade, status fade, Synced fade, Read button): steps 3.2 -> 5.6 ms med, 9.7 max.
+  Owner's choice: while a game's edge scroll runs, the bars' changes wait (_bars_wait / _bars_later / _bars_flush in
+  _update_details, _update_sync_label and _play_finished's messages; flushed when the scroll stops or the game is let
+  go). Replayed close mid-scroll: 0-0.3 s after, steps 5.6 -> 4.1 ms med, max 9.7 -> 6.2.
+- THE REAL CAUSE of the "3 fps" drag after a game closed (owner's description: picking a game up WHILE the session is
+  still ending): drags are refused while self.worker runs, so the held button's moves went to Qt = its own
+  drag-select, whose edge autoscroll (QEvent.Timer) jumps the library a few times a second. The eventFilter now eats
+  held-button moves while a worker runs; the drag starts once it's done. (The recorder only saw the aftermath.)
+- Picking a game up while a dropped one fades back in: the fade counted as a search arrival (_search_moving) and kept
+  the strips off (~30 slow frames). MainWindow._returning marks drop-return fades; _search_moving(returns=False) ignores
+  them for the strips, _sync_skip leaves them out and _paint_layer draws them live (under_pass, light with it).
+- Title bar click didn't focus the window: KeepsTitleBar eats WM_NCLBUTTONDOWN (refocus-hitch fix), and Windows'
+  handling of it was what activated the window. _caption_pressed now activates it itself. Owner: fixed.
+- Seen, not changed: a gen-2 garbage collection took ~10 ms once (outside the drag); gc.freeze() after start-up is an
+  option if late frames show up again.
+
 ## Ideas for later (owner interested, not scheduled)
-- Saved custom themes (owner, 2026-10-20): keep more than one Custom Theme - save the current colours under a name,
-  pick / rename / delete saved ones (e.g. in Custom Theme next to Start From Dark / Light). Details not discussed yet
-  (per device or shared by Ikemen Sync, whether the background picture / fonts belong to a saved theme).
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Background writes (owner, 2026-10-24: idea pile; "is it seriously worth it?" - verdict: worth it eventually, not
   urgent). Window-thread cloud writes that freeze the window while Google Drive stalls: reading status, renames (game /
@@ -1265,25 +1301,13 @@ before changing it.
   wine, save paths inside the Wine prefix + translation between devices), Wine registry for registry saves,
   LE/Luna don't apply, startup/.lnk/window titles/playtime need equivalents, build per OS (Mac signing ~$99/yr).
   Can't be tested from the owner's Windows machines.
-- Cover size changer (Ctrl+wheel and/or slider in Settings → Display). Owner, 2026-10-18: a slider, today's size =
-  the MAX, smaller = more covers per row ("add to idea pile"). Assessed: the core is small - _fit_grid already
-  picks the columns at the smallest cover width (COVER_W) and stretches covers to fill the row (GRID["cover_w"],
-  drawing is already width-aware); the slider lowers that minimum (~60 % floor). Work: check hover title /
-  stats, bookmarks, lights, folder mosaics at small sizes; Settings slider with live preview; END field (Ikemen
-  Sync shared or not - ask); guide EN + JA; tests. Estimate 1-1.5 h.
-- Theme editor (low priority): Settings → "Customise Theme..." window listing every colour in COLORS/LIGHTS
-  under friendly grouped names, swatch + hex box each, Qt colour picker (styled), live preview through
-  apply_theme, start from Dark/Light, per-colour + full reset, optional "Simple" mode (3-4 base colours →
-  derived shades), low-contrast warning. Tick/chevron SVGs regenerated from colours; hover text over art
-  stays light. Decide: per-device or synced via the cloud folder.
-  Logo + star CAN follow the theme: both images are two-tone (~51% #F0F0F0 fill, ~48% #303030 outline,
-  soft edges between) → recolour per pixel by lightness between 0x30 and 0xF0, lerp outline→fill, keep alpha
-  (prototype verified 2026-10-13, edges stay smooth, can also invert). Adds "Logo Fill" / "Logo Outline"
-  pickers; applies to top-bar logo, button stars, welcome logo, window/taskbar icon (set at runtime). The .exe
-  file icon (Explorer/shortcuts) is fixed at build time. Optional: let a theme use custom logo/star images.
-- From the stress test: undo for "Remove From Library"; cache fingerprints for big save folders; friendlier message when a game
-  closes instantly; offer to close Luna automatically.
-
+- (2026-10-24 clean-up: saved themes + theme editor are built (2.0.0); undo for removal, the closed-at-once
+  message and Close Luna exist; the stress test's fingerprint cache exists in memory (sync_engine._HASHES) - keeping
+  it on disk only speeds the first check after opening: not worth it. "Cover size changer" merged into the slider.)
+- Folders inside folders: assessed 2026-10-24 - ~1.5-2 days (one level only: ~1 day); needs both devices updated together
+  (an older version would show subfolders at the top level). Owner: not now.
+- Background writes: owner asked 2026-10-24 if worth it - advice: first a write-timing log (~30 min), build only if
+  writes ever take 100s of ms.
 
 ## Fixes 2026-10-20 (evening; released as 1.1.7)
 - Cloud folder not answering (Google Drive stall: library vanished ~30 s): _apply_library keeps the games already shown

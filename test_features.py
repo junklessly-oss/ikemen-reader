@@ -5520,6 +5520,73 @@ class GlideStrips(unittest.TestCase):
                 w.close()
                 app.wait_for_tasks(5)
 
+    def test_drag_scroll_2_0_1(self):
+        """2026-10-24 (2.0.1): held at the end past the edge and swung across the middle it stays a glide (the turns
+        of a fast up-and-down drag stuttered); nothing else moves the library meanwhile (a Qt timer jumped it ~30 px
+        as a game closed); the bars' changes wait until it stops; a game let go where it can't land fades back in
+        at its place without keeping the strips off; a held cover while a session ends doesn't hand the mouse to Qt."""
+        from unittest import mock
+        from PySide6.QtCore import QPoint, QPointF, QEvent, Qt
+        from PySide6.QtGui import QCursor, QMouseEvent
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            app, w = self._window(tmp)
+            try:
+                g, sb, vp = w.grid, w.grid.verticalScrollBar(), w.grid.viewport()
+                sb.setValue(0)
+                gid = g.item(1).data(app.GAME_ID_ROLE)
+                w._start_game_drag(gid)
+                w._drag_watch.stop(); w._drag_scroll.stop()
+                at = {"p": vp.mapToGlobal(QPoint(vp.width() // 4, vp.height() + 150)), "t": 100.0}
+
+                class Cursor(QCursor):
+                    pos = staticmethod(lambda: at["p"])
+
+                def run(n):
+                    for _ in range(n):
+                        at["t"] += 1 / 60
+                        w._drag_autoscroll()
+                with mock.patch.object(app, "QCursor", Cursor), mock.patch.object(app, "frame_time", lambda: at["t"]):
+                    w._drag_scroll_t = at["t"]
+                    run(10)
+                    held = w._drag_scroll_pos
+                    sb.setValue(sb.value() + 30)               # someone else moves it mid-scroll: put back at once
+                    self.assertEqual(sb.value(), round(held))
+                    self.assertIsNotNone(g._glide_to)
+                    calls = []
+                    with mock.patch.object(app.BarFader, "fade", lambda *a, **k: calls.append(a)):
+                        w._update_details()                    # the bars wait
+                    self.assertIn("details", w._bars_pending)
+                    run(400)                                   # at the end, still pushed past it: still a glide
+                    self.assertEqual(sb.value(), sb.maximum())
+                    self.assertIsNotNone(g._glide_to)
+                    at["p"] = vp.mapToGlobal(QPoint(vp.width() // 4, vp.height() // 2))
+                    run(3)                                     # crossing the middle: a moment's grace...
+                    self.assertIsNotNone(g._glide_to)
+                    run(int(app.DRAG_REST_S * 60) + 5)         # ...then normal drawing, and the bars catch up
+                    self.assertIsNone(g._glide_to)
+                    self.assertEqual(w._bars_pending, {})
+                    w._end_game_drag(vp.mapToGlobal(QPoint(vp.width() // 2, -60)), drop=True)   # over the top bar
+                self.assertIn(gid, w.appearing)                # fades back in where it was...
+                self.assertIn(gid, w._returning)
+                self.assertAlmostEqual(w.appear_fade(gid), 0.75, delta=0.08)   # ...from how dimmed it was
+                self.assertFalse(w._search_moving(returns=False))   # (the strips may still draw)
+                self.assertTrue(w._search_moving())
+                # a cover held while a session ends: no drag yet, and the move isn't Qt's (its drag-select scrolled)
+                w._ghost = None
+                w._press = (QPoint(10, 10), gid)
+                w.worker = object()
+                try:
+                    ev = QMouseEvent(QEvent.MouseMove, QPointF(40, vp.height() - 2), QPointF(vp.mapToGlobal(QPoint(40, vp.height() - 2))),
+                                     Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+                    self.assertTrue(w.eventFilter(vp, ev))
+                    self.assertIsNone(w._ghost)
+                finally:
+                    w.worker = None
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
     def test_reversal_and_hover(self):
         from unittest import mock
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -5925,3 +5992,29 @@ class WheelPressEverywhere(unittest.TestCase):
             self.assertIsNone(QApplication.overrideCursor())
         finally:
             d.close()
+
+
+class TitleBarPress(unittest.TestCase):
+    def test_press_focuses_an_unfocused_window(self):
+        """2026-10-24 (2.0.1): the title bar's press is kept from Windows (the refocus hitch), and Windows' handling of it
+        was what focused the window - a click on the title bar of the unfocused window left it unfocused."""
+        if sys.platform != "win32":
+            self.skipTest("Windows only")
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        import app
+        from PySide6.QtWidgets import QApplication, QWidget
+        QApplication.instance() or QApplication([])
+
+        class Win(app.KeepsTitleBar, QWidget):
+            pass
+        w = Win()
+        try:
+            for active, focused in ((False, 1), (True, 0)):
+                with mock.patch.object(w, "isActiveWindow", lambda a=active: a), \
+                        mock.patch.object(w, "activateWindow") as act, mock.patch.object(w, "raise_"):
+                    self.assertTrue(w._caption_pressed())
+                    self.assertEqual(act.call_count, focused)
+                w._press_watch.stop()
+        finally:
+            w.close()
