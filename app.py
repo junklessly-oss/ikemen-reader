@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (QAbstractNativeEventFilter, QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
-                            QTimer, QUrl, Signal)
+                            QTimer, QUrl, QVariantAnimation, Signal)
 from PySide6.QtGui import (QCursor, QTextCursor, QPalette, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap, QRegion,
                            QRadialGradient, QTransform)
@@ -92,7 +92,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -1634,6 +1634,7 @@ COUNT_UP_WAIT_S = 15                # after a session: how long the count-up wai
 SYNC_SHOW_AFTER_S = 0.3              # a sync around a session shows "Syncing" only if it takes longer than this
 PREFETCH_QUIET_MS = 500              # covers are prepared in the background once nothing has changed this long
 SCROLLBAR_FADE_MS = 200              # scroll bar fade in/out
+VNDB_COVERS_FADE_MS = 250            # Edit: "Choose VNDB Cover" fades in once VNDB says there are 2+ covers
 RECHECK_POLLS = 15                   # re-check every game's saves every 15 live polls (~1 min)
 MENU_LINE_INSET = 8                  # right-click menu dividers stop this far from the menu's sides (MenuLines)
 BUTTON_GAP = 8                       # between the buttons at the bottom of every window
@@ -8651,6 +8652,7 @@ class VndbDialog(TaskOwner, QDialog):
         self.choice: Optional[vndb.Match] = None
         self.cover_file: Optional[str] = None
         self.use_title = False
+        self.multi = False                            # the chosen VN has 2+ covers (the cover picker came up)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 18, 22, 18)        # (as every other window)
         row = QHBoxLayout()
@@ -8766,6 +8768,7 @@ class VndbDialog(TaskOwner, QDialog):
                 self.info.setText(tr("vndb.no_safe_cover"))
             return
         url = options[0].url
+        self.multi = len(options) > 1               # (Edit offers Choose VNDB Cover from now on)
         if len(options) > 1:
             picker = CoverPickerDialog(m.display_title, options, self)
             if not picker.exec() or not picker.choice:
@@ -8789,16 +8792,18 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         return self.parentWidget().window() if self.parentWidget() else None
 
     def __init__(self, library: Library, settings: LocalSettings, game: Optional[Game] = None,
-                 exe: str = "", parent=None):
+                 exe: str = "", parent=None, args: str = ""):
         super().__init__(parent)
         self.library, self.settings, self.game = library, settings, game
         self.machine = settings.machine_name
+        self.picked: dict[str, tuple[str, str]] = {self.machine: (exe, args)} if exe else {}   # slot: (exe, its args)
         self.setWindowTitle(tr("game.title_edit") if game else tr("game.title_add"))
         self.setMinimumWidth(720)
         self.art_src: Optional[str] = None
         self.art_from = "user"
         self.remove_art = False
         self.vndb_id = game.vndb_id if game else ""
+        self.vndb_multi = game.vndb_multi if game else False   # its VNDB entry has 2+ covers (Choose VNDB Cover)
         self.removed = False                    # (removed: what Undo needs)
         self.removed_how = "both"               # "here" / "both"
         self.saved_id: Optional[str] = None
@@ -8843,6 +8848,13 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         b = QPushButton(tr("game.vndb"))
         b.clicked.connect(self._open_vndb)
         left.addWidget(b)
+        # its other covers on VNDB, without searching again: appears once VNDB says there's more than one (owner, 2026-10-25)
+        self.vndb_covers_btn = QPushButton(tr("game.vndb_covers"))
+        self.vndb_covers_btn.clicked.connect(self._choose_vndb_cover)
+        self.vndb_covers_btn.hide()
+        left.addWidget(self.vndb_covers_btn)
+        self._vndb_covers: tuple[str, list] = ("", [])          # (vndb id, its covers)
+        self._vndb_btn_for = ""                                  # the VN the button is shown for ("" = hidden)
         left.addStretch()
         outer.addLayout(left)
         self._show_cover(library.artwork_path(game) if game else None,
@@ -8970,6 +8982,14 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         if not game and settings.vndb and self.title.text().strip():
             self._auto_vndb(self.title.text().strip())
         self._suggest_save()
+        # its cover is from VNDB: known to have 2+ covers = simply there with the other buttons (no fade); not known yet
+        # (linked before this button existed) = checked once, then it fades in and the game remembers it
+        if game and game.vndb_id and game.artwork_from == "vndb":
+            if game.vndb_multi:
+                self.vndb_covers_btn.show()
+                self._vndb_btn_for = game.vndb_id
+            else:
+                self._check_vndb_covers()
 
     # -- save folder
     def _suggest_save(self):
@@ -9060,9 +9080,11 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
     def _open_vndb(self):
         d = VndbDialog(self.title.text().strip(), self, safe_only=self.settings.vndb_safe_only)
         if d.exec() and d.choice:
-            self._apply_vndb(d.choice, d.cover_file, d.use_title)
+            self._apply_vndb(d.choice, d.cover_file, d.use_title, multi=d.multi if d.cover_file else None)
 
-    def _apply_vndb(self, m: vndb.Match, cover_file: Optional[str], use_title: bool):
+    def _apply_vndb(self, m: vndb.Match, cover_file: Optional[str], use_title: bool, multi: Optional[bool] = None):
+        """multi: the cover picker came up (True) / didn't (False) for this VN; None = not known (the suggestion banner:
+        checked once in the background)."""
         if cover_file:
             self.art_src, self.art_from, self.remove_art = cover_file, "vndb", False
             self._show_cover(cover_file)
@@ -9070,8 +9092,92 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
             self.title.setText(m.display_title)
             self.title_locked = True
             self._update_auto_btn()
+        if m.vndb_id != self.vndb_id:                    # (another VN: its own covers decide)
+            self.vndb_multi = False
+            self.vndb_covers_btn.hide()
+            self._vndb_btn_for = ""
         self.vndb_id = m.vndb_id
         self.banner_box.hide()
+        if multi:
+            self.vndb_multi = True
+            self._fade_in_vndb_btn()
+        elif multi is None and cover_file:
+            self._check_vndb_covers()
+
+    def _check_vndb_covers(self) -> None:
+        """Once, for a VNDB cover whose cover count isn't known yet (an older game, or the suggestion banner): ask VNDB
+        in the background; 2 or more: Choose VNDB Cover fades in, and the game remembers it (Game.vndb_multi)."""
+        vid = self.vndb_id
+        if not vid:
+            return
+        safe = self.settings.vndb_safe_only
+        self._run(lambda: vndb.covers(vid, safe_only=safe), lambda options: self._got_vndb_covers(vid, options),
+                  lambda e: None)                       # (VNDB unreachable: no button, nothing to say)
+
+    def _got_vndb_covers(self, vid: str, options: list) -> None:
+        if vid != self.vndb_id:
+            return                                       # (linked to another VN meanwhile)
+        self._vndb_covers = (vid, options)
+        if len(options) < 2 or self.vndb_multi:
+            return
+        self.vndb_multi = True
+        if self.game and self.game.vndb_id == vid:       # (kept even if Edit is cancelled: it's simply true)
+            try:
+                self.library.update(self.game.game_id, vndb_multi=True)
+            except (OSError, KeyError, ValueError):
+                pass                                     # (checked again next time)
+        self._fade_in_vndb_btn()
+
+    def _fade_in_vndb_btn(self) -> None:
+        if self._vndb_btn_for == self.vndb_id:
+            return                                       # (already there)
+        self._vndb_btn_for = self.vndb_id
+        fx = QGraphicsOpacityEffect(self.vndb_covers_btn)
+        fx.setOpacity(0.0)
+        self.vndb_covers_btn.setGraphicsEffect(fx)
+        self.vndb_covers_btn.show()
+        fade = QVariantAnimation(self, startValue=0.0, endValue=1.0, duration=VNDB_COVERS_FADE_MS)
+        fade.valueChanged.connect(lambda v: fx.setOpacity(float(v)))
+        fade.finished.connect(lambda: self.vndb_covers_btn.setGraphicsEffect(None))   # (crisp text once shown)
+        fade.start(QVariantAnimation.DeleteWhenStopped)
+
+    def _choose_vndb_cover(self) -> None:
+        vid, options = self._vndb_covers
+        if vid != self.vndb_id:                          # (there since Edit opened: its covers are fetched now)
+            want, safe = self.vndb_id, self.settings.vndb_safe_only
+            self.vndb_covers_btn.setEnabled(False)
+
+            def arrived(found: list) -> None:
+                self.vndb_covers_btn.setEnabled(True)
+                if want != self.vndb_id:
+                    return
+                self._vndb_covers = (want, found)
+                if len(found) >= 2:
+                    self._choose_vndb_cover()
+
+            def failed(e) -> None:
+                self.vndb_covers_btn.setEnabled(True)
+                message(self, tr("vndb.error"))
+            self._run(lambda: vndb.covers(want, safe_only=safe), arrived, failed)
+            return
+        if len(options) < 2:
+            return
+        picker = CoverPickerDialog(self.title.text().strip(), options, self)
+        if not picker.exec() or not picker.choice:
+            return
+        url = picker.choice.url
+        self.vndb_covers_btn.setEnabled(False)            # (one download at a time)
+
+        def done(path: str) -> None:
+            self.vndb_covers_btn.setEnabled(True)
+            self.art_src, self.art_from, self.remove_art = path, "vndb", False
+            self._show_cover(path)
+            self.banner_box.hide()
+
+        def failed(e) -> None:
+            self.vndb_covers_btn.setEnabled(True)
+            message(self, tr("vndb.error"))
+        self._run(lambda: _download_cover(url), done, failed)
 
     def _auto_vndb(self, query: str):
         def work():
@@ -9103,8 +9209,11 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
     def _pick_exe(self, edit: QLineEdit):
         f = pick_file(self, tr("file.pick_exe"), edit.text(), tr("file.programs"))
         if f:
-            exe = lnk.resolve_game_exe(f) or f
+            exe, args = lnk.resolve_launch(f)
+            exe = exe or f
             edit.setText(str(Path(exe)))
+            if edit is self.fields[self.machine][0]:
+                self.picked[self.machine] = (str(Path(exe)), args)
             if not self.title.text().strip() or not self.title_locked:
                 self.title.setText(guess_title(exe))
             if edit is self.fields[self.machine][0]:
@@ -9139,6 +9248,10 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
 
     def _save(self):
         paths = {slot: MachinePaths(e.text().strip(), s.text().strip()) for slot, (e, s) in self.fields.items()}
+        for slot, (exe, args) in self.picked.items():        # the arguments of the shortcut it came from
+            if args and slot in paths and paths[slot].exe and \
+                    os.path.normcase(os.path.abspath(paths[slot].exe)) == os.path.normcase(os.path.abspath(exe)):
+                paths[slot].args = args
         mine = paths[self.machine]
         if mine.exe and not Path(mine.exe).is_file():
             message(self, tr("game.exe_missing", path=mine.exe))
@@ -9166,7 +9279,7 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         extra = dict(use_luna=self.use_luna.isChecked(), use_le=self.use_le.isChecked(),
                      status=self.status.currentData(), title_locked=self.title_locked,
                      manual_title=self.manual_title,
-                     registry_key=reg, vndb_id=self.vndb_id,
+                     registry_key=reg, vndb_id=self.vndb_id, vndb_multi=self.vndb_multi,
                      crop_zoom=round(zoom, 4), crop_x=round(cx, 4), crop_y=round(cy, 4))
         try:
             if self.game:
@@ -12806,7 +12919,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 except (OSError, KeyError) as e:
                     report_failure(self, e)
         for f in files:
-            exe = lnk.resolve_game_exe(f)
+            exe, args = lnk.resolve_launch(f)
             if not exe or not Path(exe).is_file():
                 message(self, tr("game.not_exe") + f"\n{f}")
                 continue
@@ -12826,7 +12939,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     continue
                 if choice == "setup":
                     try:
-                        game = self.library.set_paths(match.game_id, machine, exe=exe)
+                        game = self.library.set_paths(match.game_id, machine, exe=exe, args=args)
                     except (OSError, KeyError) as e:
                         report_failure(self, e)
                         continue
@@ -12836,7 +12949,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                         file_in_folder(match.game_id)
                     last = match.game_id
                     continue
-            d = GameDialog(self.library, self.settings, exe=exe, parent=self)
+            d = GameDialog(self.library, self.settings, exe=exe, parent=self, args=args)
             if d.exec() and d.saved_id:
                 last = d.saved_id
                 self._ask_now.add(d.saved_id)
@@ -13286,19 +13399,25 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
 
     def _auto_cover(self, gid: str, title: str) -> None:
         """After a first play: if VNDB has an exact title match with a safe cover, use it."""
+        safe = self.settings.vndb_safe_only
+
         def work():
-            for m in vndb.search(title, limit=5, safe_only=self.settings.vndb_safe_only):
+            for m in vndb.search(title, limit=5, safe_only=safe):
                 if m.image_url and vndb.exact(m, title):
-                    return m, _download_cover(m.image_url)
+                    try:                       # (2+ covers: Edit offers Choose VNDB Cover from now on)
+                        multi = len(vndb.covers(m.vndb_id, safe_only=safe)) >= 2
+                    except Exception:
+                        multi = False          # (Edit checks once itself then)
+                    return m, _download_cover(m.image_url), multi
             return None
 
         def done(found):
             g = self.library.get(gid)
             if found and g and not g.artwork and g.artwork_from != "removed":
-                m, path = found
+                m, path, multi = found
                 try:
                     self.library.set_artwork(gid, path, source="vndb")
-                    self.library.update(gid, vndb_id=m.vndb_id)
+                    self.library.update(gid, vndb_id=m.vndb_id, vndb_multi=multi)
                 except (OSError, KeyError, ValueError):
                     return             # a bonus, not something to bother the owner about; tried again next time
                 self.statusBar().showMessage(tr("status.cover_found"), 8000)

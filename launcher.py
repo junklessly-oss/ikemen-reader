@@ -29,6 +29,7 @@ from typing import Callable, Optional
 import psutil
 
 import detect
+import lnk
 import luna
 import outside
 from library import Game, Library, LocalSettings
@@ -426,6 +427,29 @@ def _start_elevated(cmd: list[str], cwd: str) -> int:
             kernel32.CloseHandle(info.hProcess)
 
 
+def split_args(args: str) -> list[str]:
+    """A shortcut's argument text as separate arguments, split the way Windows itself does (quotes keep
+    spaces together), so the program receives exactly what its shortcut would give it."""
+    if not args.strip():
+        return []
+    if sys.platform != "win32":
+        return args.split()
+    import ctypes
+    from ctypes import wintypes
+    shell32, kernel32 = ctypes.windll.shell32, ctypes.windll.kernel32
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    n = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW("x " + args, ctypes.byref(n))     # ("x": the program's place, dropped)
+    if not argv:
+        return args.split()
+    try:
+        return [argv[i] for i in range(1, n.value)]
+    finally:
+        kernel32.LocalFree(ctypes.cast(argv, wintypes.HLOCAL))
+
+
 def _start(cmd: list[str], cwd: str):
     """(Popen, pid): start normally; if Windows says the program needs administrator rights, start it
     through the permission prompt instead (then there's no Popen, only the process id)."""
@@ -763,6 +787,9 @@ def play(game: Game, settings: LocalSettings, library: Library, engine: Optional
             if plan["luna"]:
                 luna.open_alongside(plan["luna"][1])
             cmd = [plan["le"], str(exe_path)] if plan["le"] else [str(exe_path)]
+            # its shortcut's arguments (a loader opens only its own window without them); none stored = a game
+            # added before they were kept: a shortcut to it in its folder tells
+            cmd += split_args(mine.args or lnk.args_beside(str(exe_path)))
             info = run(cmd, game_dir, poll=poll, grace=grace, **waiting)
     except ElevationDeclined:
         on_phase("done")

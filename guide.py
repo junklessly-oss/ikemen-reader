@@ -33,7 +33,8 @@ GUIDE = {
             "both devices then share one set of saves.",
             "- The title is filled in from the game's folder or file name (engine names like KIRIKIRI are skipped). "
             "In the game's settings, you can change it (Automatic uses the title of the game's own window), choose "
-            "a cover (Choose Cover or Find on VNDB), and crop it by dragging and scrolling.",
+            "a cover (Choose Cover or Find on VNDB), and crop it by dragging and scrolling. If the game's cover is from VNDB "
+            "and VNDB has more than one cover for it, Choose VNDB Cover appears below to pick another one.",
             "- With automatic covers and titles from VNDB turned on in Settings, a matching VNDB entry is suggested as you add "
             "a game (Use This takes its cover). A game still without a cover after its first session gets one by "
             "itself when VNDB has an exact title match.",
@@ -234,7 +235,7 @@ GUIDE = {
             "- ゲームの .exe（またはそのショートカット）をウィンドウにドラッグするか、「ゲームを追加」をクリックします。",
             "§- もう一方の端末ですでに追加したゲームは、同じ方法で追加して「この端末で設定する」を選びます。両方の端末で同じセーブを共有できます。",
             "- タイトルは、ゲームのフォルダー名やファイル名から自動で入力されます（KIRIKIRIなどのエンジン名は使われません）。"
-            "ゲームの設定画面では、タイトルの変更（「自動」にするとゲーム画面のタイトルを使います）やカバー画像の設定（「カバー画像を選択」または「VNDBで探す」）ができます。"
+            "ゲームの設定画面では、タイトルの変更（「自動」にするとゲーム画面のタイトルを使います）やカバー画像の設定（「カバー画像を選択」または「VNDBで探す」）ができます。カバーがVNDBのもので、VNDBにカバーが複数ある場合は、その下に「VNDBのカバーを選ぶ」が表示され、別のカバーを選べます。"
             "カバーはドラッグとスクロールで切り抜けます。",
             "- 設定でVNDBからのカバー画像とタイトルの自動取得をオンにしていると、ゲームの追加時にVNDBで見つかった候補が表示されます（「これを使う」でそのカバーを使います）。"
             "初回プレイのあともカバーがないゲームは、VNDBにタイトルが完全に一致する作品があれば、自動でカバーが設定されます。",

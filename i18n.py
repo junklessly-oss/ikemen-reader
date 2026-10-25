@@ -83,8 +83,8 @@ S: dict[str, tuple[str, str]] = {
 
     # sync lights / status lines (bottom bar)
     "sync.state.synced":        ("Saves Are in Sync", "セーブは同期済みです"),
-    "sync.state.solo":          ("Saves Are in Sync (Not Set Up on the Other Device Yet)",
-                                 "セーブは同期済みです（もう一方の端末では未設定）"),
+    "sync.state.solo":          ("Saves Are in Sync (Only on This Device)",
+                                 "セーブは同期済みです（この端末のみ）"),
     "sync.tip.solo":            ("The saves are safe in the cloud. Set this game up on the other device to read it there too.",
                                  "セーブはクラウドに保存されています。もう一方の端末でもこのゲームを設定すると、そちらでも読めます。"),
     "sync.state.push":          ("Newer Saves on This Device", "この端末のセーブの方が新しいです"),
@@ -144,8 +144,8 @@ S: dict[str, tuple[str, str]] = {
                                  "この端末のファイルがクラウドのセーブと一致しないため、何も変更しませんでした。"),
     "sync.conflict_unresolved_solo": ("This device's saves don't match the copy in the cloud, so nothing was changed.",
                                  "この端末のセーブがクラウドのコピーと一致しないため、何も変更しませんでした。"),
-    "status.checking":          ("Checking saves...", "セーブを確認中…"),
-    "status.launching":         ("Starting the game...", "ゲームを起動中…"),
+    "status.checking":          ("Checking Saves...", "セーブを確認中…"),
+    "status.launching":         ("Starting the Game...", "ゲームを起動中…"),
     "status.closed_syncing":    ("Game closed. Syncing saves...", "ゲームを終了しました。セーブを同期中…"),
     "status.detecting":         ("Game closed. Looking for its save files...", "ゲームを終了しました。セーブファイルを探しています…"),
     "status.played_for":        ("{msg}  Read for {time}.", "{msg}　読書時間：{time}"),
@@ -165,15 +165,15 @@ S: dict[str, tuple[str, str]] = {
     "status.cover_found":       ("Found a cover on VNDB.", "VNDBでカバー画像が見つかりました。"),
 
     # launch problems
-    "play.no_exe":              ("This game's .exe wasn't found on This Device. Check it in Edit.",
+    "play.no_exe":              ("This game's .exe wasn't found on this device. Check it in Edit.",
                                  'この端末に設定された .exe が見つかりません。「編集」で確認してください。'),
-    "play.luna_missing":        ('"Launch With Luna" is on, but Luna isn\'t set up on This Device. Set its location in Settings.',
+    "play.luna_missing":        ('"Launch With Luna" is on, but Luna isn\'t set up on this device. Set its location in Settings.',
                                  "「Lunaで起動」がオンですが、この端末ではLunaが設定されていません。設定で場所を指定してください。"),
     "play.luna_unknown_game":   ("Luna doesn't know this game yet. Drag the game's .exe into Luna once, then try again.",
                                  "Lunaにこのゲームがまだ登録されていません。一度ゲームの .exe をLunaにドラッグしてから、もう一度お試しください。"),
     "play.luna_running":         ("Luna is already open. Close it first, so the game can start through it.",
                                  "Lunaがすでに起動しています。ゲームをLuna経由で起動できるよう、先にLunaを閉じてください。"),
-    "play.le_missing":          ('"Launch With Locale Emulator" is on, but Locale Emulator isn\'t set up on This Device. Set LEProc.exe in Settings.',
+    "play.le_missing":          ('"Launch With Locale Emulator" is on, but Locale Emulator isn\'t set up on this device. Set LEProc.exe in Settings.',
                                  "「Locale Emulatorで起動」がオンですが、この端末ではLocale Emulatorが設定されていません。設定で LEProc.exe を指定してください。"),
     "play.needs_admin":         ('This game needs administrator rights. Close Ikemen Reader, right-click its icon, choose "Run as administrator", then try again.',
                                  'このゲームには管理者権限が必要です。イケメンリーダーを閉じてからアイコンを右クリックし、「管理者として実行」を選んで、もう一度お試しください。'),
@@ -190,7 +190,7 @@ S: dict[str, tuple[str, str]] = {
     "conflict.waiting_title":   ("Saves Changed on Both Devices", "両方の端末でセーブが変更されました"),
     # (_mixed: at least one of the games isn't set up on the other device - true for every game in the list)
     "conflict.waiting_title_mixed": ("Saves Don't Match the Cloud Copy", "セーブがクラウドのコピーと一致しません"),
-    "conflict.waiting_body_mixed": ("These games' saves on This Device don't match the copy in the cloud:\n\n{games}\n\n"
+    "conflict.waiting_body_mixed": ("These games' saves on this device don't match the copy in the cloud:\n\n{games}\n\n"
                                  "Choose which saves to keep now? Nothing changes until you choose.",
                                  "次のゲームは、この端末のセーブがクラウドのコピーと一致しません：\n\n{games}\n\n"
                                  "今すぐ、どちらのセーブを残すか選びますか？選ぶまで何も変更されません。"),
@@ -202,7 +202,7 @@ S: dict[str, tuple[str, str]] = {
     "conflict.ask_later":       ("Later", "後で"),
     "menu.sync_now":            ("Sync Now", "今すぐ同期"),
     "play.suggest_title":       ("Save Folder", "セーブフォルダー"),
-    "play.suggest_body":         ("{title} has no save folder on This Device yet. It probably saves here:\n\n{path}\n\n{why}\n\nUse this "
+    "play.suggest_body":         ("{title} has no save folder on this device yet. It probably saves here:\n\n{path}\n\n{why}\n\nUse this "
                                  "folder? Its saves sync from this session on.",
                                  "{title} には、この端末のセーブフォルダーがまだ設定されていません。おそらく次の場所に保存されます：\n\n{"
                                  "path}\n\n{why}\n\nこのフォルダーを使いますか？今回から、セーブが同期されます。"),
@@ -290,6 +290,7 @@ S: dict[str, tuple[str, str]] = {
     "game.crop_tip":            ("Drag to move the cover. Scroll or use the slider to zoom. Double-click to reset.",
                                  "ドラッグで位置を調整し、ホイールまたはスライダーで拡大・縮小できます。ダブルクリックで元に戻ります。"),
     "game.vndb":                ("Find on VNDB", "VNDBで探す"),
+    "game.vndb_covers":         ("Choose VNDB Cover", "VNDBのカバーを選ぶ"),
     "game.vndb_suggest":        ("Found on VNDB: {title}", "VNDBで見つかりました：{title}"),
     "game.vndb_use":            ("Use This", "これを使う"),
     "game.launch":              ("Launch", "起動方法"),
@@ -302,7 +303,7 @@ S: dict[str, tuple[str, str]] = {
     "game.other_device":        ("Other Device", "もう一方の端末"),
     "game.exe":                 ("Game .exe", "ゲームの .exe"),
     "game.saves":               ("Save Folder", "セーブフォルダー"),
-    "game.saves_auto":          ('Leave empty to detect it on first play',
+    "game.saves_auto":          ('Leave Empty to Detect It on First Play',
                                  '空欄なら初回プレイ時に自動で検出'),
     "game.saves_from_other":    ("Suggested: the same place as on the other device. Check it, then Save.",
                                  "提案：もう一方の端末と同じ場所です。確認してから保存してください。"),
@@ -354,7 +355,7 @@ S: dict[str, tuple[str, str]] = {
                                  'そのフォルダーはゲームのセーブフォルダーとしては大きすぎます（ドライブ全体、ドキュメント、AppData など）。同期するとフォルダーの中身がもう一方の端末と完全に同じになるため、それ以外のファイルは消えてしまいます。その中にある、ゲーム専用のセーブフォルダーを選んでください。'),
     "error.save_cloud":         ("The save folder can't be the cloud folder or contain it, because the saves would be copied into themselves.",
                                  'セーブフォルダーには、クラウドフォルダー自体やそれを含むフォルダーは選べません（セーブが自分自身の中にコピーされてしまいます）。'),
-    "error.save_shared":        ('"{title}" already uses this save folder on This Device. If two games sync the same folder, they can overwrite each other\'s saves. Use it anyway?',
+    "error.save_shared":        ('"{title}" already uses this save folder on this device. If two games sync the same folder, they can overwrite each other\'s saves. Use it anyway?',
                                  'このセーブフォルダーは、この端末ですでに「{title}」が使っています。2つのゲームで同じフォルダーを同期すると、お互いのセーブを上書きしてしまう恐れがあります。それでも使いますか？'),
     "error.cloud_write":        ("Couldn't finish that because a file is in use or the cloud folder isn't available right now. "
                                  "Nothing was lost. Please check that your cloud service's app is running, then try again.",
@@ -404,8 +405,8 @@ S: dict[str, tuple[str, str]] = {
     "vndb.pick_cover":          ("Choose a Cover", "カバーを選択"),
     "vndb.pick_body":           ("VNDB has {n} covers for <b>{title}</b>. Pick the one you like.",
                                  "VNDBには <b>{title}</b> のカバーが{n}枚あります。好きなものを選んでください。"),
-    "vndb.downloading":         ("Downloading the cover...", "カバー画像をダウンロード中…"),
-    "vndb.loading_covers":      ("Loading covers...", "カバーを読み込み中…"),
+    "vndb.downloading":         ("Downloading the Cover...", "カバー画像をダウンロード中…"),
+    "vndb.loading_covers":      ("Loading Covers...", "カバーを読み込み中…"),
     "vndb.cover_main":          ("Main Cover", "メインカバー"),
     "vndb.cover_pkgfront":      ("Package", "パッケージ"),
     "vndb.cover_dig":           ("Digital", "ダウンロード版"),
@@ -420,8 +421,8 @@ S: dict[str, tuple[str, str]] = {
                                  "games create them when installed or first opened). The cloud has the saves from the other device.",
                                  "この端末では <b>{title}</b> をまだ同期したことがありませんが、すでにセーブファイルがあります（インストール"
                                  "時や初回起動時にファイルを作るゲームもあります）。クラウドには、もう一方の端末のセーブがあります。"),
-    "conflict.body_solo":       ("<b>{title}</b>'s saves on This Device are different from the copy in the cloud. The game isn't "
-                                 "set up on the other device, so that copy was uploaded from This Device earlier.",
+    "conflict.body_solo":       ("<b>{title}</b>'s saves on this device are different from the copy in the cloud. The game isn't "
+                                 "set up on the other device, so that copy was uploaded from this device earlier.",
                                  "この端末にある <b>{title}</b> のセーブが、クラウドにあるコピーと異なります。もう一方の端末では"
                                  "設定されていないため、そのコピーは以前この端末からアップロードされたものです。"),
     "conflict.cloud_solo":      ("Keep the Saves From the Cloud (Uploaded From This Device Earlier)",
@@ -437,7 +438,7 @@ S: dict[str, tuple[str, str]] = {
     "conflict.setup_other":     ("Made When the Game Was First Opened on the Other Device",
                                  "もう一方の端末でゲームを初めて開いたときに作られたセーブ"),
     "conflict.none":            ("No Saves", "セーブなし"),
-    "conflict.backup_note":     ("Whichever saves you don't keep are backed up on This Device first, so nothing is lost.",
+    "conflict.backup_note":     ("Whichever saves you don't keep are backed up on this device first, so nothing is lost.",
                                  '残さなかった方のセーブは、先にこの端末にバックアップされます。何も失われません。'),
     "conflict.later":           ("Decide Later (Don't Change Anything)", "後で決める（何も変更しない）"),
 
@@ -574,11 +575,11 @@ S: dict[str, tuple[str, str]] = {
     "settings.cloud":           ("Cloud Folder", "クラウドフォルダー"),
     "settings.cloud_hint":      ('Any folder that a cloud service of your choice keeps in sync. Choose the same folder on both devices.',
                                  'お好みのクラウドサービスで同期されるフォルダーなら、どれでも使えます。両方の端末で同じフォルダーを選んでください。'),
-    "settings.cloud_placeholder": ("A folder synced by your cloud service", "クラウドサービスで同期されるフォルダー"),
+    "settings.cloud_placeholder": ("A Folder Synced by Your Cloud Service", "クラウドサービスで同期されるフォルダー"),
     "settings.le":              ("Locale Emulator (Optional)", "Locale Emulator（任意）"),
     "settings.le_placeholder":  ("LEProc.exe on This Device", "この端末の LEProc.exe"),
     "settings.luna":            ("Luna (Optional)", "Luna（任意）"),
-    "settings.luna_placeholder": ("LunaTranslator.exe (or a LunaHook program) on This Device",
+    "settings.luna_placeholder": ("LunaTranslator.exe (or a LunaHook Program) on This Device",
                                   "この端末の LunaTranslator.exe（またはLunaHook）"),
     "settings.luna_hint":       ('LunaTranslator is recommended: it includes LunaHook and can start games by itself.',
                                  'LunaTranslatorがおすすめです。LunaHookが含まれていて、ゲームを直接起動できます。'),
@@ -605,7 +606,7 @@ S: dict[str, tuple[str, str]] = {
     "theme.light":              ("Light", "ライト"),
     "theme.dark":               ("Dark", "ダーク"),
     "theme.custom":             ("Custom", "カスタム"),
-    "theme.custom_tip":         ("Choose your own colours", "自分で色を選ぶ"),
+    "theme.custom_tip":         ("Choose your own colours.", "自分で色を選ぶ"),
     "theme.title":              ("Custom Theme", "カスタムテーマ"),
     "theme.start_from":         ("Start From", "元にするテーマ"),
     "theme.start_tip":          ("Replace every colour with this theme's colours as a starting point.",
@@ -616,8 +617,8 @@ S: dict[str, tuple[str, str]] = {
     "theme.tab_colours":        ("Colours", "色"),
     "theme.tab_saved":          ("Saved Themes", "保存したテーマ"),
     "themes.add":               ("Save Current Theme", "現在のテーマを保存"),
-    "themes.add_tip":           ("Save the current colours, background and fonts as a theme",
-                                 "現在の色・背景・フォントをテーマとして保存します"),
+    "themes.add_tip":           ("Save the current colours, background and fonts as a theme.",
+                                 "現在の色・背景・フォントをテーマとして保存します。"),
     "themes.save_title":        ("Save Current Theme", "現在のテーマを保存"),
     "themes.rename_title":      ("Rename Theme", "テーマ名を変更"),
     "themes.name":              ("Theme Name", "テーマ名"),
@@ -626,7 +627,7 @@ S: dict[str, tuple[str, str]] = {
     "themes.delete_body":       ('"{name}" will be removed from your saved themes.',
                                  "「{name}」を保存したテーマから削除します。"),
     "themes.failed":            ("Couldn't change the saved themes:\n{error}", "保存したテーマを変更できませんでした：\n{error}"),
-    "theme.swatch_tip":         ("Click to choose a colour", "クリックして色を選ぶ"),
+    "theme.swatch_tip":         ("Click to choose a colour.", "クリックして色を選ぶ"),
     "theme.hex_tip":            ("Colour code, e.g. #3B3B3B", "カラーコード（例：#3B3B3B）"),
     "theme.g_basics":           ("Basics", "基本"),
     "theme.g_highlights":       ("Highlights", "アクセント"),
@@ -669,7 +670,7 @@ S: dict[str, tuple[str, str]] = {
     "theme.c_light_red":        ("Needs Attention", "確認が必要"),
     "theme.c_light_grey":       ("No Saves Yet / Checking", "セーブなし／確認中"),
     "theme.c_light_yellow":     ("Not Set Up on This Device", "この端末で未設定"),
-    "theme.c_light_lavender":   ("In Sync, Set Up on This Device Only", "同期済み（この端末のみ設定済み）"),
+    "theme.c_light_lavender":   ("In Sync (Only on This Device)", "同期済み（この端末のみ）"),
     "theme.c_mark_finished":    ("Finished", "読了"),
     "theme.c_mark_reading":     ("Reading", "プレイ中"),
     "theme.c_mark_plan":        ("Plan to Read", "積みゲー"),
@@ -756,11 +757,11 @@ S: dict[str, tuple[str, str]] = {
     # ------------------------------------------------------------------ status line (the strip at the very bottom)
     # Short versions ("<key>:line") of messages that also appear there: the full text belongs in pop-ups and tips; the
     # one-line strip only says what happened (owner: the long ones didn't fit the window). See line().
-    "play.no_exe:line":          ("The game's .exe wasn't found on This Device.", "この端末でゲームの .exe が見つかりません。"),
-    "play.luna_missing:line":    ("Luna isn't set up on This Device.", "この端末ではLunaが設定されていません。"),
+    "play.no_exe:line":          ("The game's .exe wasn't found on this device.", "この端末でゲームの .exe が見つかりません。"),
+    "play.luna_missing:line":    ("Luna isn't set up on this device.", "この端末ではLunaが設定されていません。"),
     "play.luna_unknown_game:line": ("Luna doesn't know this game yet.", "Lunaにこのゲームがまだ登録されていません。"),
     "play.luna_running:line":    ("Luna is already open.", "Lunaがすでに起動しています。"),
-    "play.le_missing:line":      ("Locale Emulator isn't set up on This Device.", "この端末ではLocale Emulatorが設定されていません。"),
+    "play.le_missing:line":      ("Locale Emulator isn't set up on this device.", "この端末ではLocale Emulatorが設定されていません。"),
     "play.needs_admin:line":     ("The game needs administrator rights.", "このゲームには管理者権限が必要です。"),
     "play.admin_declined:line":  ("Not started: permission wasn't given.", "許可されなかったため、起動しませんでした。"),
     "play.cancelled:line":       ("Stopped waiting for the game.", "ゲームの起動を待つのをやめました。"),

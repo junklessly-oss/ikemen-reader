@@ -1251,6 +1251,11 @@ before changing it.
   option if late frames show up again.
 
 ## Ideas for later (owner interested, not scheduled)
+- Language flags on the cover picker (owner, 2026-10-25: "add flag implementation to the idea pile"), like VNDB shows.
+  Data: add "languages.lang" to vndb._covers' release query -> Cover.langs (main cover: the VN's "olang"), ~15 min.
+  Showing: real flag images ~1 h (Windows can't draw flag emoji - it shows "JP" letters - so bundle ~20 small flags
+  from an openly licensed set, drawn in a corner of each thumbnail + tooltip with the language name), or text tags
+  "JA / EN · ZH" under each cover ~20 min (fits the monochrome look). Flags would be the only colour besides the lights.
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Background writes (owner, 2026-10-24: idea pile; "is it seriously worth it?" - verdict: worth it eventually, not
   urgent). Window-thread cloud writes that freeze the window while Google Drive stalls: reading status, renames (game /
@@ -1308,6 +1313,29 @@ before changing it.
   (an older version would show subfolders at the top level). Owner: not now.
 - Background writes: owner asked 2026-10-24 if worth it - advice: first a write-timing log (~30 min), build only if
   writes ever take 100s of ms.
+
+## Shortcut arguments (2026-10-25, after 2.0.2; owner confirmed it works)
+- 相州戦神館學園 万仙陣 opened only AlphaROMdiE's own window ("Siglus RealLive引擎一键解锁程序"): its shortcut
+  malie.exe.lnk = "AlphaROMdiE.exe malie.exe" and only the target was kept. Now MachinePaths.args (per device, added
+  at the end; old versions ignore it): lnk.resolve_launch keeps a shortcut's arguments; a plain .exe gets those of a
+  shortcut to it in its own folder (lnk.args_beside; two disagreeing shortcuts = no guess); play() falls back to
+  args_beside when none are stored (games added before). Library.edit keeps args while the exe stays the same; a
+  different exe drops them. launcher.split_args splits like Windows (CommandLineToArgvW). Not for LunaTranslator
+  --Exec launches. No UI field (owner chose automatic only). Purple status line shortened to "(Only on This Device)".
+- Capitalisation rules (owner, 2026-10-25; apply to all new English text): labels / buttons / headings / menu items /
+  sync-line states / box placeholders / short progress messages ("Checking Saves...") = Title Case, keeping a, an,
+  the, and, or, but and prepositions of 3 letters or fewer lowercase (to, in, on, at, for, of, by) - With / From /
+  Without / Into are capitalised. Full sentences (pop-ups, tooltips, status-strip messages) = sentence case, with a
+  full stop. "This Device" / "Other Device" capitalised mid-sentence ONLY when pointing at that row in Edit ("Set This
+  Device's .exe in Edit"); otherwise "this device" / "the other device". guide.py left as it is (owner).
+- Edit: "Choose VNDB Cover" (game.vndb_covers) under Find on VNDB opens CoverPickerDialog straight away for the linked
+  VN. Owner's design: Game.vndb_multi (in the game file, both devices) = "its VNDB entry has 2+ covers". Shown only
+  while artwork_from == "vndb": vndb_multi known -> simply there when Edit opens (no fade). It FADES IN
+  (VNDB_COVERS_FADE_MS 250) only when first discovered: the cover picker came up (VndbDialog.multi), the suggestion
+  banner / an older game's first Edit (one background vndb.covers check; written to the game at once, even if Edit is
+  cancelled), and _auto_cover after a first play stores vndb_multi itself. Own cover / Remove Cover: the button stays
+  until Save (to switch back); after Save, artwork_from = user -> not shown. VNDB unreachable = no button, no message.
+  (Rejected: a local per-device count file + background counting at startup - owner preferred this.)
 
 ## Fixes 2026-10-20 (evening; released as 1.1.7)
 - Cloud folder not answering (Google Drive stall: library vanished ~30 s): _apply_library keeps the games already shown

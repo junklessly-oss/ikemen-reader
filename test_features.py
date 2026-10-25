@@ -15,7 +15,7 @@ import detect
 import luna
 import regsync
 from launcher import finish_first_play, launch_plan, play
-from library import Library, LocalSettings, sort_games
+from library import Library, LocalSettings, MachinePaths, sort_games
 from sync_engine import Action, SyncEngine, is_cloud_duplicate
 from test_launcher import FakeGameFolder
 from titles import clean_title
@@ -695,6 +695,100 @@ class Shortcuts(unittest.TestCase):
                   f"$s.TargetPath='{target}';$s.Save()")
             subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, capture_output=True)
             self.assertEqual(Path(lnk.resolve_game_exe(str(link))), target)
+
+    @staticmethod
+    def _link(link: Path, target: Path, args: str = "") -> None:
+        ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{link}');"
+              f"$s.TargetPath='{target}';$s.Arguments='{args}';$s.Save()")
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True, capture_output=True, timeout=60)
+
+    def test_loader_shortcut_keeps_its_arguments(self):
+        """2026-10-25 (owner): 相州戦神館學園 万仙陣 opened only AlphaROMdiE's own window - its shortcut is
+        "AlphaROMdiE.exe malie.exe" and the "malie.exe" was dropped. A shortcut's arguments come along; a plain
+        .exe (or a game added before) gets those of the shortcut to it in its own folder."""
+        import lnk
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "Bansen jin"
+            write(folder, "AlphaROMdiE.exe", "")
+            write(folder, "malie.exe", "")
+            loader = folder / "AlphaROMdiE.exe"
+            self._link(folder / "malie.exe.lnk", loader, "malie.exe")
+            self._link(Path(tmp) / "desktop.lnk", loader, '"my game.exe" -x')
+            self.assertEqual(lnk.resolve_launch(str(Path(tmp) / "desktop.lnk")), (str(loader), '"my game.exe" -x'))
+            self.assertEqual(lnk.resolve_launch(str(loader)), (str(loader), "malie.exe"))   # beside it
+            self.assertEqual(lnk.args_beside(str(folder / "malie.exe")), "")                # (not a shortcut to it)
+            self.assertEqual(lnk.resolve_game_exe(str(Path(tmp) / "desktop.lnk")), str(loader))
+            self._link(folder / "settings.lnk", loader, "-config")                         # two disagree: no guess
+            self.assertEqual(lnk.args_beside(str(loader)), "")
+
+    def test_arguments_split_like_windows(self):
+        from launcher import split_args
+        self.assertEqual(split_args('malie.exe'), ["malie.exe"])
+        self.assertEqual(split_args('"my game.exe" -x  '), ["my game.exe", "-x"])
+        self.assertEqual(split_args("  "), [])
+
+    def test_arguments_stay_with_the_same_program(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lib = Library(Path(tmp) / "cloud")
+            g = lib.add_game("G", "PC", exe=r"D:\G\AlphaROMdiE.exe")
+            g = lib.edit(g.game_id, "G", {"PC": MachinePaths(r"D:\G\AlphaROMdiE.exe", "", "malie.exe")})
+            g = lib.edit(g.game_id, "G", {"PC": MachinePaths(r"d:\g\alpharomdie.exe", r"C:\s")})   # Edit's Save
+            self.assertEqual(g.paths["PC"].args, "malie.exe")
+            g = lib.edit(g.game_id, "G", {"PC": MachinePaths(r"D:\G\other.exe", r"C:\s")})        # another program
+            self.assertEqual(g.paths["PC"].args, "")
+            g = lib.set_paths(g.game_id, "PC", exe=r"D:\G\AlphaROMdiE.exe", args="malie.exe")
+            lib.update(g.game_id, status="reading")
+            self.assertEqual(lib.get(g.game_id).paths["PC"].args, "malie.exe")
+            self.assertEqual(lib.set_paths(g.game_id, "PC", exe=r"D:\G\new.exe").paths["PC"].args, "")
+
+
+class ChooseVndbCover(unittest.TestCase):
+    """2026-10-25 (owner): Edit's "Choose VNDB Cover" - simply there for a VNDB cover known to have 2+ covers; found
+    once for an older game (fades in, remembered in the game); never for your own cover."""
+
+    def test_when_the_button_shows(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            import vndb
+            QApplication.instance() or QApplication([])
+            lib = Library(Path(tmp) / "cloud")
+            settings = LocalSettings("PC", str(Path(tmp) / "cloud"))
+            two = [vndb.Cover("a", "main", "", ""), vndb.Cover("b", "pkgfront", "R", "2014")]
+            asked = []
+
+            def covers(vid, **kw):
+                asked.append(vid)
+                return two
+            with mock.patch.object(vndb, "covers", side_effect=covers):
+                known = lib.add_game("Known", "PC", vndb_id="v1", artwork_from="vndb", vndb_multi=True)
+                d = app.GameDialog(lib, settings, known)
+                self.assertFalse(d.vndb_covers_btn.isHidden())                  # there at once, nothing asked
+                self.assertIsNone(d.vndb_covers_btn.graphicsEffect())          # (no fade)
+                d.reject()
+                app.wait_for_tasks(5)
+                self.assertEqual(asked, [])
+
+                mine = lib.add_game("Mine", "PC", vndb_id="v2", artwork_from="user", vndb_multi=True)
+                d = app.GameDialog(lib, settings, mine)
+                app.wait_for_tasks(5)
+                QApplication.processEvents()
+                self.assertTrue(d.vndb_covers_btn.isHidden())                   # own cover: no button
+                d.reject()
+
+                old = lib.add_game("Old", "PC", vndb_id="v3", artwork_from="vndb")
+                d = app.GameDialog(lib, settings, old)
+                self.assertTrue(d.vndb_covers_btn.isHidden())
+                end = time.time() + 5
+                while time.time() < end and d.vndb_covers_btn.isHidden():
+                    QApplication.processEvents()
+                    time.sleep(0.02)
+                self.assertFalse(d.vndb_covers_btn.isHidden())                  # found once: fades in
+                self.assertTrue(lib.get(old.game_id).vndb_multi)                # ... and remembered
+                d.reject()
+                app.wait_for_tasks(5)
 
 
 if __name__ == "__main__":
@@ -6053,7 +6147,7 @@ class FolderAddRenameAndRemovalFades(unittest.TestCase):
                 w.open_folder(fid)
 
                 class Dialog:                                   # (stands in for the game settings window: Save)
-                    def __init__(self, library, settings, game=None, exe="", parent=None):
+                    def __init__(self, library, settings, game=None, exe="", parent=None, args=""):
                         self.library, self.exe, self.saved_id = library, exe, None
 
                     def exec(self):

@@ -31,14 +31,16 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
 - `sync_engine.py`, `regsync.py` (registry export/import + safety rules), `library.py` (settings, games,
   device slots, sorting), `launcher.py` (run/watch, window titles, Luna/LE, first-play detection),
   `detect.py` (save-location detection), `luna.py`, `vndb.py`, `titles.py` (title cleaning), `lnk.py`
-  (shortcut reader; follows Luna `--Exec` shortcuts to the game), `vn.py` (small CLI), `themes.py` (saved custom
+  (shortcut reader; follows Luna `--Exec` shortcuts to the game; keeps a shortcut's arguments, e.g. a loader's
+  "AlphaROMdiE.exe malie.exe", stored as MachinePaths.args, else taken from a shortcut beside the .exe), `vn.py` (small CLI), `themes.py` (saved custom
   themes in `<library root>/themes/`), `outside.py` (starts
   every outside program: games, Luna, LE, admin prompt).
 - `assets/`: `Logo.png`, `Icon.png`, `Font.otf` (Hiragino Maru Gothic ProN W4, owner-supplied; the owner has legal permission for all
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 296 tests (2026-10-25, 2.0.2: + add into open folder / folder-bar rename / trash-drop fade + removal fade; full run now ~7-8 min; 2.0.1: + drag-scroll turns / scroll guard / bars wait / fade-back / held cover while a
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 300 tests (2026-10-25, 2.0.3: + shortcut
+  arguments, Choose VNDB Cover; 2.0.2: + add into open folder / folder-bar rename / trash-drop fade + removal fade; full run now ~7-8 min; 2.0.1: + drag-scroll turns / scroll guard / bars wait / fade-back / held cover while a
   session ends, title-bar press focuses; 2.0.0: notes, saved themes, closed-window timers), all pass on
   the PC (Python 3.14, `py -m unittest`; ~7-8 min with the app open) and the laptop (Python 3.15, ~5 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
 - On this PC `python` isn't on PATH; use `py`.
@@ -158,13 +160,19 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.2" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.3" in app.py (build.py reads it).
 - Notes (2.0.0): right-click a game -> "Add Notes" / "Notes" (under Edit) -> NotesLayer (DimLayer, like the easter
   egg): 72.5 % text box + elided title, saved on close only (owner), in Game.notes (synced with the game file), saved in
   the background in order, flushed on exit; every key but Esc stays in the box. Removal warns about notes.
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
 - Buttons never end in "..." (menus still may); all buttons size to their text.
+- Capitalisation (owner, 2026-10-25): labels / buttons / headings / box placeholders / short progress messages = Title
+  Case (a, an, the, and, or, but + prepositions of 3 letters or fewer lowercase; With / From / Without capitalised);
+  full sentences = sentence case with a full stop; "This Device" capitalised mid-sentence only when pointing at the
+  Edit row. Details in NOTES.md (Shortcut arguments, 2026-10-25).
+- Edit's "Choose VNDB Cover": shown while the cover is from VNDB and Game.vndb_multi (2+ VNDB covers); fades in only
+  when first discovered. See NOTES.md.
 - Text pass 2026-10-14: every EN/JA string in i18n.py + guide.py reviewed. Owner-chosen wording kept as is
   (Ikemen Sync messages, Are You Sure?/Confirm, Built In/User Added, Launch Program on Startup, status names).
 - Per-game checkboxes "Launch With Luna" / "Launch With Locale Emulator" (replace the old per-launch LE

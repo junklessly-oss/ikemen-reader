@@ -242,6 +242,13 @@ SOLO_PARTS = ("games", "artwork", "folders.json", "order.json", "themes")   # th
 SOLO_START = "solo-start.json"     # the shared library as it was when solo began (file times), for the merge
 
 
+def _same_path(a: str, b: str) -> bool:
+    """The same file path, ignoring case and spelling ("" only matches "")."""
+    if not a or not b:
+        return a == b
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
 def _mtime(f: Path) -> int:
     try:
         return f.stat().st_mtime_ns
@@ -335,6 +342,7 @@ def save_local_settings(settings: LocalSettings, app_dir: Optional[Path] = None)
 class MachinePaths:
     exe: str = ""        # the game's .exe on that device
     save_dir: str = ""   # the game's save folder on that device
+    args: str = ""       # launch arguments (from the shortcut it was added from, e.g. "malie.exe" for a loader)
 
 
 @dataclass
@@ -370,6 +378,7 @@ class Game:
     # saves is named as such, not "(Newer)": the game wrote them by starting, they may hold no progress (owner)
     setup_saves: dict[str, str] = field(default_factory=dict)
     notes: str = ""                                     # the owner's notes on the game (right-click > Notes)
+    vndb_multi: bool = False                            # its VNDB entry has 2+ covers: Edit offers Choose VNDB Cover
 
     def removed_here(self, machine: str) -> bool:
         return machine in self.removed_on
@@ -530,7 +539,7 @@ class Library:
         return self.get(game.game_id)
 
     def set_paths(self, game_id: str, machine: str, exe: Optional[str] = None,
-                  save_dir: Optional[str] = None) -> Game:
+                  save_dir: Optional[str] = None, args: Optional[str] = None) -> Game:
         game = self.get(game_id)
         if game is None:
             raise KeyError(game_id)
@@ -539,7 +548,11 @@ class Library:
         if before and not p.save_dir:
             p.save_dir = before.get("save_dir", "")      # (its save folder from before comes back with it)
         if exe is not None:
+            if not _same_path(exe, p.exe):
+                p.args = ""                              # (another program: the old arguments were for that one)
             p.exe = exe
+        if args is not None:
+            p.args = args
         if save_dir is not None:
             p.save_dir = save_dir
         game.paths[machine] = p
@@ -572,7 +585,10 @@ class Library:
         game = self.get(game_id)
         game.title = title
         for machine, p in paths.items():
-            game.paths[machine] = MachinePaths(p.exe.strip(), p.save_dir.strip())
+            old = game.paths.get(machine)
+            # arguments not given: the ones it had stay, as long as it's still the same program
+            args = (getattr(p, "args", "") or "").strip() or (old.args if old and _same_path(old.exe, p.exe.strip()) else "")
+            game.paths[machine] = MachinePaths(p.exe.strip(), p.save_dir.strip(), args)
         for k, v in changes.items():
             if not hasattr(game, k) or k in ("game_id", "paths", "playtime"):
                 raise AttributeError(k)
@@ -613,7 +629,7 @@ class Library:
         if not any(p.exe for m, p in game.paths.items() if m != machine):
             return self.remove(game_id)                  # (nobody else has it: gone for good, as before)
         p = game.paths.pop(machine, None) or MachinePaths()
-        game.removed_on[machine] = {"exe": p.exe, "save_dir": p.save_dir}
+        game.removed_on[machine] = {"exe": p.exe, "save_dir": p.save_dir, "args": p.args}
         self.save(game)
         return {"id": game_id, "here": machine}
 
@@ -626,7 +642,7 @@ class Library:
             if game is None or machine not in game.removed_on:
                 return None
             p = game.removed_on.pop(machine)
-            game.paths[machine] = MachinePaths(p.get("exe", ""), p.get("save_dir", ""))
+            game.paths[machine] = MachinePaths(p.get("exe", ""), p.get("save_dir", ""), p.get("args", ""))
             self.save(game)
             return game
         text = removed.get("game")
