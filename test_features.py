@@ -40,6 +40,42 @@ def tearDownModule():
     shutil.rmtree(_APPDATA["safe"], ignore_errors=True)
 
 
+# A closed main window isn't deleted (the real program quits instead), so its timers - live polls, lights, prefetch -
+# kept running for the rest of the run: on the laptop the later tests took 24-76 s each, 1.8 GB, 18+ min in all
+# (2026-10-25). Each test's closed main windows are deleted when it ends.
+_run_test = unittest.TestCase.run
+
+
+def _run_and_tidy(self, result=None):
+    try:
+        return _run_test(self, result)
+    finally:
+        from PySide6.QtWidgets import QApplication
+        qa = QApplication.instance()
+        if qa is not None:
+            import app
+            closed = [w for w in qa.topLevelWidgets() if isinstance(w, app.MainWindow) and not w.isVisible()]
+            if closed:
+                from PySide6.QtCore import QTimer
+                for w in closed:
+                    for t in w.findChildren(QTimer):      # (no new save check while waiting)
+                        t.stop()
+                    if w.checker:                         # (a save check still running would answer a deleted
+                        w.checker.wait(5000)              # window)
+                app.wait_for_tasks(5)
+                qa.processEvents()
+                for w in closed:
+                    if w.checker:                         # (one started by the answer just delivered)
+                        try:
+                            w.checker.done.disconnect()
+                        except (RuntimeError, TypeError):
+                            pass
+                    app.discard(w)
+
+
+unittest.TestCase.run = _run_and_tidy
+
+
 IS_WINDOWS = sys.platform == "win32"
 GAME = "Fake VN"
 
@@ -6373,3 +6409,124 @@ class FolderAddRenameAndRemovalFades(unittest.TestCase):
             finally:
                 w.close()
                 app.wait_for_tasks(5)
+
+
+class PopUpsAreDeleted(unittest.TestCase):
+    """2026-10-25 (laptop): pop-ups stayed as hidden children after closing - every one restyled on each theme change
+    (+27 ms each), and the "already running" pop-up's process check went on every 0.4 s for the rest of the session."""
+
+    def test_message_and_its_check_are_gone(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QDialog, QWidget
+        from PySide6.QtCore import QTimer
+        import app
+        QApplication.instance() or QApplication([])
+        parent = QWidget()
+        calls = []
+
+        def close_it():
+            for d in parent.findChildren(QDialog):
+                if d.isVisible():
+                    d.reject()
+        try:
+            for _ in range(3):
+                QTimer.singleShot(50, close_it)
+                app.message(parent, "test", buttons=(("ok", "OK"),), done_when=lambda: calls.append(1) or False)
+            self.assertEqual(parent.findChildren(QDialog), [])
+            seen = len(calls)
+            end = time.monotonic() + 1.0
+            while time.monotonic() < end:
+                QApplication.processEvents()
+                time.sleep(0.01)
+            self.assertEqual(len(calls), seen)          # no check left running after the pop-ups closed
+        finally:
+            parent.deleteLater()
+
+
+class PathBoxesShowTheStart(unittest.TestCase):
+    """2026-10-25 (PC, owner): path boxes show the START of a long path (Qt showed the end), ending in "..." where
+    cut off, with the full path on hover (our own popup - Qt's flashed beside it); a popup too wide to move inside its
+    window may use the screen's width (it sat pinned to the window's right edge)."""
+
+    LONG = r"C:\Users\Jaden\Desktop\LunaHook\LunaTranslator\LunaTranslator.exe"
+
+    def _run(self, seconds):
+        from PySide6.QtWidgets import QApplication
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.004)
+
+    def test_start_dots_and_popup_text(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QPoint
+        from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+        import app
+        QApplication.instance() or QApplication([])
+        win = QWidget()
+        lay = QVBoxLayout(win)
+        long_box, short_box, own_tip = app.PathBox(self.LONG), app.PathBox(r"C:\a.exe"), app.PathBox(self.LONG)
+        own_tip.setToolTip("mine")
+        for b in (long_box, short_box, own_tip):
+            b.setFixedWidth(200)
+            lay.addWidget(b)
+        win.show()
+        self._run(0.05)
+        try:
+            self.assertEqual(long_box.cursorPosition(), 0)                 # the start shows
+            long_box.setText(self.LONG + "x")                               # Browse sets it: back to the start
+            self.assertEqual(long_box.cursorPosition(), 0)
+            self.assertTrue(long_box._cut())
+            self.assertFalse(short_box._cut())
+            self.assertEqual(long_box.tip_at(QPoint(5, 5))[0], self.LONG + "x")
+            self.assertEqual(short_box.tip_at(QPoint(5, 5))[0], "")        # fits: no popup
+            self.assertEqual(own_tip.tip_at(QPoint(5, 5))[0], "mine")      # (Other Device's own tooltip wins)
+            img = long_box.grab().toImage()                                 # drawn without error, "..." at the end
+            self.assertFalse(img.isNull())
+            long_box.setFocus()
+            long_box.end(False)                                             # typing: a plain line edit
+            long_box.clearFocus()
+            long_box.editingFinished.emit()
+            self.assertEqual(long_box.cursorPosition(), 0)
+        finally:
+            win.close()
+            win.deleteLater()
+
+    def test_wide_popup_may_leave_the_window(self):
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QEvent, QPoint
+        from PySide6.QtGui import QHelpEvent
+        from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+        import app
+        qa = QApplication.instance() or QApplication([])
+        app.install_smooth_tips(qa)
+        win = QWidget()
+        lay = QVBoxLayout(win)
+        box = app.PathBox(r"C:\Users\Jaden\Desktop\Luna.exe")      # (short: room on the test's 800 px screen)
+        box.setFixedWidth(100)
+        lay.addWidget(box)
+        win.resize(300, 120)
+        win.show()
+        win.move(200, 200)
+        self._run(0.05)
+        tip = app.SmoothTip.instance()
+        try:
+            mouse = {"pos": box.mapToGlobal(QPoint(30, box.height() // 2))}
+            with mock.patch.object(app.QCursor, "pos", side_effect=lambda: QPoint(mouse["pos"])):
+                here = box.mapFromGlobal(mouse["pos"])
+                QApplication.sendEvent(box, QHelpEvent(QEvent.ToolTip, here, mouse["pos"]))
+                self.assertTrue(tip.isVisible())
+                self.assertGreater(tip.width(), win.width() // 2)
+                self._run(0.3)
+                start = tip.pos()
+                mouse["pos"] = mouse["pos"] + QPoint(20, 0)               # follows sideways too
+                self._run(0.4)
+                self.assertEqual(tip.pos().x() - start.x(), 20)
+                win_right = win.mapToGlobal(QPoint(win.width(), 0)).x()
+                self.assertGreater(tip.pos().x() + tip.width(), win_right)  # (past the window's edge)
+                mouse["pos"] = mouse["pos"] + QPoint(0, 300)
+                self._run(0.3)
+        finally:
+            win.close()
+            win.deleteLater()

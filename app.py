@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (QAbstractScrollArea, QScrollArea, QTextBrowser, Q
                                QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QTextEdit, QStackedWidget,
                                QProgressBar, QPushButton, QRadioButton, QSizePolicy, QSlider, QStyle,
                                QProxyStyle, QStatusBar, QStyledItemDelegate, QStyleOption, QStyleOptionButton, QStyleOptionViewItem, QVBoxLayout,
-                               QWidget)
+                               QStyleOptionFrame, QWidget)
 
 import shiboken6
 
@@ -92,7 +92,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.4"
+APP_VERSION = "2.0.5"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -1561,8 +1561,16 @@ def discard(d: QWidget) -> None:
     """Delete a closed window NOW. A window opened with a parent stays as its hidden child until deleted: every
     Settings / Edit / theme / colour window opened since start was restyled again on every theme change (owner,
     2026-10-20: the theme windows were "comically slow", worse the longer the program ran)."""
-    if shiboken6.isValid(d):
+    if isinstance(d, QObject) and shiboken6.isValid(d):     # (tests stand in plain objects for some windows)
         shiboken6.delete(d)
+
+
+def run_once(d: QDialog) -> int:
+    """exec() a window, then delete it (see discard) - for windows whose answer is only the exec() result."""
+    try:
+        return d.exec()
+    finally:
+        discard(d)
 
 
 def sheet_on(root: Optional[QWidget]) -> None:
@@ -2156,7 +2164,9 @@ def message(parent, text: str, title: str = "", buttons=(("ok", "OK"),), icon=No
                 d.accept()
         watch.timeout.connect(check)
         watch.start()
-    d.exec()
+    # (deleted once answered: kept, every pop-up was restyled on each theme change - 27 ms each on the laptop - and
+    # done_when's check went on every 0.4 s for the rest of the session; found 2026-10-25)
+    run_once(d)
     return chosen["key"]
 
 
@@ -3202,12 +3212,17 @@ class SmoothTip(QWidget):
             self._timer.start()
 
     def _room(self) -> QRect:
-        """Where it may go: the window the thing is in (on its screen)."""
+        """Where it may go: the window the thing is in (on its screen). A popup wider than half the window (a full
+        path) may use the screen's width, else it'd sit pinned to the window's right edge (owner, 2026-10-25)."""
         win = self._owner.window() if self._owner is not None else None
         screen = (win.screen() if win is not None else None) or QApplication.primaryScreen()
         room = screen.availableGeometry()
         if win is not None and win.isVisible():
-            room = room.intersected(QRect(win.mapToGlobal(QPoint(0, 0)), win.size()))
+            inside = room.intersected(QRect(win.mapToGlobal(QPoint(0, 0)), win.size()))
+            if self.width() > inside.width() // 2:
+                inside.setLeft(room.left())
+                inside.setRight(room.right())
+            room = inside
         return room
 
     def _target(self) -> QPoint:
@@ -5189,6 +5204,55 @@ def hint(text: str) -> QLabel:
     lab = QLabel(text, objectName="hint")
     lab.setWordWrap(True)
     return lab
+
+
+class PathBox(QLineEdit):
+    """A path field that shows the START of a long path (Qt shows the end), like Windows does, ending in "..." where
+    it's cut off (full path on hover); back to the start whenever it's set from outside (Browse) or left. While
+    editing it's a plain QLineEdit."""
+
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self.setCursorPosition(0)
+        self.editingFinished.connect(lambda: self.setCursorPosition(0))
+
+    def setText(self, text: str) -> None:
+        # (Browse / the save suggestion; even with the focus - the first box in a window can start with it)
+        super().setText(text)
+        self.setCursorPosition(0)
+
+    def _line_rect(self) -> QRect:
+        # where QLineEdit::paintEvent puts the text (contents rect, text margins, 2 px side margin, centred line)
+        opt = QStyleOptionFrame()
+        self.initStyleOption(opt)
+        r = self.style().subElementRect(QStyle.SubElement.SE_LineEditContents, opt, self)
+        r = r.marginsRemoved(self.textMargins())
+        fh = self.fontMetrics().height()
+        return QRect(r.x() + 2, r.y() + (r.height() - fh + 1) // 2, r.width() - 4, fh)
+
+    def _cut(self) -> bool:
+        return bool(self.text()) and self.fontMetrics().horizontalAdvance(self.text()) > self._line_rect().width()
+
+    def paintEvent(self, event):
+        if self.hasFocus() or not self._cut():
+            return super().paintEvent(event)
+        p = QPainter(self)
+        opt = QStyleOptionFrame()
+        self.initStyleOption(opt)
+        self.style().drawPrimitive(QStyle.PrimitiveElement.PE_PanelLineEdit, opt, p, self)
+        r, fm = self._line_rect(), self.fontMetrics()
+        p.setPen(self.palette().color(QPalette.ColorRole.Text))
+        # "..." by hand: Qt's "…" is drawn as centred dots in the Japanese fonts
+        text, room = self.text(), r.width() - fm.horizontalAdvance("...")
+        lo, hi = 0, len(text)
+        while lo < hi:                      # the longest start that fits beside the dots
+            mid = (lo + hi + 1) // 2
+            lo, hi = (mid, hi) if fm.horizontalAdvance(text[:mid]) <= room else (lo, mid - 1)
+        p.drawText(QPoint(r.x(), r.y() + fm.ascent()), text[:lo].rstrip() + "...")
+
+    def tip_at(self, pos: QPoint) -> tuple[str, QRect]:
+        # (TipManager / SmoothTip, like ElidedLabel; a tooltip of its own - Other Device - wins)
+        return self.toolTip() or (self.text() if self._cut() else ""), self.rect()
 
 
 class SearchBox(QLineEdit):
@@ -8119,7 +8183,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         for heading, buttons in (("settings.font", [(f"font.btn_{l}", lambda _=False, l=l: self._choose_font(l))
                                                      for l in ("en", "ja")]),
                                  ("settings.isync", [("isync.button", lambda _=False: self._ikemen_sync())]),
-                                 ("settings.about", [("guide.button", lambda _=False: GuideDialog(self).exec())])):
+                                 ("settings.about", [("guide.button", lambda _=False: run_once(GuideDialog(self)))])):
             col = QVBoxLayout()
             col.setSpacing(6)
             head = self._tx(section(""), heading)
@@ -8171,7 +8235,7 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
         self._cloud_gap = self._rule(lay, "cloud")
         self._cloud_head = self._tx(section(""), "settings.cloud")
         lay.addWidget(self._cloud_head)
-        self.cloud = QLineEdit(current.cloud_root if current else "")
+        self.cloud = PathBox(current.cloud_root if current else "")
         self._tx(self.cloud, "settings.cloud_placeholder", "setPlaceholderText")
         self._cloud_row = self._browse_row(self.cloud, self._pick_cloud)
         lay.addLayout(self._cloud_row)
@@ -8186,18 +8250,18 @@ class SettingsDialog(KeepsTitleBar, FitsScreen, QDialog):
             self._set_solo(True, quiet=True)
 
         lay.addWidget(self._tx(section(""), "settings.le"))
-        self.le = QLineEdit(current.le_path if current else "")
+        self.le = PathBox(current.le_path if current else "")
         self._tx(self.le, "settings.le_placeholder", "setPlaceholderText")
         lay.addLayout(self._browse_row(self.le, self._pick_le))
 
         lay.addWidget(self._tx(section(""), "settings.luna"))
-        self.luna = QLineEdit(current.luna_path if current else "")
+        self.luna = PathBox(current.luna_path if current else "")
         self._tx(self.luna, "settings.luna_placeholder", "setPlaceholderText")
         lay.addLayout(self._browse_row(self.luna, self._pick_luna))
         lay.addWidget(self._tx(hint(""), "settings.luna_hint"))
 
         lay.addWidget(self._tx(section(""), "settings.anki"))
-        self.anki = QLineEdit(current.anki_path if current else "")
+        self.anki = PathBox(current.anki_path if current else "")
         self._tx(self.anki, "settings.anki_placeholder", "setPlaceholderText")
         lay.addLayout(self._browse_row(self.anki, self._pick_anki))
         lay.addWidget(self._tx(hint(""), "settings.anki_hint"))
@@ -8895,10 +8959,12 @@ class VndbDialog(TaskOwner, QDialog):
         self.multi = len(options) > 1               # (Edit offers Choose VNDB Cover from now on)
         if len(options) > 1:
             picker = CoverPickerDialog(m.display_title, options, self)
-            if not picker.exec() or not picker.choice:
+            ok, choice = picker.exec(), picker.choice
+            discard(picker)
+            if not ok or not choice:
                 self.info.setText("")
                 return
-            url = picker.choice.url
+            url = choice.url
         self.info.setText(tr("vndb.downloading"))
         self._run(lambda: _download_cover(url), self._downloaded, lambda e: self.info.setText(tr("vndb.error")))
 
@@ -9045,7 +9111,7 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
                 head.hide()                   # (after it's placed: shown loose, it'd open as its own window)
             p = game.paths_for(slot) if game else MachinePaths(exe if here else "", "")
             g = QGridLayout()
-            exe_e, save_e = QLineEdit(p.exe), QLineEdit(p.save_dir)
+            exe_e, save_e = PathBox(p.exe), PathBox(p.save_dir)
             g.addWidget(QLabel(tr("game.exe")), 0, 0)
             g.addWidget(exe_e, 0, 1)
             g.addWidget(QLabel(tr("game.saves")), 1, 0)
@@ -9203,8 +9269,11 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
 
     def _open_vndb(self):
         d = VndbDialog(self.title.text().strip(), self, safe_only=self.settings.vndb_safe_only)
-        if d.exec() and d.choice:
-            self._apply_vndb(d.choice, d.cover_file, d.use_title, multi=d.multi if d.cover_file else None)
+        try:
+            if d.exec() and d.choice:
+                self._apply_vndb(d.choice, d.cover_file, d.use_title, multi=d.multi if d.cover_file else None)
+        finally:
+            discard(d)
 
     def _apply_vndb(self, m: vndb.Match, cover_file: Optional[str], use_title: bool, multi: Optional[bool] = None):
         """multi: the cover picker came up (True) / didn't (False) for this VN; None = not known (the suggestion banner:
@@ -9287,9 +9356,11 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         if len(options) < 2:
             return
         picker = CoverPickerDialog(self.title.text().strip(), options, self)
-        if not picker.exec() or not picker.choice:
+        ok, choice = picker.exec(), picker.choice
+        discard(picker)
+        if not ok or not choice:
             return
-        url = picker.choice.url
+        url = choice.url
         self.vndb_covers_btn.setEnabled(False)            # (one download at a time)
 
         def done(path: str) -> None:
@@ -10287,9 +10358,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             if engine is not self.engine or self.syncer is not None or self.worker is not None:
                 return
             d = SaveChoicesDialog(rows, self)
-            if not d.exec():
+            ok, answers = d.exec(), dict(d.choices)
+            discard(d)
+            if not ok:
                 return
-            answers = dict(d.choices)
             s = SyncWorker(self.engine, games, machine)
             s.conflict.connect(lambda info: setattr(s, "answer", answers.get(info.game_id)), Qt.BlockingQueuedConnection)
             s.finished_all.connect(self._synced_now)
@@ -10823,8 +10895,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.checker = StatusChecker(self.engine, list(self.games.values()), self.settings.machine_name, skip)
         checker = self.checker
         # (results of a check made for another engine - the settings changed, or Dual -> My Device, while it ran - are
-        # dropped: they described a library / mode the window no longer shows)
-        checker.done.connect(lambda *res: self._sync_checked(*res) if checker.engine is self.engine else None)
+        # dropped: they described a library / mode the window no longer shows; nor to a deleted window - tests)
+        checker.done.connect(lambda *res: self._sync_checked(*res)
+                             if shiboken6.isValid(self) and checker.engine is self.engine else None)
         self.checker.finished.connect(self._update_sync_label)  # isRunning() is reliably False by then
         self.checker.start()
         self._update_details()
@@ -13139,17 +13212,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     except (OSError, KeyError) as e:
                         report_failure(self, e)
                         continue
-                    if GameDialog(self.library, self.settings, game, parent=self).exec():   # e.g. its save folder
+                    if run_once(GameDialog(self.library, self.settings, game, parent=self)):   # e.g. its save folder
                         self._ask_now.add(match.game_id)
                     if not game.folder:                     # (already in a folder: it stays there)
                         file_in_folder(match.game_id)
                     last = match.game_id
                     continue
             d = GameDialog(self.library, self.settings, exe=exe, parent=self, args=args)
-            if d.exec() and d.saved_id:
-                last = d.saved_id
-                self._ask_now.add(d.saved_id)
-                file_in_folder(d.saved_id)
+            ok, saved = d.exec(), d.saved_id
+            discard(d)
+            if ok and saved:
+                last = saved
+                self._ask_now.add(saved)
+                file_in_folder(saved)
         self.refresh()
         if last:
             self._select(last)
@@ -13223,8 +13298,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
     @guarded
     def rename_folder(self, fid: str) -> None:
         d = NameDialog(tr("folder.rename_title"), self.folder_name(fid), self)
-        if d.exec():
-            self.library.rename_folder(fid, d.name())
+        ok, name = d.exec(), d.name()
+        discard(d)
+        if ok:
+            self.library.rename_folder(fid, name)
             self.refresh()
 
     @guarded
@@ -13241,9 +13318,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """fid None = a new folder (asks for its name); "" = out of its folder."""
         if fid is None:
             d = NameDialog(tr("menu.new_folder").rstrip(".…"), tr("folder.new_name"), self)
-            if not d.exec():
+            ok, name = d.exec(), d.name()
+            discard(d)
+            if not ok:
                 return
-            fid = self.library.create_folder(d.name())
+            fid = self.library.create_folder(name)
         self.library.set_folder(gid, fid)
         self.refresh()
 
@@ -13284,7 +13363,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if not mine.save_dir:
             return
         d = RestoreDialog(g, self.engine, mine.save_dir, self)
-        if d.exec() and d.restored:
+        ok, restored = d.exec(), d.restored
+        discard(d)
+        if ok and restored:
             self.statusBar().showMessage(tr("restore.done"), 8000)
             self.refresh()
 
@@ -13445,7 +13526,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                            first_sync=other and not self.engine.has_synced(info.game_id),
                            setup=g.setup_saves if g else {}, machine=self.settings.machine_name)
         d.exec()
-        return d.choice
+        choice = d.choice
+        discard(d)
+        return choice
 
     def _ask_conflict(self, info: ConflictInfo) -> None:
         choice = self._conflict_choice(info)
@@ -13589,9 +13672,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         exe = game.paths_for(self.settings.machine_name).exe
         d = DetectDialog(game, r.candidates, self.app_dir, self, cloud_root=self.settings.cloud_root,
                          game_dir=str(Path(exe).parent) if exe else "")
-        if d.exec() and d.save_dir:
-            res = finish_first_play(game, self.settings, self.library, self.engine, d.save_dir,
-                                    d.registry_key, lambda info: self._conflict_choice(info, fresh=True),
+        ok, save_dir, registry_key = d.exec(), d.save_dir, d.registry_key
+        discard(d)
+        if ok and save_dir:
+            res = finish_first_play(game, self.settings, self.library, self.engine, save_dir,
+                                    registry_key, lambda info: self._conflict_choice(info, fresh=True),
                                     started_at=r.started_at)
             self.statusBar().showMessage(i18n.line(res.message), 10000)
 
@@ -14345,9 +14430,10 @@ def main() -> None:
         if how == "quit":
             return
         d = SettingsDialog(None, welcome=True, solo=how == "one")
-        if not d.exec():
+        ok, settings = d.exec(), d.result_settings
+        discard(d)
+        if not ok:
             return
-        settings = d.result_settings
     warm_title_bar()                            # (Windows' title bar ready before the real window appears)
     w = MainWindow(settings)
     listen_for_second_copies(w)

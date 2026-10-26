@@ -1524,3 +1524,67 @@ before changing it.
   again on every window resize. Test: LanguageListFade.
 - Still open: Cloud Folder section 31 px above / 20 below (the "cloud" rule's +11 is room for This Is's list).
   Offered: give This Is the same Veil, then SETTINGS_RULES "cloud" back to 20/20 - owner hasn't answered yet.
+
+## Laptop test pass (2026-10-25 night, 2.0.4, owner: "run all the tests you can" on the laptop)
+- Laptop: Ryzen 3 7320U (4 cores), Radeon iGPU, 1920x1080 at 125 % zoom, 60 Hz, ON BATTERY (clock pinned at 2.4 GHz).
+  Tests ran on a copy of the owner's library (69 games, 40 in folders; saves left out, save folders / registry blanked).
+- FOUND: message() (every pop-up) never deletes its window; with done_when (the "already running" pop-up in
+  _launch_problem) its 400 ms timer keeps calling launcher.already_running() after the pop-up closed = ~29 ms on the
+  window's thread 2.5 x a second for the rest of the session. Also not discard()ed: add-game GameDialog (+ its VNDB /
+  cover pickers), NameDialog (new / rename folder), RestoreDialog, ConflictDialog, DetectDialog, UpdateDialog,
+  SaveChoicesDialog. Each stays a hidden child, restyled on every theme change: measured 0.27 s per theme change at
+  start -> 1.07 / 1.92 / 2.71 s after 30 / 60 / 90 pop-ups (~27 ms each).
+- FOUND (tests only): closed MainWindows were never deleted between tests and kept their timers -> later tests 24-76 s,
+  1.8 GB, 18+ min run. test_features now deletes each test's closed main windows (timers stopped, save check + tasks
+  waited first): 302 OK in ~9 min, flat memory.
+- Start-up (built exe, real library on G:): picture appears after 5.6-6.3 s; 3.5 s with the same library on C:.
+  Window thread before show: import 0.84 s, prepare_first_screen 1.84 s (40 covers read from G:; 0.56 on C:),
+  __init__ 1.71 (game files from G: 0.52), restyle_all 0.65. Deferring the first save check saves only ~0.25 s.
+  The first restyle_all in apply_settings looks redundant but ISN'T: skipping it (543 -> 9 ms) breaks the top bar
+  layout ("Synced" cut to "Syncec") - don't re-propose as a one-liner.
+- Fine: zoom ignored (1200x833), borders themed, Settings flush (+0/+0) and centred; launchcheck 10/10 clean / same
+  place / nothing active; wheel scroll 0 late frames in ~2,000; wheel-press 0 late; drag edge-scroll smooth (the
+  bench's 120-215 ms "pauses" are the pointer's 0.2 s travel to the edge, not stalls); notes + egg fades 0 late; sorts
+  ~15 ms; fuzz200 1,486 actions 0 errors; bench110 2.0.4 vs 1.1.7 A/B equal (no regression).
+- Slower than 10-19 (battery?): easter egg rocking ~50 fps (13.7 ms paint); Custom Theme first open 1.2-1.5 s (Qt's first
+  styling; 0.4 s after), colour picker ready ~1.2 s (0.6 s on 10-19).
+- Cosmetic: Settings path boxes show the END of a long path (Qt default) - Luna's loses only its "C".
+- Re-measured PLUGGED IN (clock ~150 % vs 95 % on battery): everyday bench (hover / search / sort) 0-1 skipped frames =
+  the battery runs' skips were the battery; start-up 3.6-4.0 s (battery 5.6-6.3); egg rocking ~56 fps (11.7 ms
+  paint); colour picker 0.82-0.88 s; Custom Theme first open 1.34 s (NOT battery: Qt's first styling, 0.35 s after);
+  leftover pop-ups still cost theme changes 0.22 -> 0.85 / 1.22 / 1.81 s after 30 / 60 / 90 (NOT battery).
+- FIXED (owner: "Fix that bug"): run_once(d) = exec() then discard(); message() (all pop-ups incl. done_when's
+  timer), Help and Guidance, both cover pickers, VNDB search, Save Choices, add-game GameDialog (both), New / Rename
+  Folder, Restore, Conflict, Detect, the welcome Settings. Answers are read before deleting (all set in __init__, so
+  Cancel is safe). Left alone: UpdateDialog (once per update; its download thread stays wired to it after Cancel).
+  Measured: 90 pop-ups -> 0 left, theme change 0.15 s flat (was 1.81 s plugged in). Test: PopUpsAreDeleted (fails
+  with the fix switched off).
+
+## PC, 2026-10-25 late (after the laptop hand-over)
+- Path boxes show the START of a long path (owner: "do 1"; Windows standard): app.path_box() for Settings' Cloud Folder /
+  LE / Luna / Anki and the game window's exe + save folder (both devices). Back to the start when set by Browse /
+  the save suggestion or when left. Owner: cut-off paths must end in "..." -> app.PathBox draws it when not focused
+  (three full stops by hand: Qt's "…" is centred dots in the Japanese fonts), same text position as QLineEdit;
+  full path on hover when cut via tip_at (SmoothTip; unless the box has its own tooltip, e.g. Other Device). First
+  try called QToolTip.showText from event() -> Qt's own popup alongside ours flashed (owner) - never use QToolTip.
+- Hover pop-ups wider than half their window may use the screen's width (SmoothTip._room; owner picked this over
+  two-line paths / leaving it): a full path's tip was pinned to the Settings window's right edge, only moving up/down.
+  Narrower pop-ups still stay inside the window. Test still to add (end-of-work pass).
+- Start-up on the PC (startsteps.py, safe copy of the real library on C:, 69 games): window shown at 1.46 s (first
+  run 2.32 s). Reading every game file + all 69 covers straight from G: (files warm): 0.6 s, from C: 0.1 s. So local
+  cover copies would save the PC only ~0.3-0.5 s (laptop ~1.3 s on battery). Owner asked how hard / my take: not
+  urgent; not built - raise again only if the laptop's start-up bothers the owner.
+
+## Scroll stutter = Wallpaper Engine (PC, 2026-10-26 ~00:30)
+- Owner: library wheel scrolling stuttered (focused; "almost smoother unfocused"). Cause: Wallpaper Engine
+  (wallpaper32.exe) using ~36 % of the GPU: claude-tools/screenwheel.py's screen sampler fell from ~145 to ~100 grabs/s
+  (the whole screen's presentation slowed). Paused (`wallpaper32.exe -control pause`) -> 145/s, ~7 ms median gaps;
+  owner: "Without wallpaper engine on, scrolling is perfect both focused and unfocused". FIRST CHECK next time
+  scrolling stutters: GPU use per process (Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage').
+- Same conditions, alternated twice: tonight's code vs 2.0.4 equal within noise (focused 43-44 vs 34-39 % late,
+  unfocused 53-54 vs 47-50 %); nothing in the diff runs while scrolling. Both still above the afternoon's 9-11 %
+  (unexplained; owner sees it as perfect, so left alone).
+- Side finding, not acted on: with the window visible and idle (lights pulsing), csrss uses ~21 % 3D GPU (1 % when
+  minimised; not the pointer, not DwmFlush, window not layered) = Windows' cost of showing our GDI-flushed drawing.
+- screenwheel.py gotcha: the app it starts inherits its stdout -> a piped run never ends; start it with DEVNULL
+  (fixed in claude-tools/screenwheel.py).
