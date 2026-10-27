@@ -7234,6 +7234,26 @@ def load_saved_themes(root: str, protect: frozenset = frozenset()) -> list[dict]
 _PREVIEW_FONTS: dict[str, list] = {}       # font file -> its families, loaded once for showing saved themes
 
 
+class HexBox(QLineEdit):
+    """A colour code box. Double-click selects the whole code, "#" included (Windows' word selection stopped at the
+    "#": pasting "#F6D3DD" over it left "##F6D3DD", which didn't count and quietly put the old colour back -
+    owner, 2026-10-26). No length cap while typing: hex_code() picks the code out of whatever was pasted."""
+
+    def mouseDoubleClickEvent(self, ev) -> None:
+        if ev.button() == Qt.LeftButton:
+            self.selectAll()
+            ev.accept()
+            return
+        super().mouseDoubleClickEvent(ev)
+
+
+def hex_code(text: str) -> Optional[str]:
+    """"#RRGGBB" from what was typed or pasted: with or without "#", a doubled "#", spaces round it, or pasted into
+    the middle of the old code (the pasted one starts after the last "#"). None: no colour code there."""
+    tail = text.replace(" ", "").strip().rsplit("#", 1)[-1][:6]
+    return "#" + tail.upper() if re.fullmatch(r"[0-9A-Fa-f]{6}", tail) else None
+
+
 class ThemeDialog(TaskOwner, QDialog):
     """Custom theme: every colour role with a swatch and a hex box; changes preview live. With a library
     root, a Saved Themes tab too (themes.py): saved looks to pick from, and a + to save the current one. The cloud
@@ -7390,9 +7410,8 @@ class ThemeDialog(TaskOwner, QDialog):
                 sw.setCursor(Qt.PointingHandCursor)
                 sw.setToolTip(tr("theme.swatch_tip"))
                 sw.clicked.connect(lambda _=False, k=k: self._pick(k))
-                hx = QLineEdit(objectName="hex")
+                hx = HexBox(objectName="hex")
                 hx.setFixedWidth(84)
-                hx.setMaxLength(7)
                 hx.setToolTip(tr("theme.hex_tip"))
                 hx.editingFinished.connect(lambda k=k: self._typed(k))
                 grid.addWidget(sw, row, 1)
@@ -7447,11 +7466,9 @@ class ThemeDialog(TaskOwner, QDialog):
         self._changed()
 
     def _typed(self, k: str) -> None:
-        text = self.rows[k][1].text().strip()
-        if not text.startswith("#"):
-            text = "#" + text
-        if QColor.isValidColorName(text) and len(text) == 7:
-            self._set(k, text)
+        code = hex_code(self.rows[k][1].text())
+        if code is not None:
+            self._set(k, code)
         else:
             self._show(k)                     # not a colour: put the old value back
 
@@ -14050,11 +14067,11 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             return
         # (the name Discord shows comes from the application: イケメンリーダー when the interface is Japanese)
         self.presence.use_application(presence.CLIENT_IDS.get(i18n.language(), presence.CLIENT_ID))
-        # the picture follows the logo colours in use: a dark logo (the Light theme, or a custom theme started from
-        # it / recoloured that way) -> the light picture (owner, 2026-10-17)
-        dark_logo = QColor(LOGO["logo_fill"]).lightness() < 128
+        # the picture follows the Main Area colour in use: a light one (the Light theme, or any light custom theme,
+        # whatever its logo colours) -> the light picture (owner, 2026-10-26; was the logo fill, 2026-10-17)
+        light_bg = QColor(COLORS["bg"]).lightness() >= 128
         self.presence.show(look[0], look[1], start=self._presence_since,
-                           image="logo_light" if dark_logo else "logo",
+                           image="logo_light" if light_bg else "logo",
                            image_text=tr("presence.games_one") if len(self.games) == 1 else tr("presence.games", n=len(self.games)))
 
     def _log_launch_focus(self) -> None:

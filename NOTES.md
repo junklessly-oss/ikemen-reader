@@ -609,8 +609,8 @@ before changing it.
   Lights (LocalSettings.discord, END field, per device, off at first). MainWindow._presence_look every 2 s: Reading...
   + title (wins) / Away (5 min without using Ikemen Reader; foreground_pid + seconds_since_input; Anki the egg opened
   counts as using it) / Tweaking... (PRESENCE_TWEAKING windows open) / Browsing.... Timer restarts when reading starts
-  / ends. Picture by the logo colours IN USE: a dark logo (Light theme, custom from Light) -> "logo_light", else
-  "logo" (custom from Dark included). Hover: N Games in Library. Two Discord applications because Discord shows the
+  / ends. Picture by the MAIN AREA colour in use (owner, 2026-10-26; before: the logo fill, which a light custom
+  theme with a cream logo got wrong): light bg (Light theme, light custom) -> "logo_light", else "logo". Hover: N Games in Library. Two Discord applications because Discord shows the
   APPLICATION'S NAME: CLIENT_IDS en "Ikemen Reader" 1561206702357872735, ja "イケメンリーダー" 1561208897988071475
   (owner made both, same pictures); use_application() reconnects on a language change. Thread + retry every 10 s (owner: Discord started later is picked up quickly), clears
   on close. Tests use a stand-in (rpc_class / a mocked presence) - never the owner's real Discord.
@@ -1588,3 +1588,13 @@ before changing it.
   minimised; not the pointer, not DwmFlush, window not layered) = Windows' cost of showing our GDI-flushed drawing.
 - screenwheel.py gotcha: the app it starts inherits its stdout -> a piped run never ends; start it with DEVNULL
   (fixed in claude-tools/screenwheel.py).
+
+## Colour code boxes + Discord picture (2026-10-26, owner)
+- Owner: "highlighting a colour box starts from the start of the text". Live test with real mouse input (real
+  window, owner's fonts/theme): clicks and drags land exactly where pressed - Qt/Windows normal. The cause was
+  double-click = word selection, which stops at "#" (selects "F6D3DD"). Real bug behind it: pasting "#F6D3DD" over
+  that gave "##F6D3DD", cut to 7 characters by setMaxLength(7) -> invalid -> old colour quietly put back.
+  Now: HexBox (double-click selects all, "#" included), no length cap, hex_code() reads what's typed/pasted (with or
+  without "#", doubled "#", spaces, pasted into the middle = the code after the last "#"). Tests: ColourCodes.
+- Discord picture now follows the Main Area colour, not the logo fill (see DISCORD PRESENCE above): the owner's pink
+  light theme with a cream logo showed the dark-theme picture.

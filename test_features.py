@@ -2691,6 +2691,42 @@ class GameNotes(unittest.TestCase):
             self.assertEqual(lib.get(g.game_id).notes, "line 1\n日本語")
 
 
+class ColourCodes(unittest.TestCase):
+    """Custom Theme's colour code boxes: a pasted code counts however it arrives (owner, 2026-10-26)."""
+
+    def test_hex_code(self):
+        import app
+        for text, want in (("#f6d3dd", "#F6D3DD"), ("F6D3DD", "#F6D3DD"), ("##F6D3DD", "#F6D3DD"),
+                           (" #F6D3DD ", "#F6D3DD"), ("#F6#F6D3DDD3DD", "#F6D3DD"), ("#F6D3D", None),
+                           ("#GGGGGG", None), ("", None)):
+            self.assertEqual(app.hex_code(text), want, text)
+
+    def test_double_click_selects_all_and_paste_counts(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        d = app.ThemeDialog(app.theme_colors("light"), lambda c: None)
+        try:
+            d.show()
+            hx = d.rows["bg"][1]
+            QTest.mouseDClick(hx, Qt.LeftButton, Qt.NoModifier, QPoint(hx.width() * 3 // 4, hx.height() // 2))
+            self.assertEqual(hx.selectedText(), hx.text())             # "#" included
+            hx.insert("#F6D3DD")                                       # pasted over it
+            hx.editingFinished.emit()
+            self.assertEqual(d.colors["bg"], "#F6D3DD")
+            hx.setText("##F6D3DD" + "D")                               # the old way's leftover: still counts
+            hx.editingFinished.emit()
+            self.assertEqual((d.colors["bg"], hx.text()), ("#F6D3DD", "#F6D3DD"))
+            hx.setText("nope")                                         # not a colour: the old one comes back
+            hx.editingFinished.emit()
+            self.assertEqual(hx.text(), "#F6D3DD")
+        finally:
+            app.discard(d)
+
+
 class SavedThemes(unittest.TestCase):
     """Custom Theme > Saved Themes (themes.py): whole looks (colours, background, fonts) in the cloud folder."""
 
@@ -4187,6 +4223,10 @@ class DiscordPresence(unittest.TestCase):
                     shown = w.presence.show.call_args.kwargs
                     self.assertEqual((shown["image"], shown["image_text"]), ("logo_light", "1 Game in Library"))
                     app.apply_theme("custom", app.theme_colors("light"))   # custom, started from Light: same
+                    w._update_presence()
+                    self.assertEqual(w.presence.show.call_args.kwargs["image"], "logo_light")
+                    pink = dict(app.theme_colors("light"), bg="#F6D3DD", logo_fill="#FFF8F5")
+                    app.apply_theme("custom", pink)                       # light Main Area, cream logo: still light
                     w._update_presence()
                     self.assertEqual(w.presence.show.call_args.kwargs["image"], "logo_light")
                     app.apply_theme("custom", app.theme_colors("dark"))    # custom from Dark: the original
