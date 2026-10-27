@@ -34,12 +34,13 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   (shortcut reader; follows Luna `--Exec` shortcuts to the game; keeps a shortcut's arguments, e.g. a loader's
   "AlphaROMdiE.exe malie.exe", stored as MachinePaths.args, else taken from a shortcut beside the .exe), `vn.py` (small CLI), `themes.py` (saved custom
   themes in `<library root>/themes/`), `outside.py` (starts
-  every outside program: games, Luna, LE, admin prompt).
+  every outside program: games, Luna, LE, admin prompt), `taskicon.py` (pinned taskbar button + desktop + Start menu shortcuts
+  take the theme's icon; packaged program only).
 - `assets/`: `Logo.png`, `Icon.png`, `Font.otf` (Hiragino Maru Gothic ProN W4, owner-supplied; the owner has legal permission for all
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 308 tests (after 2.0.5: + colour code boxes, Discord device used last; 2.0.5: + path boxes / wide pop-ups, pop-ups deleted, closed test windows deleted per test; 2.0.4: + arrangement per view, Language list fade; 2.0.3: + shortcut
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 311 tests (2.0.6: + colour code boxes, Discord device used last, themed shortcut icons; 2.0.5: + path boxes / wide pop-ups, pop-ups deleted, closed test windows deleted per test; 2.0.4: + arrangement per view, Language list fade; 2.0.3: + shortcut
   arguments, Choose VNDB Cover; 2.0.2: + add into open folder / folder-bar rename / trash-drop fade + removal fade; full run now ~7-8 min; 2.0.1: + drag-scroll turns / scroll guard / bars wait / fade-back / held cover while a
   session ends, title-bar press focuses; 2.0.0: notes, saved themes, closed-window timers), all pass on
   the PC (Python 3.14, `py -m unittest`; ~7-8 min with the app open) and the laptop (Python 3.15, ~8-9 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.

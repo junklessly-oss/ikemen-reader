@@ -2691,6 +2691,155 @@ class GameNotes(unittest.TestCase):
             self.assertEqual(lib.get(g.game_id).notes, "line 1\n日本語")
 
 
+class ShortcutIcons(unittest.TestCase):
+    """(owner, 2026-10-26) The pinned taskbar button + desktop shortcuts follow the theme's icon (taskicon.py).
+    Stand-in shortcuts in a temporary folder - never the owner's real taskbar or desktop."""
+
+    def test_update_and_back(self):
+        import taskicon
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pins, icons = tmp / "pins", tmp / "icons"
+            pins.mkdir()
+            exe = r"C:\Windows\notepad.exe"
+            taskicon.make_shortcut(pins / "Ikemen Reader.lnk", exe)
+            taskicon.make_shortcut(pins / "Other.lnk", r"C:\Windows\explorer.exe")
+            ico = taskicon.ico_bytes([(16, b"one")])
+            name = taskicon.icon_name("#a84368", "#FFF8F5")
+            self.assertEqual(name, taskicon.icon_name("#A84368", "#fff8f5"))      # (a look = one file name)
+            self.assertEqual(taskicon.update(exe, ico, name, icons, [pins]), [pins / "Ikemen Reader.lnk"])
+            self.assertEqual(taskicon.icon_of(pins / "Ikemen Reader.lnk"), (str(icons / name), 0))
+            self.assertEqual((icons / name).read_bytes(), ico)
+            self.assertEqual(taskicon.icon_of(pins / "Other.lnk"), ("", 0))        # other programs: untouched
+            self.assertEqual(taskicon.update(exe, ico, name, icons, [pins]), [])  # already right: not touched
+            self.assertTrue((icons / "originals" / "Ikemen Reader.lnk").is_file())
+            self.assertEqual(taskicon.update(exe, None, "", icons, [pins]), [pins / "Ikemen Reader.lnk"])
+            self.assertEqual(taskicon.icon_of(pins / "Ikemen Reader.lnk"), ("", 0))   # original: the .exe's own
+            for i in range(taskicon.KEEP_ICONS + 3):                                    # old looks cleaned up
+                taskicon.update(exe, ico, f"icon_{i}.ico", icons, [pins])
+                time.sleep(0.02)
+            left = sorted(p.name for p in icons.glob("icon_*.ico"))
+            self.assertEqual(len(left), taskicon.KEEP_ICONS)
+            self.assertIn(f"icon_{taskicon.KEEP_ICONS + 2}.ico", left)
+
+    def test_the_edge_cases(self):
+        """(owner, 2026-10-26: "fix everything possible") a shortcut that can't be changed doesn't stop the rest; an
+        icon the owner chose is left alone; a deleted icon file is made again and Windows told; Start menu subfolders;
+        a redrawn picture = a new file name."""
+        import stat
+        import taskicon
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pins, icons = tmp / "pins", tmp / "icons"
+            programs = tmp / "Start Menu" / "Programs"
+            (programs / "Ikemen").mkdir(parents=True)
+            pins.mkdir()
+            exe = r"C:\Windows\notepad.exe"
+            for f in (pins / "a.lnk", pins / "b.lnk", pins / "mine.lnk", programs / "Ikemen" / "Ikemen Reader.lnk"):
+                taskicon.make_shortcut(f, exe)
+            with taskicon._Link(pins / "mine.lnk") as s:                  # the owner's own icon choice
+                s.set_icon(r"C:\Windows\explorer.exe", 0)
+                s.save()
+            os.chmod(pins / "a.lnk", stat.S_IREAD)                         # can't be written (like the shared desktop)
+            try:
+                ico, name = taskicon.ico_bytes([(16, b"one")]), "icon_x.ico"
+                changed = taskicon.update(exe, ico, name, icons, [pins, programs])
+                self.assertEqual(changed, [pins / "b.lnk", programs / "Ikemen" / "Ikemen Reader.lnk"])
+                self.assertEqual(taskicon.icon_of(pins / "a.lnk"), ("", 0))
+                self.assertEqual(taskicon.icon_of(pins / "mine.lnk"), (r"C:\Windows\explorer.exe", 0))
+                (icons / name).unlink()                                    # the data folder cleared
+                self.assertEqual(taskicon.update(exe, ico, name, icons, [pins]), [pins / "b.lnk"])   # told again
+                self.assertTrue((icons / name).is_file())
+                self.assertEqual(taskicon.update(exe, ico, name, icons, [pins]), [])
+            finally:
+                os.chmod(pins / "a.lnk", stat.S_IREAD | stat.S_IWRITE)
+            self.assertNotEqual(taskicon.icon_name("#A84368", "#FFF8F5", b"old"),
+                                taskicon.icon_name("#A84368", "#FFF8F5", b"new"))
+
+    def test_window_follows_the_theme(self):
+        from unittest import mock
+        import taskicon
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            pins = Path(tmp) / "pins"
+            pins.mkdir()
+            exe = r"C:\Windows\notepad.exe"
+            taskicon.make_shortcut(pins / "Ikemen Reader.lnk", exe)
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            w.presence.stop()
+            self.assertEqual(w._icon_folders, [])                        # (run from source: never the real ones)
+            w._icon_folders = [pins]
+            try:
+                with mock.patch.object(app.sys, "executable", exe):
+                    def settle():
+                        w._update_shortcut_icons()
+                        app.wait_for_tasks(5)
+                        QApplication.processEvents()
+                    app.apply_theme("light")                             # a recoloured logo: its own icon file
+                    settle()
+                    loc, _ = taskicon.icon_of(pins / "Ikemen Reader.lnk")
+                    picture = app.asset("Icon.png").read_bytes()
+                    self.assertEqual(Path(loc).name, taskicon.icon_name(app.LOGO["logo_fill"], app.LOGO["logo_outline"],
+                                                                        picture))
+                    self.assertTrue(Path(loc).is_file())
+                    self.assertTrue(Path(loc).read_bytes().startswith(bytes([0, 0, 1, 0])))   # (an .ico)
+                    app.apply_theme("dark")                              # the original look: the .exe's own icon
+                    settle()
+                    self.assertEqual(taskicon.icon_of(pins / "Ikemen Reader.lnk"), ("", 0))
+                    # not while editing (Windows' refresh flickers every icon on screen: once, when Settings closes)
+                    w.restyle()
+                    self.assertFalse(w._icon_timer.isActive())
+                    with mock.patch.object(app, "SettingsDialog",
+                                           lambda *a: mock.Mock(exec=lambda: 0, result_settings=None)), \
+                            mock.patch.object(app, "discard"):
+                        w.open_settings()                                # (cancelled or saved: the look kept)
+                    self.assertTrue(w._icon_timer.isActive())
+                    self.assertEqual(w._icon_timer.interval(), app.SHORTCUT_ICON_WAIT_MS)
+                    w._icon_timer.stop()
+
+                    # the colour picker (2026-10-26, owner: "isn't following the live preview" / title-bar logos
+                    # flashed black as it opened): its black / white sample looks never reach the window icons...
+                    seen = []
+                    real_icon = app.app_icon
+                    td = app.ThemeDialog(app.theme_colors("dark"), lambda c: (app.apply_theme("custom", c),
+                                                                             app.restyle_all()))
+                    try:
+                        td.show()
+                        with mock.patch.object(app, "app_icon",
+                                               lambda logo=None: seen.append(dict(logo or app.LOGO)) or real_icon(logo)):
+                            td._live = app.LiveColour("logo_fill", td.colors, td.preview)
+                            self.assertNotIn("#000000", [s["logo_fill"] for s in seen])
+                            self.assertNotIn("#FFFFFF", [s["logo_fill"] for s in seen])
+                            td._set("logo_fill", "#A84368")              # ...and a drag step reaches them live
+                            self.assertEqual(w._icon_logo["logo_fill"], "#A84368")
+                            end = time.monotonic() + 2
+                            while not any(s["logo_fill"] == "#A84368" for s in seen) and time.monotonic() < end:
+                                QApplication.processEvents()
+                            self.assertTrue(any(s["logo_fill"] == "#A84368" for s in seen))   # window icons
+                            self.assertFalse(w._icon_timer.isActive())   # (the taskbar waits for Settings to close)
+                        self.assertEqual(taskicon.icon_of(pins / "Ikemen Reader.lnk"), ("", 0))
+                    finally:
+                        if td._live is not None:
+                            td._live.finish()
+                            td._live = None
+                        app.discard(td)
+                    app.apply_theme("light")                             # closed right after Settings: still follows
+                    w._icon_timer.start(app.SHORTCUT_ICON_WAIT_MS)
+                    w.close()
+                    loc, _ = taskicon.icon_of(pins / "Ikemen Reader.lnk")
+                    self.assertEqual(Path(loc).name, taskicon.icon_name(app.LOGO["logo_fill"], app.LOGO["logo_outline"],
+                                                                        picture))
+            finally:
+                app.apply_theme("dark")
+                w.close()
+                app.wait_for_tasks(5)
+
+
 class ColourCodes(unittest.TestCase):
     """Custom Theme's colour code boxes: a pasted code counts however it arrives (owner, 2026-10-26)."""
 

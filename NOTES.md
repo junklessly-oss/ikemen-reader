@@ -1607,3 +1607,34 @@ before changing it.
   device stays hidden (even Away) until used. Hidden until the first read (no flash at start); no note = as before.
   A read begun within DISCORD_CLAIM_HOLD_S (5 s) of this device's claim is ignored (Drive may still show the old
   note). My Device (solo): off. Owner chose these over "Away without timer" / "Last Read" line / a cut-off.
+- Pinned taskbar icon EXPERIMENT (PC, Win 10, 2026-10-26, owner asked; Ikemen Reader running): pointing the pinned
+  .lnk's IconLocation (WScript.Shell) at a NEW .ico file name + SHChangeNotify(SHCNE_UPDATEITEM on the .lnk path,
+  then SHCNE_ASSOCCHANGED) changed the pinned button within 3 s, twice in a row (red, then blue), and back on restoring
+  the original .lnk. No sign-out / Explorer restart needed. Laptop (Win 11) not tried. Feature itself not built yet
+  (see "Themed icon on a PINNED taskbar button" above); owner leaning to 2.0.7.
+- Themed shortcut icons BUILT into 2.0.6 (owner, 2026-10-26): taskicon.py. Every theme change (MainWindow.restyle,
+  SHORTCUT_ICON_WAIT_MS 500 after edits pause; also SHORTCUT_ICON_START_MS 3 s after opening, and when a .lnk appears
+  in a watched folder = a new pin / desktop shortcut) writes %APPDATA%\IkemenReader\icons\icon_<colours hash>.ico
+  (10 sizes, PNG entries, like make_icon.py; built on the main thread, written in the background) and points every
+  .lnk whose target is this .exe (pinned TaskBar folder, user + Public desktop) at it via IShellLinkW / IPersistFile
+  over ctypes (Windows writes the file). Original logo colours -> icon location ("", 0) = the .exe's own. Already
+  right = not touched (so our own writes don't loop through the folder watcher). Each shortcut's first state is
+  copied to icons\originals. Newest 5 .ico kept. Packaged program only (updater.FROZEN): source runs / tests never
+  touch the real taskbar. Chosen over PKEY_AppUserModel_RelaunchIconResource (the folder watcher covers new pins).
+  Live check on the owner's PC (built exe): pinned button went from the original star to the pink theme's cream/rose
+  star within seconds of opening. Laptop (Win 11) not seen yet.
+- Shortcut icons, same evening (owner tests on the built exe): (a) the update ran on every theme step and Windows'
+  SHCNE_ASSOCCHANGED made EVERY icon on screen flicker. Tried on the PC: SHCNE_UPDATEITEM alone, SHCNE_UPDATEDIR on the
+  TaskBar folder, SHUpdateImage of the old icon - the pinned button ignored all three; only ASSOCCHANGED works. Owner
+  chose "update once when you finish": the shortcuts update when Settings CLOSES (Save or Cancel; open_settings ->
+  _icon_timer), at start, and when a new .lnk appears - never while editing; nothing changed = nothing written, no
+  flicker. (b) Title-bar logos flashed black / white as the colour picker opened: LiveColour's sample looks went
+  through restyle_all -> setWindowIcon. Now _ICON_HELD skips the window icons during those samples. (c) While the
+  picker drags a logo colour (live layer, no restyle) the window icons follow via MainWindow.preview_logo every
+  LIVE_LOGO_MS (16 = every frame, ~5 ms; 100 ms visibly lagged the layer - owner).
+- Shortcut icons, gaps closed (owner: "fix everything possible", 2026-10-26 late): a shortcut that can't be written
+  (shared desktop / Start menu need admin) is skipped, the rest still update; an icon the owner chose for a shortcut
+  (not the .exe's own / not one of ours) is left alone; a deleted .ico (data folder cleared) is made again and
+  Windows told; Start menu programs (user + shared, subfolders) added; .ico name includes a hash of Icon.png (a
+  redrawn picture = new names, no stale cache); an update still waiting when Ikemen Reader closes runs on close.
+  Still unseen: the laptop (Win 11). Owner has no Start menu shortcut on the PC.

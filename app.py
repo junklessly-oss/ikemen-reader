@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import (QAbstractNativeEventFilter, QSizeF, QEvent, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread,
-                            QTimer, QUrl, QVariantAnimation, Signal)
+                            QTimer, QUrl, QVariantAnimation, Signal, QBuffer, QIODevice)
 from PySide6.QtGui import (QCursor, QTextCursor, QPalette, QTextOption, QTextLayout, QAction, QColor, QFont, QFontDatabase, QFontMetrics, QFontMetricsF, QIcon, QImage,
                            QKeySequence, QLinearGradient, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap, QRegion,
                            QRadialGradient, QTransform)
@@ -48,6 +48,7 @@ import luna
 import outside
 import presence
 import regsync
+import taskicon
 import updater
 import vndb
 from i18n import tr
@@ -1436,19 +1437,20 @@ def apply_fonts(font_en: str, font_ja: str) -> None:
 _recoloured: dict = {}
 
 
-def themed_image(name: str, height: int) -> QImage:
-    """Logo.png / Icon.png at a given pixel height, in the theme's logo colours. Both images are two-tone
-    (light fill, dark outline, soft edges between), so each pixel is rebuilt from the two chosen colours
+def themed_image(name: str, height: int, logo: Optional[dict] = None) -> QImage:
+    """Logo.png / Icon.png at a given pixel height, in the theme's logo colours (or `logo`'s). Both images are
+    two-tone (light fill, dark outline, soft edges between), so each pixel is rebuilt from the two chosen colours
     according to where its brightness falls between the originals; transparency is kept, so edges stay soft."""
-    key = (name, height, LOGO["logo_fill"], LOGO["logo_outline"])
+    logo = logo or LOGO
+    key = (name, height, logo["logo_fill"], logo["logo_outline"])
     if key in _recoloured:
         return _recoloured[key]
     img = QImage(str(asset(name)))
     if img.isNull():
         return img
     img = img.scaledToHeight(height, Qt.SmoothTransformation).convertToFormat(QImage.Format_ARGB32)
-    if LOGO != LOGO_ORIGINAL:
-        img = _recolour(img, LOGO["logo_fill"], LOGO["logo_outline"])
+    if (logo["logo_fill"], logo["logo_outline"]) != (LOGO_ORIGINAL["logo_fill"], LOGO_ORIGINAL["logo_outline"]):
+        img = _recolour(img, logo["logo_fill"], logo["logo_outline"])
     if len(_recoloured) > 40:
         _recoloured.clear()
     _recoloured[key] = img
@@ -1475,8 +1477,8 @@ def _recolour(img: QImage, fill: str, outline: str) -> QImage:
     return out
 
 
-def app_icon() -> QIcon:
-    return QIcon(QPixmap.fromImage(themed_image("Icon.png", 256)))
+def app_icon(logo: Optional[dict] = None) -> QIcon:
+    return QIcon(QPixmap.fromImage(themed_image("Icon.png", 256, logo)))
 
 
 def contrast(a: str, b: str) -> float:
@@ -1546,7 +1548,8 @@ def restyle_all() -> None:
     apply_palette()
     root = _SHEET_ROOT[0]
     (root if root is not None else app).setStyleSheet(build_style())
-    app.setWindowIcon(app_icon())
+    if not _ICON_HELD[0]:
+        app.setWindowIcon(app_icon())
     for w in app.topLevelWidgets():
         if w.isWindow() and w.isVisible() and w.windowType() in (Qt.Window, Qt.Dialog):
             set_border(w)                      # (Windows 11: the border follows the theme)
@@ -1555,6 +1558,9 @@ def restyle_all() -> None:
 
 
 _SHEET_ROOT: list = [None]
+# True while the colour picker draws its black / white sample looks (LiveColour): the window icons (title bars, taskbar)
+# aren't in those pictures, so they keep the real look - they used to flash black (owner, 2026-10-26)
+_ICON_HELD: list = [False]
 
 
 def discard(d: QWidget) -> None:
@@ -1658,6 +1664,13 @@ BAR_XFADE_S = 0.2                    # the Read button's cross-fade, old look ->
 BAR_OUT_S, BAR_IN_S = 0.15, 0.2      # every other piece of the bar that changed: fades out, then in (BarFader)
 PRESENCE_CHECK_MS = 2000             # Discord presence: what the window is doing, checked this often
 PRESENCE_AWAY_S = 300                # ...and "Away" after this long without using Ikemen Reader (owner: 5 minutes)
+# pinned taskbar button / desktop shortcuts take the themed icon this long after Settings closes - once per change kept,
+# not while editing: only Windows' "reload every icon" makes the taskbar look again, and it flickers every icon on screen
+# (owner, 2026-10-26: option 1 of 3; the gentler notices were tried on the PC and the pinned button ignored them)
+SHORTCUT_ICON_WAIT_MS = 500
+LIVE_LOGO_MS = 16                   # while the colour picker drags a logo colour: the window icons follow every frame (~5 ms;
+                                    # 100 ms lagged behind the live layer - owner, 2026-10-26)
+SHORTCUT_ICON_START_MS = 3000       # ...and this long after opening (kept out of the way of a smooth start)
 DISCORD_CLAIM_HOLD_S = 5.0           # after this device takes over Discord, the cloud note's older answer is ignored this long
 INSTANT_CLOSE_S = 5                 # a game that closes within this long of appearing "closed right after starting"
 ICON_DIM = 0.4                     # the bar's icon buttons when greyed (trash) or off (bookmarks): one dimness
@@ -6985,11 +6998,15 @@ class LiveColour:
                         and not isinstance(w, (ThemeDialog, QColorDialog)) and w not in exclude]
         hold_pulse(True)        # (the lights pause where they are: the pictures and the window underneath agree)
         shots = []
-        for probe in ("#000000", "#FFFFFF"):
-            c = dict(colors)
-            c[role] = probe
-            preview(c)
-            shots.append([w.grab().toImage().convertToFormat(QImage.Format_RGB32) for w in self.windows])
+        _ICON_HELD[0] = True
+        try:
+            for probe in ("#000000", "#FFFFFF"):
+                c = dict(colors)
+                c[role] = probe
+                preview(c)
+                shots.append([w.grab().toImage().convertToFormat(QImage.Format_RGB32) for w in self.windows])
+        finally:
+            _ICON_HELD[0] = False
         preview(colors)                                   # (the real look underneath again)
         self.parts = []
         for w, black, white in zip(self.windows, *shots):
@@ -7464,6 +7481,10 @@ class ThemeDialog(TaskOwner, QDialog):
         self._show(k)
         if self._live is not None and k == self._live.role:
             self._live.show(self.colors[k])
+            if k in LOGO_ORIGINAL:                       # (the window / taskbar icons aren't under the live layer)
+                for w in QApplication.topLevelWidgets():
+                    if isinstance(w, MainWindow):
+                        w.preview_logo(self.colors)
         self._changed()
 
     def _typed(self, k: str) -> None:
@@ -10169,6 +10190,23 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._presence_timer.setInterval(PRESENCE_CHECK_MS)
         self._presence_timer.timeout.connect(self._update_presence)
         self._presence_timer.start()
+
+        # pinned taskbar button + desktop shortcuts in the theme's icon (taskicon.py; the packaged program only)
+        self._icon_timer = QTimer(self, singleShot=True)
+        self._icon_timer.timeout.connect(self._update_shortcut_icons)
+        self._icon_busy = self._icon_again = False
+        self._icon_folders: list = []
+        self._icon_logo: Optional[dict] = None          # the colour picker's live logo colours (not applied yet)
+        self._logo_timer = QTimer(self, singleShot=True)
+        self._logo_timer.setInterval(LIVE_LOGO_MS)
+        self._logo_timer.timeout.connect(self._show_live_logo)
+        if updater.FROZEN and sys.platform == "win32":
+            self._icon_folders = taskicon.shortcut_folders()
+            from PySide6.QtCore import QFileSystemWatcher
+            self._icon_watch = QFileSystemWatcher([str(f) for f in self._icon_folders], self)
+            # (a new pin / desktop shortcut takes the themed icon as it appears; our own changes find nothing to do)
+            self._icon_watch.directoryChanged.connect(lambda _: self._icon_timer.start(SHORTCUT_ICON_WAIT_MS))
+            self._icon_timer.start(SHORTCUT_ICON_START_MS)
         self.apply_settings(settings)
         self._run(warm_up, lambda _: None)          # makes the first Play react instantly
         self._live_timer.start()
@@ -10188,12 +10226,16 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         """Redraw everything that isn't covered by the style sheet after a theme change."""
         if not hasattr(self, "anim"):
             return
+        held = _ICON_HELD[0]
+        if not held:
+            self._icon_logo = None                              # (the real look is applied: no live colour left)
         self.logo.refresh()
         self.add_btn.refresh_icon()
         self.settings_btn.refresh_icon()
         self.trash_btn.refresh_icon()
         self.bookmark_btn.refresh_icon()
-        self.setWindowIcon(app_icon())
+        if not held:
+            self.setWindowIcon(app_icon())
         self._style_scrollbar()
         self.grid.setItemDelegate(CardDelegate(self))     # fresh shadow etc.
         self._update_sync_label()
@@ -13378,6 +13420,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         discard(d)
         if ok:
             self.apply_settings(result)
+        if self._icon_folders:                                  # (the look kept - saved or cancelled back - once)
+            self._icon_timer.start(SHORTCUT_ICON_WAIT_MS)
 
     def restore_selected(self) -> None:
         g = self.selected()
@@ -14073,6 +14117,60 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         tweaking = any(isinstance(w, PRESENCE_TWEAKING) and w.isVisible() for w in QApplication.topLevelWidgets())
         return tr("presence.tweaking" if tweaking else "presence.browsing"), ""
 
+    def preview_logo(self, logo: dict) -> None:
+        """The colour picker is dragging a logo colour (its live layer doesn't restyle): the window icons follow at
+        once (every LIVE_LOGO_MS); the taskbar / desktop shortcuts when Settings closes."""
+        self._icon_logo = {"logo_fill": logo["logo_fill"], "logo_outline": logo["logo_outline"]}
+        if not self._logo_timer.isActive():
+            self._logo_timer.start()
+
+    def _show_live_logo(self) -> None:
+        if self._icon_logo is not None:
+            icon = app_icon(self._icon_logo)
+            QApplication.instance().setWindowIcon(icon)
+            self.setWindowIcon(icon)
+
+    def _update_shortcut_icons(self, now: bool = False) -> None:
+        """Point the pinned taskbar button / desktop / Start menu shortcuts at the theme's icon (the original look:
+        the .exe's own). The .ico is made here (the theme is read on this thread), the files are written in the
+        background - or right here (now: Ikemen Reader is closing with an update still waiting)."""
+        if not self._icon_folders:
+            return
+        if self._icon_busy:
+            if not now:
+                self._icon_again = True                   # (one more pass once this one ends, with the newest look)
+            return
+        fill, outline = LOGO["logo_fill"], LOGO["logo_outline"]
+        ico = None
+        if (fill, outline) != (LOGO_ORIGINAL["logo_fill"], LOGO_ORIGINAL["logo_outline"]):
+            images = []
+            for size in taskicon.SIZES:
+                buf = QBuffer()
+                buf.open(QIODevice.WriteOnly)
+                themed_image("Icon.png", size).save(buf, "PNG")
+                images.append((size, bytes(buf.data())))
+            ico = taskicon.ico_bytes(images)
+        exe, icons, folders = sys.executable, default_app_dir() / "icons", list(self._icon_folders)
+        try:
+            picture = asset("Icon.png").read_bytes()
+        except OSError:
+            picture = b""
+        name = taskicon.icon_name(fill, outline, picture)
+        if now:
+            try:
+                taskicon.update(exe, ico, name, icons, folders)
+            except OSError:
+                pass                                      # (checked again when it next opens)
+            return
+        self._icon_busy = True
+
+        def done(_) -> None:
+            self._icon_busy = False
+            if self._icon_again:
+                self._icon_again = False
+                self._icon_timer.start(0)
+        self._run(lambda: taskicon.update(exe, ico, name, icons, folders), done, done, low=True)
+
     def _discord_shared(self) -> bool:
         return not self.settings.solo and bool(self.settings.cloud_root) and self.library is not None
 
@@ -14187,6 +14285,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     pass
             os._exit(0)  # the game keeps running; nothing of ours is mid-write while we only watch it
         self.presence.stop()                      # Discord shows nothing once Ikemen Reader has closed
+        if self._icon_timer.isActive():           # (closed right after Settings: the shortcut icons still follow)
+            self._icon_timer.stop()
+            self._update_shortcut_icons(now=True)
         if self.settings.solo:
             try:
                 backup_solo_library(self.app_dir)     # (a solo library lives on one disk only)
