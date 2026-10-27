@@ -1598,3 +1598,12 @@ before changing it.
   without "#", doubled "#", spaces, pasted into the middle = the code after the last "#"). Tests: ColourCodes.
 - Discord picture now follows the Main Area colour, not the logo fill (see DISCORD PRESENCE above): the owner's pink
   light theme with a cream logo showed the dark-theme picture.
+- Discord: honest Away timer + only the device used last shows (owner, 2026-10-26: "away for 19 hours"; both devices
+  open = two statuses, Discord's choice which shows). Away's timer counts from the last use (it used to count from
+  the last read / start); coming back = a fresh timer; reading counts as use (not Away the moment it ends).
+  `<cloud>/discord.json` {"device": slot}: a device claims it on input while Ikemen Reader / its Anki is in front or
+  while reading (written only when it changes hands - whoever wrote last wins, no clocks compared); every 2 s check
+  reads it in the background and a device that isn't named clears its status. Closing doesn't hand over: the other
+  device stays hidden (even Away) until used. Hidden until the first read (no flash at start); no note = as before.
+  A read begun within DISCORD_CLAIM_HOLD_S (5 s) of this device's claim is ignored (Drive may still show the old
+  note). My Device (solo): off. Owner chose these over "Away without timer" / "Last Read" line / a cut-off.

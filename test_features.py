@@ -4216,7 +4216,10 @@ class DiscordPresence(unittest.TestCase):
                     w._last_active = time.monotonic() - 400
                     self.assertEqual(w._presence_look()[0], "Reading...")    # reading wins, even "idle"
                     w.worker, w.playing_id, w.play_phase = None, None, "done"
+                    self.assertEqual(w._presence_look()[0], "Browsing...")  # not Away the moment reading ends
+                    w._last_active = time.monotonic() - 400              # (reading counted as using it)
                     self.assertEqual(w._presence_look(), ("Away", ""))
+                    self.assertAlmostEqual(w._presence_since, time.time() - 400, delta=2)   # away since the last use
                 try:
                     app.apply_theme("light")                              # the Light theme: the light picture
                     w._update_presence()
@@ -4243,6 +4246,62 @@ class DiscordPresence(unittest.TestCase):
                     app.i18n.set_language("en")
             finally:
                 w.worker = None
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_only_the_device_used_last_shows(self):
+        """(owner, 2026-10-26) Both devices open: only the one used last shows; closing it doesn't hand over."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            lib = Library(cloud)
+            self.assertIsNone(lib.discord_device())                      # no note: each shows its own, as before
+            (cloud / "discord.json").write_text("[", "utf-8")
+            self.assertIsNone(lib.discord_device())
+            lib.claim_discord("Laptop")                                   # the laptop was used last
+            self.assertEqual(lib.discord_device(), "Laptop")
+            s = LocalSettings("PC", str(cloud))
+            s.discord = True
+            w = app.MainWindow(s)
+            w.presence.stop()
+            w.presence = mock.Mock()                                      # (never the owner's real Discord)
+            try:
+                def settle():
+                    for _ in range(2):                                    # (a read begun earlier finishes first)
+                        w._update_presence()
+                        app.wait_for_tasks(5)
+                        QApplication.processEvents()
+                    w.presence.reset_mock()
+                    w._update_presence()
+                with mock.patch.object(app.outside, "foreground_pid", return_value=1), \
+                        mock.patch.object(app.outside, "seconds_since_input", return_value=0.5):
+                    settle()                                              # PC not in use: the laptop shows, not here
+                    w.presence.show.assert_not_called()
+                    w.presence.clear.assert_called()
+                with mock.patch.object(app.outside, "foreground_pid", return_value=os.getpid()), \
+                        mock.patch.object(app.outside, "seconds_since_input", return_value=0.5):
+                    w._update_presence()                                  # used here: the PC takes over at once
+                    w.presence.show.assert_called()
+                    app.wait_for_tasks(5)
+                    self.assertEqual(lib.discord_device(), "PC")
+                lib.claim_discord("Laptop")                               # then the laptop is used again
+                w._discord_claimed -= 60                                  # (the PC's own claim long past)
+                with mock.patch.object(app.outside, "foreground_pid", return_value=1):
+                    settle()
+                    w.presence.show.assert_not_called()                   # the PC's status goes
+                    (cloud / "discord.json").unlink()                     # ...even "Away" here stays hidden while
+                    w._last_active = time.monotonic() - 400               # the laptop was the last one used
+                    lib.claim_discord("Laptop")
+                    settle()
+                    w.presence.show.assert_not_called()
+                w.settings.solo = True                                    # My Device: nothing to share
+                self.assertFalse(w._discord_shared())
+            finally:
                 w.close()
                 app.wait_for_tasks(5)
 

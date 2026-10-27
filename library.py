@@ -462,6 +462,7 @@ class Library:
         self.devices_file = self.root / "devices.json"
         self.folders_file = self.root / "folders.json"
         self.order_file = self.root / "order.json"          # the library's own order (Custom)
+        self.discord_file = self.root / "discord.json"      # the device used last (only it shows on Discord)
 
     def _file(self, game_id: str) -> Path:
         return self.games_dir / f"{safe_game_id(game_id)}.json"
@@ -970,6 +971,20 @@ class Library:
 
     def known_computers(self) -> set[str]:
         return {v.get("computer") for v in self._devices().values() if v.get("computer")}
+
+    # -- Discord: only the device used last shows a status (owner, 2026-10-26)
+    def discord_device(self) -> Optional[str]:
+        """The device slot used most recently, or None (not known: each device shows its own, as before)."""
+        try:
+            d = json.loads(self.discord_file.read_text("utf-8"))
+        except (OSError, ValueError):
+            return None
+        v = d.get("device") if isinstance(d, dict) else None
+        return v if isinstance(v, str) and v else None
+
+    def claim_discord(self, slot: str) -> None:
+        """This device is in use now: the other one's status goes (whoever wrote last wins - no clocks compared)."""
+        _atomic_write(self.discord_file, json.dumps({"device": slot, "at": time.time()}))
 
 
 def sort_games(games: list[Game], how: str) -> list[Game]:

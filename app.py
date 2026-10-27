@@ -92,7 +92,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.5"
+APP_VERSION = "2.0.6"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -1658,6 +1658,7 @@ BAR_XFADE_S = 0.2                    # the Read button's cross-fade, old look ->
 BAR_OUT_S, BAR_IN_S = 0.15, 0.2      # every other piece of the bar that changed: fades out, then in (BarFader)
 PRESENCE_CHECK_MS = 2000             # Discord presence: what the window is doing, checked this often
 PRESENCE_AWAY_S = 300                # ...and "Away" after this long without using Ikemen Reader (owner: 5 minutes)
+DISCORD_CLAIM_HOLD_S = 5.0           # after this device takes over Discord, the cloud note's older answer is ignored this long
 INSTANT_CLOSE_S = 5                 # a game that closes within this long of appearing "closed right after starting"
 ICON_DIM = 0.4                     # the bar's icon buttons when greyed (trash) or off (bookmarks): one dimness
 BAR_WAKE_S = 0.22                    # nothing selected <-> selected: the whole bar blends as one, over this long
@@ -10157,7 +10158,13 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.anki_from_here = False                   # (Anki started / brought forward by the easter egg)
         self._presence_since = time.time()            # the elapsed timer (restarts when reading starts / ends)
         self._presence_reading = False
+        self._presence_away = False
         self._last_active = time.monotonic()          # last time the owner was using Ikemen Reader (or its Anki)
+        # only the device used last shows on Discord (<cloud>/discord.json, read in the background every check)
+        self._discord_device: Optional[str] = None    # what the note last said (None: no note - show as before)
+        self._discord_read = False                    # (hidden until the note has been read once: no flash at start)
+        self._discord_busy = False
+        self._discord_claimed = -DISCORD_CLAIM_HOLD_S
         self._presence_timer = QTimer(self)
         self._presence_timer.setInterval(PRESENCE_CHECK_MS)
         self._presence_timer.timeout.connect(self._update_presence)
@@ -14040,16 +14047,25 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         if reading != self._presence_reading:          # (the timer restarts when reading starts or ends)
             self._presence_reading = reading
             self._presence_since = time.time()
-        if reading:
-            return tr("presence.reading"), g.title
         now = time.monotonic()
         front = outside.foreground_pid()
         using = front == os.getpid() or (self.anki_from_here and front is not None
                                          and outside.is_anki_pid(front, self.settings.anki_path))
+        if (using or reading) and outside.seconds_since_input() < PRESENCE_CHECK_MS / 1000 + 1:
+            self._claim_discord()                      # (reading: the game in front is this device in use too)
+        if reading:
+            self._last_active = now                    # (reading counts as using it: not Away the moment it ends)
+            return tr("presence.reading"), g.title
         if using and outside.seconds_since_input() < PRESENCE_CHECK_MS / 1000 + 1:
             self._last_active = now
         if now - self._last_active >= PRESENCE_AWAY_S:
+            if not self._presence_away:                # the timer counts from the last use, not the last read
+                self._presence_away = True             # (owner, 2026-10-26: "away for 19 hours")
+                self._presence_since = time.time() - (now - self._last_active)
             return tr("presence.away"), ""
+        if self._presence_away:                        # back: a fresh timer
+            self._presence_away = False
+            self._presence_since = time.time()
         if not updater.FROZEN:
             # run from the project folder, not the packaged Ikemen Reader.exe: that's the owner working on it
             # (owner, 2026-10-17: "it would be cute") - instead of Browsing / Tweaking
@@ -14057,11 +14073,45 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         tweaking = any(isinstance(w, PRESENCE_TWEAKING) and w.isVisible() for w in QApplication.topLevelWidgets())
         return tr("presence.tweaking" if tweaking else "presence.browsing"), ""
 
+    def _discord_shared(self) -> bool:
+        return not self.settings.solo and bool(self.settings.cloud_root) and self.library is not None
+
+    def _claim_discord(self) -> None:
+        """The owner is at this device: it becomes the one Discord shows (written only when it changes hands)."""
+        me = self.settings.machine_name
+        if not self._discord_shared() or (self._discord_read and self._discord_device == me):
+            return
+        self._discord_device, self._discord_read = me, True
+        self._discord_claimed = time.monotonic()
+        library = self.library
+        self._run(lambda: library.claim_discord(me), lambda _: None, lambda _: None, low=True)
+
+    def _read_discord_note(self) -> None:
+        """Which device was used last, from the cloud folder (in the background: it can stall)."""
+        if self._discord_busy:
+            return
+        self._discord_busy = True
+        library, started = self.library, time.monotonic()
+
+        def done(device) -> None:
+            self._discord_busy = False
+            # (a read begun before / just after this device claimed may still see the old note: not taken back)
+            if library is self.library and started > self._discord_claimed + DISCORD_CLAIM_HOLD_S:
+                self._discord_device, self._discord_read = device, True
+
+        def failed(_) -> None:
+            self._discord_busy = False
+        self._run(library.discord_device, done, failed, low=True)
+
     def _update_presence(self) -> None:
         try:
             look = self._presence_look()
         except Exception:                               # noqa: BLE001 - never let Discord trouble the window
             look = None
+        if look is not None and self._discord_shared():
+            self._read_discord_note()
+            if not self._discord_read or self._discord_device not in (None, self.settings.machine_name):
+                look = None                             # the other device was used last: it shows, this one doesn't
         if look is None:
             self.presence.clear()
             return
