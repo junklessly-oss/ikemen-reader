@@ -1272,7 +1272,8 @@ before changing it.
   bookmarks / lights / hover text at small sizes); live preview must scale existing pictures while dragging and
   re-decode on release. Open questions for the owner: Settings slider and/or Ctrl+wheel; per device (lean) or shared;
   smallest ~60 %.
-- Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +
+- DONE in 2.0.6 (2026-10-26, taskicon.py; see the 2026-10-26 notes at the end - the RelaunchIconResource part was
+  replaced by a folder watcher): Themed icon on a PINNED taskbar button (owner, 2026-10-19): the window icon already follows the theme (Light swap +
   Custom edits; restyle_all / MainWindow.restyle -> app_icon()), and an unpinned taskbar button shows it (owner
   confirmed). A PINNED button (owner's: `%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\
   Ikemen Reader.lnk`) always shows the shortcut's icon = the .exe's build-time icon, and re-pinning takes the .exe's
