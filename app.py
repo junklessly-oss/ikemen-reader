@@ -93,7 +93,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.7"
+APP_VERSION = "2.0.8"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -2318,6 +2318,36 @@ def wait_for_tasks(seconds: float) -> bool:
     for t in list(_LIVE_TASKS):
         t.wait(max(0, int((end - time.monotonic()) * 1000)))
     return not any(t.isRunning() for t in _LIVE_TASKS)
+
+
+EXIT_GUARD_S = 20          # closing (saves written, background work waited for) never takes longer than this
+
+
+def exit_watchdog(seconds: float) -> threading.Event:
+    """Once the window starts closing: if the program still hasn't ended `seconds` later, write what every thread
+    was doing to %APPDATA%\\IkemenReader\\exit.log and end it. (2.0.7 on the laptop: the window closed but the
+    program stayed running unseen - it blocked the update and every later start.) Set the returned event to
+    call it off (closing was cancelled)."""
+    off = threading.Event()
+
+    def watch():
+        if off.wait(seconds):
+            return
+        try:
+            import faulthandler
+            d = default_app_dir()
+            d.mkdir(parents=True, exist_ok=True)
+            with open(d / "exit.log", "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {APP_VERSION}: still running {seconds:g} s after "
+                        f"closing - ended. What each thread was doing:\n")
+                f.flush()
+                faulthandler.dump_traceback(f, all_threads=True)
+                f.write("\n")
+        except Exception:  # noqa: BLE001 - the log is only a help; ending is what matters
+            pass
+        os._exit(0)
+    threading.Thread(target=watch, daemon=True, name="exit-watchdog").start()
+    return off
 
 
 class TaskOwner:
@@ -10511,6 +10541,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         # IKEMEN_UPDATE_CHECK=1 shows the question when running from source, for testing)
         self._release: Optional[updater.Release] = None
         self._update_ready: Optional[Path] = None    # unpacked and waiting: installed when Ikemen Reader closes
+        self._update_helper: Optional[Path] = None   # Restart Now: the helper, started once closing goes ahead
+        self.exit_guard_s: Optional[float] = None    # set by main(): quitting can't take longer (see exit_watchdog)
         self._update_asked = False
         before = updater.note_version(self.app_dir, APP_VERSION)
         if before:
@@ -14423,12 +14455,15 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             message(self, tr("update.wait_game"))
             return
         try:
-            updater.install_on_exit(self._update_folder(), new, restart=True)
+            helper = updater.install_on_exit(self._update_folder(), new, restart=True, run=False)
         except (OSError, ValueError):
             message(self, tr("update.failed"))
             return
-        self._update_ready = None                    # (the helper is already waiting: not twice on closing)
-        self.close()
+        # started only once closing really goes ahead (closeEvent): if closing is refused (saves began syncing),
+        # a waiting helper would end this copy mid-sync once it gave up waiting
+        self._update_ready, self._update_helper = new, helper
+        if not self.close():
+            self._update_helper = None               # (still installed on a later close, as with Later)
 
     # ------------------------------------------------------------------ Discord presence
     def _presence_look(self) -> Optional[tuple[str, str]]:
@@ -14614,6 +14649,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             message(self, tr("close.syncing"))      # stopping mid-sync could leave saves half-uploaded
             e.ignore()
             return
+        guard = exit_watchdog(self.exit_guard_s) if self.exit_guard_s else None
         notes = self.findChild(NotesLayer)
         if notes is not None:
             notes.save_now(wait=True)               # (closed with a game's notes open: they're kept)
@@ -14622,6 +14658,8 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self._remember_position()
         show_hidden_explorer_windows()
         if self.worker:
+            if guard is not None:
+                guard.set()                         # (waiting for the owner's answer; Continue leaves at once)
             g = self.games.get(self.playing_id)
             if message(self, tr("close.body", title=g.title if g else ""), tr("close.title"),
                        [("cancel", tr("game.cancel")), ("continue", tr("close.continue"))],
@@ -14646,11 +14684,19 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                 pass
         if self.checker:
             self.checker.wait(5000)       # (it may be uploading saves made outside Ikemen Reader)
-        if self._update_ready is not None and updater.FROZEN:
+        if self._update_helper is not None:
+            try:                          # Restart Now: the helper waits for us to end, then installs + reopens
+                updater.start_helper(self._update_helper)
+            except OSError:
+                pass
+        elif self._update_ready is not None and updater.FROZEN:
             try:                          # downloaded earlier ("Later"): put in place once we've closed
                 updater.install_on_exit(self._update_folder(), self._update_ready, restart=False)
             except (OSError, ValueError):
                 pass
+        server = getattr(self, "instance_server", None)
+        if server is not None:
+            server.close()                # (a new start now waits for this copy to end, or offers to end it)
         e.accept()                        # other background work: see wait_for_tasks() in main()
 
 
@@ -14839,12 +14885,15 @@ def hand_over_to_running_copy() -> bool:
     from PySide6.QtNetwork import QLocalSocket
     s = QLocalSocket()
     s.connectToServer(INSTANCE_KEY)
-    if s.waitForConnected(300):
-        s.write(b"show")
-        s.waitForBytesWritten(300)
-        s.disconnectFromServer()
-        return True
-    return False
+    if not s.waitForConnected(300):
+        return False
+    s.write(b"show")
+    s.waitForBytesWritten(300)
+    # only a reply counts: Windows accepts the connection for a copy that's frozen or stuck while closing (its
+    # listener still open), so connecting alone made every start quietly hand over to it (laptop, 2.0.7)
+    answered = s.waitForReadyRead(2000) and bytes(s.readAll().data()).startswith(b"shown")
+    s.disconnectFromServer()
+    return answered
 
 
 _INSTANCE_LOCK: list = []          # the Windows lock this copy holds while it runs (see claim_instance)
@@ -14866,13 +14915,63 @@ def claim_instance() -> bool:
     return not already
 
 
-def hand_over_when_ready(seconds: float = 8.0) -> None:
-    """Another copy is running or still starting: bring its window to the front once it can answer."""
+def hand_over_when_ready(seconds: float = 8.0) -> bool:
+    """Another copy is running or still starting: bring its window to the front once it can answer. False if it
+    never did (stuck: see take_over_from_stuck_copy)."""
     end = time.monotonic() + seconds
     while time.monotonic() < end:
         if hand_over_to_running_copy():
-            return
+            return True
         time.sleep(0.2)
+    return False
+
+
+def other_copies() -> list:
+    """The other Ikemen Reader processes running (psutil.Process), this one left out."""
+    import psutil
+    me = os.getpid()
+    if getattr(sys, "frozen", False):
+        name = Path(sys.executable).name.lower()
+        match = lambda p: (p.info.get("name") or "").lower() == name
+    else:                                           # (from source: python running this same app.py)
+        script = str(Path(__file__).resolve()).lower()
+        match = lambda p: any(script == str(Path(a).resolve()).lower() for a in (p.info.get("cmdline") or [])[1:3]
+                              if a.lower().endswith(".py"))
+    found = []
+    for p in psutil.process_iter(["name"] if getattr(sys, "frozen", False) else ["name", "cmdline"]):
+        try:
+            if p.pid != me and match(p):
+                found.append(p)
+        except Exception:  # noqa: BLE001 - gone / not ours to look at
+            pass
+    return found
+
+
+def take_over_from_stuck_copy() -> bool:
+    """Another copy holds the lock but doesn't answer (stuck while closing, or frozen). Ask, then end it. True =
+    carry on opening. Never silent: a stuck copy used to make every start quietly do nothing (laptop, 2.0.7)."""
+    import psutil
+    try:
+        stuck = other_copies()
+    except Exception:  # noqa: BLE001
+        stuck = []
+    if not stuck:
+        return True                                 # (it ended meanwhile)
+    alive = lambda: [p for p in stuck if p.is_running()]
+    how = message(None, tr("instance.stuck"), tr("instance.stuck_title"),
+                  [("cancel", tr("game.cancel")), ("end", tr("instance.end"))], dismiss="cancel",
+                  done_when=lambda: not alive())
+    if how == "done":
+        return True                                 # (it ended by itself while asking)
+    if how != "end":
+        return False
+    for p in alive():
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001 - already gone
+            pass
+    psutil.wait_procs(stuck, timeout=5)
+    return True
 
 
 def listen_for_second_copies(window: QWidget) -> None:
@@ -14885,6 +14984,8 @@ def listen_for_second_copies(window: QWidget) -> None:
         conn = server.nextPendingConnection()
         if conn is not None:
             conn.disconnected.connect(conn.deleteLater)
+            conn.write(b"shown")                    # (the reply hand_over_to_running_copy waits for)
+            conn.flush()
         if window.isMinimized():
             window.showNormal()
         window.show()
@@ -14892,6 +14993,7 @@ def listen_for_second_copies(window: QWidget) -> None:
         window.activateWindow()
     server.newConnection.connect(show)
     server.listen(INSTANCE_KEY)
+    window.instance_server = server             # (closed once the window closes: a closing copy takes no new starts)
 
 
 def main() -> None:
@@ -14916,9 +15018,10 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Ikemen Reader")
     app.setEffectEnabled(Qt.UI_AnimateCombo, False)   # drop-downs slide open by themselves (ThemedCombo)
-    if not claim_instance():
-        hand_over_when_ready()                  # already open (or opening): that window comes to the front instead
-        return
+    claimed = claim_instance()
+    if not claimed and hand_over_when_ready():
+        updater.confirm_started()               # (an update's restart: this version works)
+        return                                  # already open (or opening): that window came to the front instead
     install_error_net()
     install_menu_lines(app)
     _install_stall_log()
@@ -14942,6 +15045,9 @@ def main() -> None:
     app.setStyleSheet(build_style())
     if settings is not None:
         i18n.set_language(settings.language)
+    if not claimed and not take_over_from_stuck_copy():
+        updater.confirm_started()
+        return
     if settings is None or (not settings.cloud_root and not settings.solo):
         # a new setup (never asked of existing two-device users): one computer = My Device (owner's plan)
         how = message(None, tr("first.body"), tr("first.title"),
@@ -14955,10 +15061,12 @@ def main() -> None:
             return
     warm_title_bar()                            # (Windows' title bar ready before the real window appears)
     w = MainWindow(settings)
+    w.exit_guard_s = EXIT_GUARD_S
     listen_for_second_copies(w)
     w.place_at_last_position()                  # (where it was when last closed)
     w.prepare_first_screen()                    # (its first picture ready the moment it appears)
     w.show()
+    QTimer.singleShot(1500, updater.confirm_started)   # (an update's restart: opened properly, keep it)
     code = app.exec()
     if w.checker is not None and w.checker.isRunning() and not w.checker.wait(3000):
         os._exit(code)           # still uploading a big save folder: stop cleanly (it carries on next time)
@@ -14968,5 +15076,33 @@ def main() -> None:
     sys.exit(code)
 
 
+_CRASH_LOG: list = []              # crash.log, open for the program's whole life (see note_crashes)
+
+
+def note_crashes() -> None:
+    """From the very first moment: a crash Python can't catch (inside Qt or Windows) is written to crash.log, and an
+    error while starting - before install_error_net - to error.log. Otherwise a version that won't open leaves
+    nothing to go on."""
+    try:
+        import faulthandler
+        d = default_app_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        _CRASH_LOG.append(open(d / "crash.log", "a", encoding="utf-8"))   # (kept open: written only on a crash)
+        faulthandler.enable(_CRASH_LOG[0], all_threads=True)
+    except (OSError, RuntimeError):
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    note_crashes()
+    try:
+        main()
+    except Exception:
+        import traceback
+        try:
+            with open(default_app_dir() / "error.log", "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + f"{APP_VERSION} couldn't start:\n"
+                        + traceback.format_exc() + "\n")
+        except OSError:
+            pass
+        raise

@@ -198,7 +198,14 @@ class LocalSettings:
 def load_local_settings(app_dir: Optional[Path] = None) -> Optional[LocalSettings]:
     f = (app_dir or default_app_dir()) / "settings.json"
     try:
-        data = json.loads(f.read_text("utf-8"))
+        try:
+            data = json.loads(f.read_text("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("settings.json")
+        except (OSError, ValueError):
+            # gone or damaged (power cut mid-write...): the copy of the last good save, rather than the first-time
+            # setup (where the wrong Device 1 / 2 could be picked)
+            data = json.loads(f.with_name(SETTINGS_SPARE).read_text("utf-8"))
         if not isinstance(data.get("cloud_root"), str) or (not data.get("cloud_root") and data.get("solo") is not True):
             return None                   # (a solo device may never have had a cloud folder)
         if "theme" not in data and data.get("light_mode") is True:   # settings from before themes
@@ -333,8 +340,17 @@ def start_solo_library(cloud_root: str, app_dir: Optional[Path] = None) -> Path:
     return root
 
 
+SETTINGS_SPARE = "settings.backup.json"     # a second copy of settings.json, used if that one is gone or damaged
+
+
 def save_local_settings(settings: LocalSettings, app_dir: Optional[Path] = None) -> None:
-    _atomic_write((app_dir or default_app_dir()) / "settings.json", json.dumps(asdict(settings), indent=2))
+    folder = app_dir or default_app_dir()
+    text = json.dumps(asdict(settings), indent=2)
+    _atomic_write(folder / "settings.json", text)
+    try:
+        _atomic_write(folder / SETTINGS_SPARE, text)
+    except OSError:
+        pass                              # (only the spare: settings.json itself was saved)
 
 
 # --------------------------------------------------------------------------- shared game data

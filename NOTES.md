@@ -1712,3 +1712,25 @@ before changing it.
   waits SEARCH_PAUSE_MS before the grid is refilled, but _no_results_target picked its words from the NEW search text
   every frame (empty text + This Device view -> grid.empty_here). Now the words are kept while _search_pause is active.
   Test DeviceFilter.test_backspacing_a_search_keeps_its_words (fails without the fix: 'grid.empty_here').
+
+## Stuck closing copy + safeguards (2.0.8, 2026-10-29, owner)
+- Laptop, updating 2.0.6/7 -> 2.0.7: Restart Now closed the window but the process never ended (cause unknown; nothing
+  logged). It held the single-instance lock, so the update helper waited its 120 s and every later start handed over
+  to a copy that never answered, then quit silently. Ending it in Task Manager fixed it; the update had gone through.
+- Fixes: exit_watchdog (EXIT_GUARD_S 20 s from the start of closeEvent, called off while the "game is running" question
+  is open; writes every thread's stack to exit.log, then os._exit - armed only by main(), never in tests); the update
+  helper waits WAIT_FOR_CLOSE_S 30 s then Stop-Process, only if that pid's start time matches (no pid reuse); Restart
+  Now's helper is written first but STARTED in closeEvent (a refused close used to leave it waiting -> would now end
+  the program mid-sync); a start that finds the lock held and no answer within 8 s asks "Ikemen Reader Isn't
+  Responding" Cancel | End It and Open (take_over_from_stuck_copy; closes itself if the stuck copy ends).
+- Owner-approved extras: broken update undone (helper restarts with IKEMEN_UPDATE_STARTED -> new version writes
+  update\started-ok via updater.confirm_started 1.5 s after showing / after a hand-over; exits without it -> new files
+  to update\failed, previous back, old exe started; while it's still starting nothing happens, up to 10 min);
+  settings.backup.json written with every settings save and used when settings.json is gone/damaged; note_crashes():
+  faulthandler -> crash.log from the first moment + errors escaping main() -> error.log.
+- These protect updates FROM 2.0.8 on: 2.0.7 -> 2.0.8 still runs 2.0.7's helper.
+- Found on the BUILT exe (froze the running copy with psutil.suspend, started a second): no message at all - Windows
+  accepts a named-pipe connection for a frozen process whose QLocalServer is still listening, so waitForConnected alone
+  counted as "handed over" (very likely the laptop's exact case). Now the running copy replies b"shown" and only that
+  reply counts (2 s); closeEvent closes the listener at accept. Re-checked on the built exe: message after 12 s,
+  Cancel quits the new copy, frozen one untouched; launchcheck 10/10. Test AuditFixes.test_frozen_copy_does_not_count_as_answering.

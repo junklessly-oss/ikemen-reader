@@ -717,6 +717,12 @@ S: dict[str, tuple[str, str]] = {
                                  "running or saves are syncing).",
                                  "アップデートはイケメンリーダーを閉じたときにインストールされます（ゲームの実行中や"
                                  "セーブの同期中は行いません）。"),
+    "instance.stuck_title":     ("Ikemen Reader Isn't Responding", "イケメンリーダーが応答していません"),
+    "instance.stuck":           ("Ikemen Reader is already running, but it isn't responding (it may have got stuck while "
+                                 "closing). End it and open Ikemen Reader again?",
+                                 "イケメンリーダーはすでに起動していますが、応答していません（閉じる途中で止まった可能性が"
+                                 "あります）。終了して、イケメンリーダーを開き直しますか？"),
+    "instance.end":             ("End It and Open", "終了して開く"),
     "update.done":              ("Updated to Ikemen Reader {version}.", "イケメンリーダー {version} にアップデートしました。"),
     "update.not_packaged":      ("Updates install themselves only in the packaged program (Ikemen Reader.exe).",
                                  "アップデートの自動インストールは、パッケージ版（Ikemen Reader.exe）でのみ行えます。"),

@@ -185,10 +185,26 @@ def _ps(text: str) -> str:
     return "'" + str(text).replace("'", "''") + "'"
 
 
-def helper_script(program: Path, new: Path, folder: Path, pid: int, restart: bool) -> str:
+WAIT_FOR_CLOSE_S = 30      # how long the helper waits for Ikemen Reader to close before ending it itself
+
+
+def _started_at(pid: int) -> float:
+    """When process `pid` started (seconds since 1970), or 0 if it can't be told."""
+    try:
+        import psutil
+        return psutil.Process(pid).create_time()
+    except Exception:  # noqa: BLE001 - psutil missing / process gone: the helper then never ends anything
+        return 0.0
+
+
+def helper_script(program: Path, new: Path, folder: Path, pid: int, restart: bool, started: float = 0.0,
+                  wait: int = WAIT_FOR_CLOSE_S) -> str:
     """PowerShell that waits for Ikemen Reader (pid) to close, then moves each item of `new` into the program
     folder; whatever it replaces goes to folder\\previous first. Any failure puts the old files back. Then
-    (restart=True) starts Ikemen Reader again and tidies up the unpacked files."""
+    (restart=True) starts Ikemen Reader again and tidies up the unpacked files.
+    If it hasn't closed after `wait` seconds (its window gone but the program stuck while quitting: owner's laptop,
+    2.0.7), it's ended - only while that process id still belongs to the same process (`started` = its start time),
+    never a program that got the same number later."""
     return f"""$ErrorActionPreference = 'Stop'
 $program = {_ps(program)}
 $new = {_ps(new)}
@@ -201,7 +217,18 @@ function Move-Patiently($from, $to) {{
   }}
   Move-Item -LiteralPath $from -Destination $to -Force
 }}
-try {{ Wait-Process -Id {int(pid)} -Timeout 120 -ErrorAction SilentlyContinue }} catch {{}}
+try {{ Wait-Process -Id {int(pid)} -Timeout {int(wait)} -ErrorAction SilentlyContinue }} catch {{}}
+$stuck = Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue
+if ($stuck -and {float(started)!r} -gt 0) {{
+  try {{
+    $at = ($stuck.StartTime.ToUniversalTime() - [datetime]'1970-01-01').TotalSeconds
+    if ([math]::Abs($at - {float(started)!r}) -lt 2) {{
+      Note 'still running after closing: ended it'
+      Stop-Process -Id {int(pid)} -Force
+      Wait-Process -Id {int(pid)} -Timeout 10 -ErrorAction SilentlyContinue
+    }}
+  }} catch {{ Note ('could not end the old copy: ' + $_) }}
+}}
 Start-Sleep -Milliseconds 400
 if (Test-Path -LiteralPath $previous) {{ Remove-Item -LiteralPath $previous -Recurse -Force -ErrorAction SilentlyContinue }}
 New-Item -ItemType Directory -Path $previous -Force | Out-Null
@@ -236,12 +263,56 @@ if ($ok) {{
   Remove-Item -LiteralPath {_ps(folder / 'new')} -Recurse -Force -ErrorAction SilentlyContinue
   Get-ChildItem -LiteralPath {_ps(folder)} -Filter '*.zip' | Remove-Item -Force -ErrorAction SilentlyContinue
 }}
-{"Start-Process -FilePath (Join-Path $program " + _ps(EXE) + ")" if restart else ""}
+{_restart_part(folder) if restart else ""}
 """
 
 
+STARTED_ENV = "IKEMEN_UPDATE_STARTED"      # the file the new version writes once it's running (see confirm_started)
+CHECK_START_S = 600                         # how long the helper watches the new version (it waits for a crash only)
+
+
+def _restart_part(folder: Path) -> str:
+    """Start Ikemen Reader again. If the new version closes before saying it started (it crashed, or won't open),
+    put the old version back and start that instead - a broken update would otherwise leave no way to get the next
+    one. While it's still starting (however slowly) nothing is touched."""
+    return f"""$exe = Join-Path $program {_ps(EXE)}
+$started = {_ps(folder / 'started-ok')}
+Remove-Item -LiteralPath $started -Force -ErrorAction SilentlyContinue
+$env:{STARTED_ENV} = $started
+$p = Start-Process -FilePath $exe -PassThru
+if ($ok) {{
+  $until = (Get-Date).AddSeconds({CHECK_START_S})
+  while (-not (Test-Path -LiteralPath $started) -and -not $p.HasExited -and (Get-Date) -lt $until) {{ Start-Sleep -Milliseconds 500 }}
+  if (-not (Test-Path -LiteralPath $started) -and $p.HasExited) {{
+    Note 'the new version closed without starting: putting the old version back'
+    $failed = {_ps(folder / 'failed')}
+    if (Test-Path -LiteralPath $failed) {{ Remove-Item -LiteralPath $failed -Recurse -Force -ErrorAction SilentlyContinue }}
+    New-Item -ItemType Directory -Path $failed -Force | Out-Null
+    try {{
+      foreach ($name in $placed) {{ Move-Patiently (Join-Path $program $name) (Join-Path $failed $name) }}
+      foreach ($name in $moved) {{ Move-Patiently (Join-Path $previous $name) (Join-Path $program $name) }}
+      Note 'old version back'
+    }} catch {{ Note ('could not put the old version back: ' + $_) }}
+    Remove-Item Env:{STARTED_ENV} -ErrorAction SilentlyContinue
+    Start-Process -FilePath $exe
+  }}
+  Remove-Item -LiteralPath $started -Force -ErrorAction SilentlyContinue
+}}"""
+
+
+def confirm_started() -> None:
+    """Tell the update helper that this (new) version opened properly (see _restart_part). Once only; the setting
+    isn't passed on to games or Luna."""
+    path = os.environ.pop(STARTED_ENV, "")
+    if path:
+        try:
+            Path(path).write_text("ok", "utf-8")
+        except OSError:
+            pass
+
+
 def install_on_exit(folder: Path, new: Path, restart: bool, program: Optional[Path] = None,
-                    pid: Optional[int] = None, run: bool = True) -> Path:
+                    pid: Optional[int] = None, run: bool = True, wait: int = WAIT_FOR_CLOSE_S) -> Path:
     """Write the helper next to the update and start it (hidden); it waits until this process has ended.
     Returns the script's path."""
     program = program if program is not None else program_dir()
@@ -249,15 +320,21 @@ def install_on_exit(folder: Path, new: Path, restart: bool, program: Optional[Pa
         raise ValueError("update.not_packaged")
     script = folder / "install-update.ps1"
     # UTF-8 with a BOM: Windows PowerShell 5 reads it correctly (Japanese folder names included)
-    script.write_text(helper_script(program, new, folder, pid or os.getpid(), restart), "utf-8-sig")
+    pid = pid or os.getpid()
+    script.write_text(helper_script(program, new, folder, pid, restart, _started_at(pid), wait), "utf-8-sig")
     if run:
-        import outside
-        # a hidden console (not DETACHED_PROCESS: PowerShell quits at once without any console). It keeps running
-        # after Ikemen Reader exits.
-        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        outside.popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-                       "-File", str(script)], cwd=str(folder), creationflags=flags)
+        start_helper(script)
     return script
+
+
+def start_helper(script: Path) -> None:
+    """Start a helper written by install_on_exit(run=False)."""
+    import outside
+    # a hidden console (not DETACHED_PROCESS: PowerShell quits at once without any console). It keeps running
+    # after Ikemen Reader exits.
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    outside.popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                   "-File", str(script)], cwd=str(script.parent), creationflags=flags)
 
 
 def note_version(app_dir: Path, current: str) -> Optional[str]:

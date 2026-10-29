@@ -1948,6 +1948,97 @@ class Updates(unittest.TestCase):
             self.assertIn("updated", (folder / "update.log").read_text("utf-8"))
 
 
+    @unittest.skipUnless(IS_WINDOWS, "the swap helper is PowerShell")
+    def test_helper_ends_a_copy_stuck_while_closing(self):
+        # 2.0.7, laptop: the old copy never ended, so the update waited and nothing reopened
+        import updater
+        with tempfile.TemporaryDirectory() as tmp:
+            program = Path(tmp) / "Ikemen Reader"
+            (program / "_internal").mkdir(parents=True)
+            (program / "Ikemen Reader.exe").write_text("old exe")
+            (program / "_internal" / "lib.dll").write_text("old lib")
+            folder = updater.update_dir(Path(tmp) / "appdata", program)
+            z = self._zip(Path(tmp), "new exe")
+            (folder / z.name).write_bytes(z.read_bytes())
+            new = updater.stage(folder / z.name, folder)
+            proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])     # never closes
+            try:
+                updater.install_on_exit(folder, new, restart=False, program=program, pid=proc.pid, wait=2)
+                self.assertIsNotNone(proc.wait(30))                                    # ended by the helper
+                end = time.time() + 30
+                while time.time() < end and "updated" not in ((folder / "update.log").read_text("utf-8")
+                                                               if (folder / "update.log").exists() else ""):
+                    time.sleep(0.2)
+                self.assertEqual((program / "Ikemen Reader.exe").read_text(), "new exe")
+                self.assertIn("ended it", (folder / "update.log").read_text("utf-8"))
+            finally:
+                proc.kill()
+                proc.wait()
+
+    @unittest.skipUnless(IS_WINDOWS, "the swap helper is PowerShell")
+    def test_broken_update_puts_the_old_version_back(self):
+        # the new version closes without ever saying it started (it crashed): the old one goes back and is opened
+        import zipfile
+        import updater
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:   # (the helper may still be ending)
+            program = Path(tmp) / "Ikemen Reader"
+            (program / "_internal").mkdir(parents=True)
+            (program / "Ikemen Reader.exe").write_text("old exe")      # (not a program: starting it again just fails)
+            (program / "_internal" / "lib.dll").write_text("old lib")
+            folder = updater.update_dir(Path(tmp) / "appdata", program)
+            z = folder / "Ikemen-Reader-9.9.9.zip"
+            with zipfile.ZipFile(z, "w") as f:                          # "new version" = a program that ends at once
+                f.write(Path(os.environ["SystemRoot"]) / "System32" / "hostname.exe", "Ikemen Reader/Ikemen Reader.exe")
+                f.writestr("Ikemen Reader/_internal/lib.dll", "new lib")
+                f.writestr("Ikemen Reader/_internal/added.dll", "only in the new one")
+            new = updater.stage(z, folder)
+            proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"])
+            updater.install_on_exit(folder, new, restart=True, program=program, pid=proc.pid)
+            proc.wait()
+            log = folder / "update.log"
+            end = time.time() + 40
+            while time.time() < end and "old version back" not in (log.read_text("utf-8") if log.exists() else ""):
+                time.sleep(0.3)
+            self.assertIn("closed without starting", log.read_text("utf-8"))
+            self.assertEqual((program / "Ikemen Reader.exe").read_text(), "old exe")
+            self.assertEqual((program / "_internal" / "lib.dll").read_text(), "old lib")
+            self.assertFalse((program / "_internal" / "added.dll").exists())
+            self.assertTrue((folder / "failed" / "Ikemen Reader.exe").is_file())     # (kept aside, not deleted)
+
+    def test_new_version_says_it_started(self):
+        from unittest import mock
+        import updater
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {updater.STARTED_ENV: str(Path(tmp) / "ok")}):
+            updater.confirm_started()
+            self.assertTrue((Path(tmp) / "ok").is_file())
+            self.assertNotIn(updater.STARTED_ENV, os.environ)               # (not passed on to games / Luna)
+            updater.confirm_started()                                        # (twice: nothing happens)
+
+    def test_damaged_settings_use_the_spare_copy(self):
+        # settings.json damaged (power cut mid-write): the last good copy, not the first-time setup
+        from library import LocalSettings, load_local_settings, save_local_settings, SETTINGS_SPARE
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            save_local_settings(LocalSettings(cloud_root=str(d / "cloud"), machine_name="Laptop"), d)
+            self.assertTrue((d / SETTINGS_SPARE).is_file())
+            (d / "settings.json").write_text('{"cloud_root": "G:', "utf-8")    # cut off
+            s = load_local_settings(d)
+            self.assertIsNotNone(s)
+            self.assertEqual(s.machine_name, "Laptop")
+            (d / "settings.json").unlink()
+            self.assertEqual(load_local_settings(d).machine_name, "Laptop")
+            (d / SETTINGS_SPARE).unlink()
+            self.assertIsNone(load_local_settings(d))                          # (nothing at all: a new setup)
+
+    def test_helper_never_ends_a_different_process(self):
+        # a process id can be reused once the old copy ends: only the very process that asked is ever ended
+        import updater
+        script = updater.helper_script(Path("p"), Path("n"), Path("f"), 1234, True, started=0.0)
+        self.assertIn("-gt 0", script)                   # (no start time known = never ends anything)
+        script = updater.helper_script(Path("p"), Path("n"), Path("f"), 1234, True, started=1761700000.5)
+        self.assertIn("[math]::Abs($at - 1761700000.5) -lt 2", script)
+
+
 class StricterSaveSuggestions(unittest.TestCase):
     """1.0.1: a folder must be named after the WHOLE game (not one shared word) and hold save files; two
     candidates = not sure = nothing. (Cases from the owner's own library.)"""
@@ -5288,6 +5379,74 @@ class AuditFixes(unittest.TestCase):
             holder.kill()
             holder.wait()
             holder.stdout.close()
+
+    def test_stuck_copy_is_ended_when_asked(self):
+        # 2.0.7, laptop: a copy whose window had closed stayed running unseen, holding the lock, so every later start
+        # quietly did nothing. Now the new copy asks, and ends the stuck one
+        if not IS_WINDOWS:
+            self.skipTest("Windows only")
+        from unittest import mock
+        import psutil
+        import app
+        stuck = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            p = psutil.Process(stuck.pid)
+            with mock.patch.object(app, "other_copies", return_value=[p]),                     mock.patch.object(app, "message", return_value="cancel"):
+                self.assertFalse(app.take_over_from_stuck_copy())            # Cancel: nothing ended, nothing opens
+            self.assertIsNone(stuck.poll())
+            with mock.patch.object(app, "other_copies", return_value=[p]),                     mock.patch.object(app, "message", return_value="end") as asked:
+                self.assertTrue(app.take_over_from_stuck_copy())
+            self.assertEqual(asked.call_args.args[2], app.tr("instance.stuck_title"))
+            self.assertIsNotNone(stuck.wait(5))                            # ended
+            with mock.patch.object(app, "other_copies", return_value=[]),                     mock.patch.object(app, "message") as asked:
+                self.assertTrue(app.take_over_from_stuck_copy())             # gone meanwhile: just opens
+            asked.assert_not_called()
+        finally:
+            stuck.kill()
+            stuck.wait()
+
+    def test_frozen_copy_does_not_count_as_answering(self):
+        # Windows accepts the connection for a frozen copy (or one stuck while closing) whose listener is still open:
+        # that alone used to count as "handed over", so every start quietly quit. Only a reply counts now
+        if not IS_WINDOWS:
+            self.skipTest("Windows only")
+        from unittest import mock
+        import app
+        here = str(Path(__file__).parent)
+        for frozen in (False, True):
+            key = f"IkemenReader-test-{uuid.uuid4().hex[:8]}"
+            code = ("import os, sys, time; os.environ['QT_QPA_PLATFORM'] = 'offscreen'; sys.path.insert(0, r'" + here
+                    + "'); import app; from PySide6.QtWidgets import QApplication, QWidget; from PySide6.QtCore import QTimer; "
+                    f"app.INSTANCE_KEY = '{key}'; a = QApplication([]); w = QWidget(); app.listen_for_second_copies(w); "
+                    + ("print('ready', flush=True); time.sleep(20)" if frozen else      # (never runs its events)
+                       "QTimer.singleShot(0, lambda: print('ready', flush=True)); QTimer.singleShot(20000, a.quit); a.exec()"))
+            holder = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "ready")
+                with mock.patch.object(app, "INSTANCE_KEY", key):
+                    self.assertEqual(app.hand_over_to_running_copy(), not frozen)
+            finally:
+                holder.kill()
+                holder.wait()
+                holder.stdout.close()
+
+    def test_closing_never_hangs(self):
+        # the closing copy ends itself if quitting takes too long, and writes down what was still running
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            env = dict(os.environ, APPDATA=tmp)
+            code = ("import sys, time, threading; sys.path.insert(0, r'" + str(Path(__file__).parent) + "'); import app; "
+                    "threading.Thread(target=time.sleep, args=(60,), name='stuck-upload').start(); "
+                    "app.exit_watchdog(0.5); sys.exit(5)")       # (sys.exit waits for the non-daemon thread forever)
+            start = time.monotonic()
+            done = subprocess.run([sys.executable, "-c", code], env=env, timeout=30)
+            self.assertLess(time.monotonic() - start, 20)
+            self.assertEqual(done.returncode, 0)
+            log = (Path(tmp) / "IkemenReader" / "exit.log").read_text("utf-8")
+            self.assertIn("still running", log)
+            self.assertIn("threading.py", log)                       # (each thread's stack is written down)
+            code = ("import sys, time; sys.path.insert(0, r'" + str(Path(__file__).parent) + "'); import app; "
+                    "app.exit_watchdog(0.3).set(); time.sleep(1); sys.exit(5)")
+            self.assertEqual(subprocess.run([sys.executable, "-c", code], env=env, timeout=30).returncode, 5)  # called off
 
     def test_window_opens_with_its_real_picture(self):
         # Windows' open animation faded in a WHITE window: the first paint came too late (owner, 2026-10-18). Now the

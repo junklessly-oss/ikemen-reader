@@ -205,7 +205,8 @@ GUIDE = {
             "- Updates: when a new version of Ikemen Reader is out, you're asked whether to update when Ikemen "
             "Reader opens. With Install Updates Automatically ticked, it downloads by itself and offers Restart Now "
             "(otherwise it's installed when you close Ikemen Reader). Updates never touch your library, saves or "
-            "settings, and never happen while a game is running.",
+            "settings, and never happen while a game is running. If a new version won't open, the previous one is put "
+            "back by itself.",
         ]),
         ("Ikemen Sync", [
             "Device Settings Sync copies the other device's look and preferences (theme, fonts, background, "
@@ -344,7 +345,8 @@ GUIDE = {
             "保存したテーマをクリックすると試せて、「保存」で確定します。右クリックで名前の変更や削除ができます。",
             "- アップデート：イケメンリーダーの新しいバージョンが出ると、起動時にアップデートするか尋ねます。「アップデートを自動でインストール」をオンにすると、"
             "自動でダウンロードして「今すぐ再起動」を提案します（再起動しない場合は、イケメンリーダーを閉じたときにインストールされます）。"
-            "アップデートでライブラリ・セーブ・設定が変わることはなく、ゲームの実行中に行われることもありません。",
+            "アップデートでライブラリ・セーブ・設定が変わることはなく、ゲームの実行中に行われることもありません。"
+            "新しいバージョンが起動しない場合は、自動で前のバージョンに戻ります。",
         ]),
         ("イケメン同期", [
             "「端末設定の同期」を押すと、もう一方の端末の見た目と設定（テーマ・フォント・背景・言語など）をこの端末にコピーします。端末番号、クラウドフォルダー、Locale Emulator、Luna、"
