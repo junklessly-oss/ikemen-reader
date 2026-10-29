@@ -2875,6 +2875,72 @@ class ColourCodes(unittest.TestCase):
         finally:
             app.discard(d)
 
+    def test_low_contrast_warning_covers_boxes_secondary_text_and_covers(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        for theme in ("dark", "light"):                                # the built-in looks: no warning
+            d = app.ThemeDialog(app.theme_colors(theme), lambda c: None)
+            try:
+                self.assertEqual(d.warning.text(), "", theme)
+            finally:
+                app.discard(d)
+        d = app.ThemeDialog(app.theme_colors("dark"), lambda c: None)
+        try:
+            for role, where in (("input", "boxes"), ("muted", "muted"), ("placeholder_bottom", "covers")):
+                before = d.colors[role]
+                d._set(role, d.colors["text"] if role != "muted" else d.colors["bg"])
+                self.assertIn(app.tr(f"theme.where_{where}"), d.warning.text(), role)
+                d._set(role, before)
+            self.assertEqual(d.warning.text(), "")
+        finally:
+            app.discard(d)
+
+
+class FolderMosaicCopies(unittest.TestCase):
+    """Folder mosaics draw sharp copies made in the background (CoverCache.mini / make_minis), never while drawing."""
+
+    def test_copy_made_once_at_size_and_found(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtGui import QColor, QImage
+        from PySide6.QtWidgets import QApplication
+        import app
+        QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "cover.png"
+            img = QImage(600, 850, QImage.Format_RGB32)
+            img.fill(QColor("#336699"))
+            img.save(str(path))
+            cc, crop, size = app.CoverCache(), (1.0, 0.5, 0.5), (88, 129)
+            self.assertIsNone(cc.mini(path, crop, size))              # (nothing yet: drawn as before)
+            self.assertTrue(cc.get(path, crop))                        # (drawn once: its file time is known)
+            sources = cc.mini_sources([(path, crop)], size)
+            self.assertEqual(len(sources), 1)
+            self.assertEqual(cc.mini_sources([(path, crop)], size), [])  # (handed out once, not every frame)
+            made = app.CoverCache.make_minis(sources, size)
+            cc.accept_minis(made)
+            pm = cc.mini(path, crop, size)
+            self.assertEqual((pm.width(), pm.height()), size)
+            self.assertIsNone(cc.mini(path, crop, (90, 131)))           # (another size: its own copy)
+            self.assertEqual(QColor(pm.toImage().pixel(40, 60)).name(), "#336699")   # (a flat colour stays flat)
+            fresh = app.CoverCache()                                    # (the next launch: read from disk at once)
+            self.assertTrue(fresh.get(path, crop))
+            kept = fresh.mini(path, crop, size)
+            self.assertEqual((kept.width(), kept.height()), size)
+            self.assertEqual(fresh.mini_alpha(path, crop, size), 1.0)  # (no fade: it was there from the start)
+
+    def setUp(self):
+        import app
+        self._dir = tempfile.TemporaryDirectory()
+        self._was = app.CoverCache._mini_dir
+        app.CoverCache._mini_dir = Path(self._dir.name) / "mosaics"   # (not the real app data folder)
+
+    def tearDown(self):
+        import app
+        app.CoverCache._mini_dir = self._was
+        self._dir.cleanup()
+
 
 class SavedThemes(unittest.TestCase):
     """Custom Theme > Saved Themes (themes.py): whole looks (colours, background, fonts) in the cloud folder."""
@@ -5452,6 +5518,38 @@ class DeviceFilter(unittest.TestCase):
                     time.sleep(0.01)
                 self.assertEqual(w.no_results_key, "grid.empty_other")
                 self.assertTrue(app.tr("grid.empty_here") and app.tr("grid.empty_other"))
+            finally:
+                w.close()
+                app.wait_for_tasks(5)
+
+    def test_backspacing_a_search_keeps_its_words(self):
+        """Backspacing a search that found nothing: until the games come back (the search waits SEARCH_PAUSE_MS),
+        the message still says "No Results Found" - it flashed "No Games on This Device" (owner, 2026-10-29)."""
+        from unittest import mock
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, mock.patch.dict(os.environ, {"APPDATA": tmp}):
+            from PySide6.QtWidgets import QApplication
+            import app
+            QApplication.instance() or QApplication([])
+            cloud = Path(tmp) / "cloud"
+            cloud.mkdir()
+            Library(cloud).add_game("Here", "PC", exe=r"C:\a\a.exe")
+            w = app.MainWindow(LocalSettings("PC", str(cloud)))
+            try:
+                w.show()
+                w.refresh()
+                search_now(w, "zzz")
+                end = time.monotonic() + 1.5                                 # (the cover fades out, the message in)
+                while time.monotonic() < end and (w._leaving or w._no_results_target() == 0):
+                    QApplication.processEvents()
+                    time.sleep(0.01)
+                self.assertEqual(w.no_results_key, "grid.no_results")
+                w.search.setText("")                                         # backspaced: not applied yet
+                self.assertTrue(w._search_pause.isActive())
+                w._no_results_target()
+                self.assertEqual(w.no_results_key, "grid.no_results")        # same words until the games return
+                search_now(w, "")
+                self.assertEqual(w.grid.count(), 1)
             finally:
                 w.close()
                 app.wait_for_tasks(5)

@@ -93,7 +93,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.6"
+APP_VERSION = "2.0.7"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -933,6 +933,44 @@ class LibraryGrid(QListWidget):
         t0 = time.perf_counter()
         while self._layer_arrived and time.perf_counter() - t0 < LAYER_PATCH_BUDGET_S:
             self._patch_layer({self._layer_arrived.pop()})
+
+    def tiles_changed(self, ids) -> None:
+        """Tiles whose picture changed in the background (a folder's sharp mosaic copies arrived): drawn again,
+        on screen and in the strips, the way arriving covers are (covers_arrived)."""
+        ids = set(ids)
+        if self._layer:
+            if self._glide_to is None:
+                self._patch_layer(ids)
+            else:
+                self._layer_arrived |= ids
+        self._redraw_tiles(ids)
+        # their copies fade in (CoverCache.MINI_FADE_S): drawn again each frame until then, then the strips once more
+        self._fading_tiles = getattr(self, "_fading_tiles", set()) | ids
+        self._fade_until = frame_time() + CoverCache.MINI_FADE_S
+        if not hasattr(self, "_tile_fader"):
+            self._tile_fader = QTimer(self)
+            self._tile_fader.setInterval(16)
+            self._tile_fader.timeout.connect(self._fade_step)
+        self._tile_fader.start()
+
+    def _redraw_tiles(self, ids) -> None:
+        vp = self.viewport()
+        for gid in ids:
+            index = self._index_of(gid)
+            if index is not None:
+                vp.update(self.visualRect(index))         # (only the mosaic changed: inside the tile's own spot)
+
+    def _fade_step(self) -> None:
+        ids = self._fading_tiles
+        if frame_time() >= self._fade_until:
+            self._tile_fader.stop()
+            self._fading_tiles = set()
+            if self._layer:
+                if self._glide_to is None:
+                    self._patch_layer(ids)
+                else:
+                    self._layer_arrived |= ids
+        self._redraw_tiles(ids)
 
     def _patch_layer(self, ids) -> None:
         """Covers whose hover began / settled: only their spots in the strips are drawn again (a whole new set of
@@ -1774,7 +1812,8 @@ QLineEdit, QComboBox {{ background: {c['input']}; border: 1px solid {c['border']
                        padding: 5px 8px; selection-background-color: {c['button_hover']}; }}
 QLineEdit:focus, QComboBox:focus {{ border-color: {c['focus']}; }}
 QFrame#notes_box {{ background: transparent; }}
-QLabel#notes_title {{ color: {c['text']}; font-size: 20pt; }}
+QLabel#notes_title {{ color: {c['text']}; font-size: 20pt; background: transparent; }}
+QFrame#notes_title_box {{ background: {c['button']}; border: 1px solid {c['border']}; border-radius: 8px; }}
 QTextEdit#notes {{ background: {c['input']}; border: 1px solid {c['border']}; border-radius: 6px;
                        padding: 6px 8px; font-size: 11pt; selection-background-color: {c['button_hover']}; }}
 QComboBox#fontpick QAbstractItemView::item {{ padding: 5px 5px; min-height: 22px; }}
@@ -1822,7 +1861,8 @@ QScrollArea {{ background: transparent; border: none; }}
 QScrollArea > QWidget > QWidget#scrollbody {{ background: {c['bg']}; }}
 QPushButton#flat {{ background: transparent; border: none; color: {c['muted']}; padding: 4px 8px; }}
 QPushButton#flat:hover {{ color: {c['text']}; }}
-QPushButton#back {{ background: transparent; border: none; color: {c['muted']}; padding: 4px 6px; font-size: 11pt; }}
+QPushButton#back {{ background: transparent; border: none; color: {c['muted']}; padding: 4px 6px 4px {6 + BackButton.ARROW_ROOM}px;
+                   font-size: 11pt; }}
 QPushButton#back:hover {{ color: {c['text']}; }}
 QFrame#folderbar {{ background: transparent; }}
 QFrame#band {{ background: {c['band']}; }}
@@ -2462,6 +2502,14 @@ def merge_order(full: list, shown: list) -> list:
     return [next(it) if i in seen else i for i in full]
 
 
+def mosaic_size(dpr: float, grow: float = 1.0) -> tuple[int, int]:
+    """A folder mosaic square in whole device pixels (rounded down: the gaps never shrink); grow: the tile's hover
+    growth (1 + HOVER_GROW: fully hovered - its own copy, a stretched one looked blurry, owner 2026-10-28)."""
+    inner_w = round(GRID["cover_w"]) * grow - 2 * FOLDER_PAD
+    inner_h = round(GRID["cover_h"]) * grow - 2 * FOLDER_PAD
+    return int((inner_w - FOLDER_GAP) / 2 * dpr), int((inner_h - FOLDER_GAP) / 2 * dpr)
+
+
 class CoverCache:
     """Covers ready to draw. Only the most recently shown ones stay in memory (the grid only draws
     what's on screen), so a library of hundreds of games doesn't eat hundreds of MB."""
@@ -2478,10 +2526,15 @@ class CoverCache:
         # the cloud drive (Google Drive's G:) each time made everything lag, badly while it was busy
         self._mtimes: dict[str, Optional[float]] = {}
         self._ready: dict[tuple, QImage] = {}      # decoded in the background, not yet on screen
+        self._minis: "OrderedDict[tuple, QPixmap]" = OrderedDict()     # folder mosaic copies (see mini)
+        self._mini_tried: set = set()              # copies handed out to be made (made, being made, or failed)
+        self._mini_born: dict[tuple, float] = {}   # copies that just arrived -> when (they fade in: mini_alpha)
+        self._mini_looked: set = set()             # copies already looked for on disk (see mini)
 
     def forget_files(self) -> None:
         """The library was reloaded: look at the cover files again (a cover may have been changed)."""
         self._mtimes.clear()
+        self._mini_tried.intersection_update(self._minis)  # (one that failed may work now)
 
     def get(self, path: Optional[Path], crop: tuple[float, float, float] = (1.0, 0.5, 0.5)) -> Optional[QPixmap]:
         if not path:
@@ -2553,6 +2606,154 @@ class CoverCache:
 
     def cached(self) -> frozenset:
         return frozenset(self._cache) | frozenset(self._ready)
+
+    # Folder mosaics (owner, 2026-10-28): a mosaic square is ~5x smaller than the cover copy above, and shrinking that
+    # much while drawing samples only a few pixels around each spot - fine lines and lettering broke up into speckles.
+    # Each square gets its own copy instead, made the way image editors make screen thumbnails: Lanczos shrink (sharp,
+    # no speckles) + light sharpening (a correct shrink alone looked soft - owner chose this from five versions).
+    # Made in the background only (~3 ms each, + a decode when the cover is only on screen); until one is ready the
+    # square is drawn as before. Pillow does both steps; without it, mosaics stay as before.
+    MINI_SHARPEN = (0.7, 50)        # unsharp mask: blur radius (px), strength (%)
+    no_pillow = False               # set once Pillow turned out to be missing: mosaics stay as before
+    MINI_FADE_S = 0.15              # a copy arriving on screen fades in over the old drawing
+
+    def mini_alpha(self, path: Optional[Path], crop, size: tuple[int, int]) -> float:
+        """How far a copy that just arrived has faded in over the old drawing (1: settled)."""
+        mtime = self._mtimes.get(str(path)) if path else None
+        born = self._mini_born.get(self._key(str(path), mtime, crop) + size) if mtime is not None else None
+        return 1.0 if born is None else min(1.0, (frame_time() - born) / self.MINI_FADE_S)
+
+    def mini(self, path: Optional[Path], crop, size: tuple[int, int]) -> Optional[QPixmap]:
+        """This cover's mosaic copy at size (device pixels), if one is ready. Never made here (see make_minis), but
+        one kept on disk from an earlier run is read the first time it's wanted (~0.3 ms: a few KB on the local disk,
+        never the cloud drive) - without that, every launch showed the old drawing fading into the sharp one."""
+        mtime = self._mtimes.get(str(path)) if path else None
+        if mtime is None:
+            return None
+        key = self._key(str(path), mtime, crop) + size
+        pm = self._minis.get(key)
+        if pm is not None:
+            self._minis.move_to_end(key)
+        elif key not in self._mini_tried and key not in self._mini_looked and not self.no_decode:
+            self._mini_looked.add(key)                 # (once: a missing one is made in the background)
+            img = self._read_mini(key, size)
+            if img is not None:
+                self.accept_minis([(key, img)], fade=False)
+                pm = self._minis.get(key)
+        return pm
+
+    # Sharp copies are kept on disk too (like Windows' or Steam's thumbnail caches), one small PNG each, named by
+    # what it's made from (cover file name + modified time + crop + size): a changed cover or crop is a new name.
+    # The oldest go once there are more than MINI_FILES_KEPT.
+    MINI_FILES_KEPT = 2000
+    MINI_RECIPE = 2                 # how copies are made: a change here means copies kept on disk are made again
+    _mini_dir: Optional[Path] = None
+
+    @classmethod
+    def _mini_file(cls, key: tuple) -> Path:
+        if cls._mini_dir is None:
+            cls._mini_dir = default_app_dir() / "mosaics"
+        import hashlib
+        name = repr((cls.MINI_RECIPE, cls.MINI_SHARPEN) + key)
+        return cls._mini_dir / (hashlib.sha1(name.encode("utf-8")).hexdigest()[:24] + ".png")
+
+    @classmethod
+    def _read_mini(cls, key: tuple, size: tuple[int, int]) -> Optional[QImage]:
+        f = cls._mini_file(key)
+        if not f.is_file():                            # (asking Qt to load a missing file is the slower way to know)
+            return None
+        img = QImage(str(f))
+        return None if img.isNull() or (img.width(), img.height()) != size else img
+
+    @classmethod
+    def _write_mini(cls, key: tuple, img: QImage) -> None:
+        f = cls._mini_file(key)
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_name(f.stem + ".tmp")
+            if img.save(str(tmp), "PNG"):
+                os.replace(tmp, f)                     # (whole or not at all)
+        except OSError:
+            pass
+
+    @classmethod
+    def tidy_mini_files(cls) -> None:
+        """In the background: the oldest copies go once there are more than MINI_FILES_KEPT."""
+        if cls._mini_dir is None or not cls._mini_dir.is_dir():
+            return
+        try:
+            files = sorted(cls._mini_dir.glob("*.png"), key=lambda f: f.stat().st_mtime)
+            for f in files[:max(0, len(files) - cls.MINI_FILES_KEPT)]:
+                f.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def mini_sources(self, wanted: list, size: tuple[int, int]) -> list:
+        """[(path, crop)] -> [(path, crop, QImage or None)] for the mosaic copies still missing: the prepared image
+        when one is waiting (no decode needed), else None (decoded again in the background)."""
+        out = []
+        for path, crop in wanted:
+            mtime = self._mtimes.get(str(path))
+            if mtime is None:
+                continue                               # (not drawn yet: asked again once it is)
+            key = self._key(str(path), mtime, crop)
+            if key + size not in self._minis and key + size not in self._mini_tried:
+                self._mini_tried.add(key + size)       # (once: a cover that can't be made isn't tried every frame)
+                out.append((path, crop, self._ready.get(key)))
+        return out
+
+    @classmethod
+    def make_minis(cls, sources: list, size: tuple[int, int]) -> list:
+        """In a background thread: [(path, crop, QImage or None)] -> [(key, QImage)] mosaic copies at size."""
+        try:
+            from PIL import Image, ImageFilter
+        except ImportError:
+            Image = None
+        out = []
+        for path, crop, part in sources:
+            time.sleep(0.002)                          # (a breather each time, like the cover prefetch)
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            key = cls._key(str(path), mtime, crop) + size
+            kept = cls._read_mini(key, size)           # (made on an earlier run)
+            if kept is not None:
+                out.append((key, kept))
+                continue
+            if Image is None:
+                cls.no_pillow = True
+                continue
+            if part is None:
+                img = cls._decode(path, crop[0])
+                if img is None:
+                    continue
+                part = cls._cut(img, crop)
+            src = part.convertToFormat(QImage.Format_RGB888)
+            pic = Image.frombuffer("RGB", (src.width(), src.height()), bytes(src.constBits()), "raw", "RGB",
+                                   src.bytesPerLine(), 1)
+            radius, percent = cls.MINI_SHARPEN
+            # the whole cover as cropped, fitted to the square (~4 % narrower than a cover, as always): trimming the
+            # sides to keep its shape was tried and undone - it cut into the owner's crops (2026-10-28)
+            pic = pic.resize(size, Image.LANCZOS).filter(ImageFilter.UnsharpMask(radius, percent, 0))
+            small = QImage(pic.tobytes(), size[0], size[1], size[0] * 3, QImage.Format_RGB888).copy()
+            cls._write_mini(key, small)
+            out.append((key, small))
+        return out
+
+    def accept_minis(self, made: list, fade: bool = True) -> None:
+        now = frame_time()
+        for key, img in made:
+            self._minis[key] = QPixmap.fromImage(img)
+            self._minis.move_to_end(key)
+            if fade:
+                self._mini_born[key] = now
+        for key in [k for k, t in self._mini_born.items() if now - t > self.MINI_FADE_S]:
+            del self._mini_born[key]
+        while len(self._minis) > 2 * self.MAX_COVERS:                     # (two per cover: at rest + hovered)
+            gone = self._minis.popitem(last=False)[0]
+            self._mini_tried.discard(gone)                                 # (read / made again if shown again)
+            self._mini_looked.discard(gone)
 
     @classmethod
     def prepare(cls, wanted: list, skip: frozenset = frozenset()) -> list:
@@ -4018,6 +4219,32 @@ class ElidedLabel(QLabel):
         p.end()
 
 
+class BackButton(QPushButton):
+    """The folder bar's "‹ Library". The arrow is drawn, not typed: the font's ‹ sits on the middle of the lowercase
+    letters, ~2 px below "Library" / ライブラリ (owner, 2026-10-28). Drawn like the drop-downs' arrows (thin, rounded),
+    centred on the capital letters, in the text's own colour (brighter on hover, as the style sheet makes the text);
+    the style sheet's left padding leaves it room (ARROW_ROOM)."""
+    ARROW_ROOM = 14                 # arrow + its gap before the text (px; part of the left padding)
+
+    def paintEvent(self, ev) -> None:
+        super().paintEvent(ev)
+        from PySide6.QtWidgets import QStyleOptionButton
+        opt = QStyleOptionButton()
+        self.initStyleOption(opt)
+        area = self.style().subElementRect(QStyle.SE_PushButtonContents, opt, self)
+        fm = QFontMetricsF(self.font())
+        text_left = area.center().x() + 0.5 - fm.horizontalAdvance(self.text()) / 2
+        baseline = area.top() + (area.height() - fm.height()) / 2 + fm.ascent()
+        mid, half = baseline - fm.capHeight() / 2, fm.capHeight() * 0.36
+        tip = text_left - self.ARROW_ROOM + 1.5
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        hot = bool(opt.state & QStyle.State_MouseOver)
+        p.setPen(QPen(QColor(COLORS["text" if hot else "muted"]), 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.drawPolyline([QPointF(tip + half, mid - half), QPointF(tip, mid), QPointF(tip + half, mid + half)])
+        p.end()
+
+
 class SyncStatus(QWidget):
     """Bottom bar: the sync light's dot + its status ("● Synced"), or a folder's game count. Changes land at once:
     the bar's one cross-fade (BarFader) blends the old look into the new."""
@@ -4537,21 +4764,69 @@ class CardDelegate(QStyledItemDelegate):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         cover = self.cover_rect(option.rect, self.w.hover.get(iid, 0.0))
         self._shadow(p, cover, e)
+        dev = p.device()
+        dpr = dev.devicePixelRatioF() if dev is not None else 1.0
+        # each square's sharp copies: at rest and fully hovered (see CoverCache.mini)
+        minis = [[self.w.covers.mini(self.w.art(g), (g.crop_zoom, g.crop_x, g.crop_y), mosaic_size(dpr, grow))
+                  for grow in (1.0, 1 + HOVER_GROW)] for g in games[:4]]
+        # copies that just arrived fade in over the old drawing (it may have been on screen a moment ago)
+        fades = [min([self.w.covers.mini_alpha(self.w.art(g), (g.crop_zoom, g.crop_x, g.crop_y),
+                                               mosaic_size(dpr, grow))
+                      for grow, m in zip((1.0, 1 + HOVER_GROW), pair) if m is not None] or [1.0])
+                 for g, pair in zip(games[:4], minis)]
 
         def draw(q: QPainter, rect: QRectF) -> None:
             q.fillRect(rect, QColor(COLORS["button"]))
             # 2 x 2 mosaic of the first covers inside
             inner = rect.adjusted(FOLDER_PAD, FOLDER_PAD, -FOLDER_PAD, -FOLDER_PAD)
             mw, mh = (inner.width() - FOLDER_GAP) / 2, (inner.height() - FOLDER_GAP) / 2
+            dpr = q.device().devicePixelRatioF()
+            # how far the hover's growth has gone (0 at rest, 1 fully hovered): the resting copy blends into the
+            # hovered one and the squares move with it - switching between them at the ends showed as a small snap
+            # (owner, 2026-10-28)
+            t = min(1.0, max(0.0, (rect.width() / round(GRID["cover_w"]) - 1) / HOVER_GROW))
+            # the squares at rest (the hover's growth starts from there)
+            inner0 = QRectF(0, 0, round(GRID["cover_w"]), round(GRID["cover_h"])).adjusted(
+                FOLDER_PAD, FOLDER_PAD, -FOLDER_PAD, -FOLDER_PAD)
+            mw0, mh0 = (inner0.width() - FOLDER_GAP) / 2, (inner0.height() - FOLDER_GAP) / 2
             for i, g in enumerate(games[:4]):
-                r = QRectF(inner.x() + (i % 2) * (mw + FOLDER_GAP), inner.y() + (i // 2) * (mh + FOLDER_GAP), mw, mh)
+                col, row = i % 2, i // 2
+                r = QRectF(inner.x() + col * (mw + FOLDER_GAP), inner.y() + row * (mh + FOLDER_GAP), mw, mh)
+                rest, hover = minis[i]
+                mini = rest or hover
+                old_r = r                                     # (where the old drawing puts it)
+                if rest is not None and hover is not None:
+                    # at rest: the copy pixel for pixel (whole device pixels, its own whole-pixel size). Hovered: that
+                    # same square, carried along with the tile's growth - lining the copies up against the outer
+                    # edges instead moved the bottom row down ~1 px as the folder rose (owner, 2026-10-28)
+                    x0, y0 = inner0.x() + col * (mw0 + FOLDER_GAP), inner0.y() + row * (mh0 + FOLDER_GAP)
+                    w0, h0 = rest.width() / dpr, rest.height() / dpr
+                    r = QRectF(r.x() + round(x0 * dpr) / dpr - x0, r.y() + round(y0 * dpr) / dpr - y0,
+                               r.width() * w0 / mw0, r.height() * h0 / mh0)
                 mclip = QPainterPath()
                 mclip.addRoundedRect(r, 5, 5)
                 q.save()
                 q.setClipPath(mclip, Qt.IntersectClip)
-                pm = self.w.covers.get(self.w.art(g), (g.crop_zoom, g.crop_x, g.crop_y))
-                if pm:
+                path, crop = self.w.art(g), (g.crop_zoom, g.crop_x, g.crop_y)
+                pm = self.w.covers.get(path, crop) if mini is None else None
+                if mini is not None and fades[i] < 1:
+                    # the old drawing underneath (only if it's still in memory: nothing decoded for a fade)
+                    if self.w.covers.ready(path, crop) and (old := self.w.covers.get(path, crop)):
+                        q.drawPixmap(old_r, old, QRectF(old.rect()))
+                    q.setOpacity(q.opacity() * fades[i])
+                if mini is not None:
+                    if rest is not None and hover is not None:
+                        if t < 1:
+                            q.drawPixmap(r, rest, QRectF(rest.rect()))
+                        if t > 0:
+                            q.setOpacity(q.opacity() * t)          # (the hovered copy fades in over the resting one)
+                            q.drawPixmap(r, hover, QRectF(hover.rect()))
+                    else:
+                        q.drawPixmap(r, mini, QRectF(mini.rect()))   # (the other copy is still being made)
+                        self.w.want_minis()
+                elif pm:
                     q.drawPixmap(r, pm, QRectF(pm.rect()))
+                    self.w.want_minis()
                 else:
                     grad = QLinearGradient(r.topLeft(), r.bottomLeft())
                     grad.setColorAt(0, QColor(COLORS["placeholder_top"]))
@@ -4570,10 +4845,11 @@ class CardDelegate(QStyledItemDelegate):
                 self._overlay(q, option, rect, e, self.w.folder_name(fid), line)
 
         ba = self.w.bookmark_alpha
-        key = None if 0 < ba < 1 else (                 # (not while the bookmarks fade in / out)
+        key = None if 0 < ba < 1 or min(fades, default=1.0) < 1 else (  # (not while bookmarks / copies fade)
             "f", ba > 0, COLORS["button"], COLORS["placeholder_top"], COLORS["placeholder_bottom"],
             tuple((pm.cacheKey() if (pm := self.w.covers.get(self.w.art(g), (g.crop_zoom, g.crop_x, g.crop_y)))
-                   else 0, g.status) for g in games[:4]))
+                   else 0, g.status) for g in games[:4]),
+            tuple(m.cacheKey() if m is not None else 0 for pair in minis for m in pair))   # (a copy arriving redraws it)
         self._clipped(p, cover, e, draw, key)
         if option.state & QStyle.State_Selected:
             self._ring(p, cover)
@@ -6881,8 +7157,19 @@ class NotesLayer(DimLayer):
         head = ElidedLabel(title, objectName="notes_title")      # (the library's font, like everything else)
         head.setTextFormat(Qt.PlainText)
         head.setMinimumWidth(1)                           # (a long title ends in "..." instead of widening the box)
-        lay.addWidget(head)
-        self.head = head
+        # the title sits on a button-coloured box like the easter egg's (owner, 2026-10-28): the theme's text on the
+        # darkened window was unreadable for dark text colours (Light: 1.7:1); text on buttons is the pair the Custom
+        # Theme warning already checks. Sized to the title, never wider than the text box; it doesn't react to hover.
+        plate = QFrame(objectName="notes_title_box")
+        inner = QHBoxLayout(plate)
+        inner.setContentsMargins(14, 4, 14, 4)
+        inner.addWidget(head)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(plate)
+        row.addStretch(1)
+        lay.addLayout(row)
+        self.head, self.plate = head, plate
         # (a QTextEdit, not QPlainTextEdit: that one scrolls by whole lines - the wheel glide (SmoothWheel) and
         # wheel-press scrolling need a bar that moves by the pixel)
         self.editor = QTextEdit(objectName="notes")
@@ -6906,7 +7193,7 @@ class NotesLayer(DimLayer):
     def _place(self) -> None:
         # the text box is 72.5 % of the window; it and the title above it are centred together
         w, h = round(self.width() * self.SIZE), round(self.height() * self.SIZE)
-        h += self.head.sizeHint().height() + self.boxes[0].layout().spacing()
+        h += self.plate.sizeHint().height() + self.boxes[0].layout().spacing()
         self.boxes[0].setGeometry((self.width() - w) // 2, (self.height() - h) // 2, w, h)
 
     def _settled(self) -> None:
@@ -7469,10 +7756,19 @@ class ThemeDialog(TaskOwner, QDialog):
         if self._live is None and not self._preview_timer.isActive():
             self._preview_timer.start()
         c = self.colors
-        weak = [tr(f"theme.where_{w}") for w, (fg, bg) in {
-            "main": (c["text"], c["bg"]), "bars": (c["text"], c["band"]),
-            "buttons": (c["text"], c["button"]), "play": (c["play_text"], c["play"])}.items()
-            if contrast(fg, bg) < 3.0]
+        top, bottom = QColor(c["placeholder_top"]), QColor(c["placeholder_bottom"])
+        middle = QColor((top.red() + bottom.red()) // 2, (top.green() + bottom.green()) // 2,
+                        (top.blue() + bottom.blue()) // 2).name()     # (where "No Cover" sits)
+        # each place: every text / surface pair found there (2026-10-28: text boxes, secondary text and covers without
+        # art added; greyed-out text - Other Device, a disabled Read - is faint on purpose and left out)
+        weak = [tr(f"theme.where_{w}") for w, pairs in {
+            "main": [(c["text"], c["bg"])], "bars": [(c["text"], c["band"])],
+            "buttons": [(c["text"], c["button"])], "play": [(c["play_text"], c["play"])],
+            "boxes": [(c["text"], c["input"])],
+            "muted": [(c["muted"], c["bg"]), (c["muted"], c["band"]), (c["muted"], c["input"])],
+            "covers": [(c["text"], c["placeholder_top"]), (c["text"], c["placeholder_bottom"]),
+                       (c["muted"], middle)]}.items()
+            if min(contrast(fg, bg) for fg, bg in pairs) < 3.0]
         sep = "、" if i18n.language() == "ja" else ", "
         self.warning.setText(tr("theme.low_contrast", where=sep.join(weak)) if weak else "")
 
@@ -9996,7 +10292,7 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
         self.folderbar = QFrame(objectName="folderbar")
         fb = QHBoxLayout(self.folderbar)
         fb.setContentsMargins(14, 10, 16, 12)                    # name centred (17 px each side) between the top bar and the covers' edge
-        self.back_btn = QPushButton(objectName="back")
+        self.back_btn = BackButton(objectName="back")
         self.back_btn.clicked.connect(self.close_folder)
         self.back_btn.setAcceptDrops(True)
         self.back_btn.installEventFilter(self)
@@ -11164,6 +11460,9 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             self.grid.covers_arrived()
         except Exception:                          # noqa: BLE001 - (they're then decoded when drawn, as before)
             pass
+        # (in the background once the window has opened - like the cover prefetch, not during its open animation;
+        # they then fade in over the first picture)
+        QTimer.singleShot(PREFETCH_QUIET_MS, self, self.want_minis)
 
     def _prefetch_covers(self, entries, ahead: bool = False) -> None:
         """Prepare the covers of what's shown (in order; a folder's first four for its mosaic) in the background,
@@ -11206,11 +11505,60 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
                     self._art.setdefault(key, path)
                 self.covers.accept(prepared, ahead=ahead)
                 self.grid.covers_arrived()
+                if any(kind == "folder" for kind, _ in entries):
+                    self.want_minis()                   # (folder mosaics' sharp copies next, from these same images)
             if self._prefetch_next is not None:
                 self._prefetch_covers(*self._prefetch_next)
 
         def failed(_):
             self._prefetching = False
+        self._run(work, done, failed, low=True)
+
+    _minis_due = _making_minis = _minis_again = False
+
+    def want_minis(self) -> None:
+        """A folder mosaic was drawn without its sharp copies (CoverCache.mini): make the missing ones in the
+        background, a moment later (one request per burst of drawing, not one per frame)."""
+        if self._minis_due or CoverCache.no_pillow:
+            return
+        self._minis_due = True
+        QTimer.singleShot(60, self, self._make_minis)
+
+    def _make_minis(self) -> None:
+        self._minis_due = False
+        if self._making_minis:
+            self._minis_again = True                    # (after the one under way)
+            return
+        dpr = self.grid.viewport().devicePixelRatioF()
+        wanted, folders = [], []
+        for i in range(self.grid.count()):
+            iid = self.grid.item(i).data(GAME_ID_ROLE)
+            if is_folder(iid):
+                folders.append(iid)
+                wanted += [(path, (g.crop_zoom, g.crop_x, g.crop_y))
+                           for g in self.folder_games.get(iid[len(FOLDER_PREFIX):], [])[:4]
+                           if g.artwork and (path := self._art.get((g.game_id, g.artwork)))]
+        jobs = [(size, sources) for size in (mosaic_size(dpr), mosaic_size(dpr, 1 + HOVER_GROW))
+                if (sources := self.covers.mini_sources(wanted[:CoverCache.MAX_COVERS], size))]
+        if not jobs:
+            return
+        self._making_minis = True
+
+        def done(made):
+            self._making_minis = False
+            if made:
+                self.covers.accept_minis(made)
+                self.grid.tiles_changed(folders)
+            if self._minis_again:
+                self._minis_again = False
+                self.want_minis()
+
+        def failed(_):
+            self._making_minis = False
+        def work():
+            made = [m for size, sources in jobs for m in CoverCache.make_minis(sources, size)]
+            CoverCache.tidy_mini_files()
+            return made
         self._run(work, done, failed, low=True)
 
     _ahead_pending = False
@@ -13067,7 +13415,10 @@ class MainWindow(KeepsTitleBar, TaskOwner, QMainWindow):
             # computer hid that the whole library is one drop-down away (owner, 2026-10-19)
             view = self._device_filter()
             plain = not self.search.text().strip() and not self._filtering() and not self.current_folder
-            self.no_results_key = f"grid.empty_{view}" if plain and view != "both" else "grid.no_results"
+            # (not while a typed change waits for SEARCH_PAUSE_MS: the grid still shows the last search's results, so
+            # backspacing it away flashed "No Games on This Device" until the games came back - owner, 2026-10-29)
+            if not self._search_pause.isActive():
+                self.no_results_key = f"grid.empty_{view}" if plain and view != "both" else "grid.no_results"
             return 1.0
         return 0.0
 

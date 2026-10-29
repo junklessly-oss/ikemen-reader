@@ -243,7 +243,7 @@ S: dict[str, tuple[str, str]] = {
     "folder.new_name":          ("New Folder", "新しいフォルダー"),
     "folder.count_one":         ("1 Game", "1ゲーム"),
     "folder.count_many":        ("{n} Games", "{n}ゲーム"),
-    "folder.back":              ("‹  Library", "‹  ライブラリ"),
+    "folder.back":              ("Library", "ライブラリ"),     # (the ‹ before it is drawn: app.BackButton)
     "folder.back_tip":          ("Back to the library. Drop a game here to take it out of this folder.",
                                  "ライブラリに戻ります。ゲームをここにドロップすると、フォルダーから出せます。"),
     "folder.rename_title":      ("Rename Folder", "フォルダー名を変更"),
@@ -639,6 +639,9 @@ S: dict[str, tuple[str, str]] = {
     "theme.where_bars":         ("text on the bars", "バーの文字"),
     "theme.where_play":         ("the Read button", "「読む」ボタン"),
     "theme.where_buttons":      ("text on buttons", "ボタンの文字"),
+    "theme.where_boxes":        ("text in text boxes and menus", "入力欄とメニューの文字"),
+    "theme.where_muted":        ("secondary text", "補足の文字"),
+    "theme.where_covers":       ("titles on covers without art", "画像なしのカバーのタイトル"),
     "theme.g_text":             ("Text", "文字"),
     "theme.g_covers":           ("Covers", "カバー"),
     "theme.g_lights":           ("Sync Lights", "同期ランプ"),

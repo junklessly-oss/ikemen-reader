@@ -1256,6 +1256,12 @@ before changing it.
   Showing: real flag images ~1 h (Windows can't draw flag emoji - it shows "JP" letters - so bundle ~20 small flags
   from an openly licensed set, drawn in a corner of each thumbnail + tooltip with the language name), or text tags
   "JA / EN · ZH" under each cover ~20 min (fits the monochrome look). Flags would be the only colour besides the lights.
+- Magpie (owner, 2026-10-28: idea pile). Per-game "Launch With Magpie" + a Magpie path box in Settings; we only START
+  Magpie beside the game (its own per-program profile with auto scale does the scaling) - never write Magpie's config
+  (undocumented, changes between versions). Magpie captures the window, doesn't inject, so LE + Luna should coexist;
+  test that Luna's text window stays above Magpie's full-screen view. ~2-4 h. Works today without us (hotkey
+  Alt+Shift+A in 0.12). DxWnd assessed + NOT recommended (injects like LE/Luna -> clashes, /R:n picks by list
+  position, its process sits between us and the game); own resolution switching = crude, Magpie does it better.
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Background writes (owner, 2026-10-24: idea pile; "is it seriously worth it?" - verdict: worth it eventually, not
   urgent). Window-thread cloud writes that freeze the window while Google Drive stalls: reading status, renames (game /
@@ -1639,3 +1645,70 @@ before changing it.
   Windows told; Start menu programs (user + shared, subfolders) added; .ico name includes a hash of Icon.png (a
   redrawn picture = new names, no stale cache); an update still waiting when Ikemen Reader closes runs on close.
   Still unseen: the laptop (Win 11). Owner has no Start menu shortcut on the PC.
+
+## Notes title box (2026-10-28, uncommitted)
+- Notes title was unreadable with dark text colours: theme text on the darkened layer (built-in Light measured 1.7:1;
+  Dark 15.9). Owner's idea: put it on a button-coloured box like the easter egg's (QFrame#notes_title_box: button fill,
+  border, radius 8, padding 14/4; sized to the title, left edge with the text box, no hover reaction). Text on button =
+  a pair the Custom Theme warning already checks. Owner to tweak by eye.
+- Contrast audit, same day: built-in themes fine everywhere else (>= 4.0). The Custom Theme warning does NOT check text
+  on input (text boxes, pop-ups, notes box), muted text (hints, headings, sync line), or placeholder-cover titles;
+  text straight on the library area with a background picture not yet looked at. Offered, not built.
+- Built same day: the Custom Theme warning now also checks "text in text boxes and menus" (text/input), "secondary
+  text" (muted on bg/band/input) and "titles on covers without art" (text on both placeholder ends, muted on their
+  middle = "No Cover"); greyed text (other_*, disabled Read) left out on purpose. Built-in themes: no warning (test
+  ColourCodes.test_low_contrast_warning_...). Light's secondary text 4.0:1 left as is (secondary, above 3).
+- Background picture check: two texts sit straight on the picture - "No Results Found" / "No games yet" (muted at 70 %
+  opacity, 2.7x size; even WITHOUT a picture Light measures 2.5:1, Dark 3.1:1) and the folder bar ("‹ Library" + the
+  folder's name; transparent bar). No colour check can cover a picture. Options offered, not built.
+- Folder mosaics garbled (owner, 2026-10-28, screenshot coverquestion): covers are kept at 2.2x tile size; a mosaic
+  square draws them ~5x smaller while painting (bilinear -> aliasing: lettering / lines speckle).
+  First try (Qt smooth = averaging) UNDONE: owner "blurry garbled messes" (it was soft; the black line on 紅殻町博物誌 is
+  in the art). Compared on the owner's Mareni folder (artifact "Mosaic Sharpness Test"): now / averaged / Lanczos /
+  Lanczos + light sharpening / + strong. Lanczos alone ~ averaged (sharpness 68.8 vs 63.0, now 81.8 = partly speckle);
+  owner chose Lanczos + LIGHT sharpening (86.5) - the image-editor way to make screen thumbnails.
+  BUILT: Pillow (new dependency, requirements.txt; missing -> mosaics as before, CoverCache.no_pillow). CoverCache.mini /
+  mini_sources / make_minis / accept_minis: copies at mosaic_size() (rest size, whole device px, rounded down), Lanczos +
+  UnsharpMask(0.7, 50 %), made ONLY in the background (~3 ms each; prepared QImage reused, else decoded again), LRU
+  MAX_COVERS, each handed out once (_mini_tried; failed ones retried after a reload). Delegate: a ready copy at rest is
+  drawn pixel for pixel against the outer edges; hovered it's stretched (+3 %); not ready -> drawn as before +
+  MainWindow.want_minis (60 ms debounce, one job at a time). Arrival: LibraryGrid.tiles_changed (strips patched like
+  arriving covers + the tiles' spots redrawn); the folder's _flat key includes the copies. Live capture of the owner's
+  window: Keromakura folder 63.0 -> 67.6 sharpness, visibly cleaner. On first open / after a window resize the old
+  drawing shows for a moment until the copies arrive.
+  Same day, after owner checks: (a) hover looked blurrier (rest copy stretched 3 %) -> a second copy at the fully
+  hovered size (mosaic_size(dpr, 1 + HOVER_GROW)), the two cross-faded by the hover's growth t; (b) "a tad noticeable"
+  snap at the hover's ends -> continuous blend; (c) bottom covers moved down ~1 px as the folder rose (copies lined up
+  against the outer edges, whole-pixel heights 129/133 in 129.5/133.8 slots) -> each square's rest spot (rounded) is
+  carried along with the tile's growth (constant offset, proportional size). (d) owner picked 2 more: copies FITTED
+  (ImageOps.fit: a sliver trimmed off both sides; squares are ~4 % narrower than a cover, which squeezed them) and
+  arrivals FADE in over the old drawing (MINI_FADE_S 0.15; LibraryGrid.tiles_changed drives frames, strips patched at
+  the end; the tile's _flat cache is skipped while fading) + copies asked for right after each cover prefetch and
+  PREFETCH_QUIET_MS after launch (not during the open animation). Timers use the context form (window closed -> gone).
+  (e) owner: "the little cover resize will happen on EVERY launch?" -> DISK CACHE: each copy also saved as a small PNG
+  in %APPDATA%\IkemenReader\mosaics (name = sha1 of cover file name + mtime + crop + size; atomic write; oldest go past
+  MINI_FILES_KEPT 2000, tidied after each job). CoverCache.mini() reads a kept copy the first time it's wanted (~0.34 ms,
+  file existence checked first - a missing file via QImage costs 0.75 ms; never during a glide strip (no_decode)), no
+  fade. The grid only knows its final cover size once shown, so this can't happen in prepare_first_screen. make_minis
+  also checks disk before making. Checked live: launch 1 saved 56 copies; launch 2 captured 0.2 s after the window
+  appeared (before any background job) already showed the fitted copies.
+  (f) UNDONE the fit (owner: it "messes up the crops"): copies show the whole cover as cropped again, squeezed ~4 %
+  into the square as always (owner agreed: nobody noticed the squeeze; matching the square's shape instead would make
+  the row gap ~19 px vs 8 px). Copy file names now include CoverCache.MINI_RECIPE + MINI_SHARPEN, so a change to how
+  copies are made never reuses old files (bump MINI_RECIPE). Today's 56 trimmed files deleted; live capture matches
+  the morning's framing.
+- Still open (owner: "circle back on 2"): "No Results Found" / folder bar text over a background picture.
+- Folder bar "‹ Library" arrow misaligned (owner, 2026-10-28): the font's ‹ (U+2039, Hiragino Maru Gothic) is centred
+  on the lowercase x-height, ~2 px (11pt) below the capitals / kana. Now BackButton draws the arrow (drop-down-style
+  1.6 px rounded stroke, centred on capHeight, muted / text on hover like the style sheet); i18n folder.back is just
+  "Library" / "ライブラリ"; QSS padding-left 6 + ARROW_ROOM (14). Not committed.
+- Owner, same day, on "No Results Found" / empty library + folder bar over pictures: LEAVE THEM (boxes look clunky,
+  not minimalist). The message's 70 % fade is DELIBERATE (owner: "aesthetically good... very minimalist") - keep it;
+  don't re-propose dropping it. Light 2.5:1 / Dark 3.1:1 (large text); never critical (empty library / a search the
+  owner just typed). Compared on a page (artifact "Light Secondary Text"): Light grey #505050 -> message 2.7 (NOT 3.0
+  as first estimated), #474747 -> 3.0 but secondary text too close to main text, fade 85 % -> 3.1. Owner: LEAVE IT
+  (#595959, 70 %). Picture-aware warning in Library Background: offered, not wanted for now.
+- "No Results Found" flashed "No Games on This Device" when backspacing a search (owner, 2026-10-29): a typed change
+  waits SEARCH_PAUSE_MS before the grid is refilled, but _no_results_target picked its words from the NEW search text
+  every frame (empty text + This Device view -> grid.empty_here). Now the words are kept while _search_pause is active.
+  Test DeviceFilter.test_backspacing_a_search_keeps_its_words (fails without the fix: 'grid.empty_here').

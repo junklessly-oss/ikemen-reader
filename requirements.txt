@@ -2,5 +2,6 @@ psutil>=5.9
 PySide6-Essentials>=6.8
 truststore>=0.9
 pypresence>=4.3
+Pillow>=10.0          # sharp folder mosaics (optional: without it they draw as before)
 # to build Ikemen Reader.exe (py build.py):
 pyinstaller>=6.10
