@@ -1269,6 +1269,11 @@ before changing it.
   version: script file chosen once in Edit, "Launch With Agent" greyed out until then, and only if the command line can
   auto-attach (otherwise it just opens Agent = little value). Luna OR Agent per game (both inject); test with LE;
   Defender may flag Frida. ~2-4 h.
+- Characters read / reading speed (owner, 2026-10-29: idea pile, LOW - "usually tracked with programs that take Luna's
+  text, so kind of pointless"; build only if users ask for it). Count characters from Luna's text output per session,
+  synced across devices -> chars per VN, chars/hour, speed over time. Check how Luna hands text out first (~15 min).
+  ~half a day to a day. Also offered + NOT wanted (don't re-propose): reading log / heatmap, VNDB list updating,
+  difficulty ratings (jiten.moe).
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Background writes (owner, 2026-10-24: idea pile; "is it seriously worth it?" - verdict: worth it eventually, not
   urgent). Window-thread cloud writes that freeze the window while Google Drive stalls: reading status, renames (game /
