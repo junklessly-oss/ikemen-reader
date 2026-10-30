@@ -1262,6 +1262,13 @@ before changing it.
   test that Luna's text window stays above Magpie's full-screen view. ~2-4 h. Works today without us (hotkey
   Alt+Shift+A in 0.12). DxWnd assessed + NOT recommended (injects like LE/Luna -> clashes, /R:n picks by list
   position, its process sits between us and the game); own resolution switching = crude, Magpie does it better.
+- Agent text hooker (0xDC00/agent, Frida-based; owner, 2026-10-29: idea pile). Only worth it for emulated (yuzu /
+  Vita3K / PPSSPP / RPCS3) or Unity games Luna can't hook; Luna covers normal PC VNs. Agent needs a per-game script and
+  the user picks target + script + Attach in its own window; no script = no text (it doesn't guess like Luna). Its
+  command line (`agent.exe [options] [target]`) is undocumented - check `--help` first (~15 min). Only build the fuller
+  version: script file chosen once in Edit, "Launch With Agent" greyed out until then, and only if the command line can
+  auto-attach (otherwise it just opens Agent = little value). Luna OR Agent per game (both inject); test with LE;
+  Defender may flag Frida. ~2-4 h.
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Background writes (owner, 2026-10-24: idea pile; "is it seriously worth it?" - verdict: worth it eventually, not
   urgent). Window-thread cloud writes that freeze the window while Google Drive stalls: reading status, renames (game /
