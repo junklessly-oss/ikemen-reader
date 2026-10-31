@@ -355,7 +355,15 @@ class LunaLookup(unittest.TestCase):
             s = LocalSettings("PC", str(root / "cloud"))
             self.assertEqual(launch_plan(g, s)[0], "play.luna_missing")
             s.luna_path = self.make_luna(root, {})
-            self.assertEqual(launch_plan(g, s)[0], "play.luna_unknown_game")
+            problem, plan = launch_plan(g, s)            # a game new to Luna: added to its list, then launched
+            self.assertIsNone(problem)
+            self.assertEqual(luna.find_uid(s.luna_path, str(game_exe)), plan["luna"][2])
+            data = json.loads((Path(s.luna_path).parent / "userconfig" / "savegamedata_5.3.1.json").read_text("utf-8"))
+            self.assertEqual(data[0], [plan["luna"][2]])
+            self.assertEqual(data[1][plan["luna"][2]]["title"], "VN")
+            self.assertTrue((Path(s.luna_path).parent / "userconfig" / "savegamedata_5.3.1.json.ikemen.bak").is_file())
+            (Path(s.luna_path).parent / "userconfig" / "savegamedata_5.3.1.json").write_text("{broken", "utf-8")
+            self.assertEqual(launch_plan(g, s)[0], "play.luna_unknown_game")   # a list we can't read: as before
             s.luna_path = self.make_luna(root, {"u": {"gamepath": str(game_exe)}})
             problem, plan = launch_plan(g, s)
             self.assertIsNone(problem)

@@ -63,7 +63,8 @@ GUIDE = {
             "¤- This Device holds the game's .exe and, if you like, its save folder. Open Game Folder at the bottom opens the "
             "folder with the .exe; right-click a game for Open Save Folder.",
             "- Launch With Luna and Launch With Locale Emulator start the game through those programs (set their "
-            "locations in Settings first).",
+            "locations in Settings first). A game LunaTranslator doesn't know yet is added to its game list for you "
+            "the first time (Luna has to be closed for that).",
         ]),
         ("Playing", [
             "- Select a game and press Read (or double-click it, or press Enter).",
@@ -255,7 +256,8 @@ GUIDE = {
             "- 「参照」は、入力欄に書かれた場所から開きます。空欄の場合、セーブフォルダーの「参照」はゲームのフォルダーを、それ以外は「PC」を開きます。",
             "¤- 「この端末」には、ゲームの .exe と、必要ならセーブフォルダーを入力します。下の「ゲームフォルダーを開く」で .exe のあるフォルダーを開けます。"
             "セーブフォルダーは、ゲームを右クリックして「セーブフォルダーを開く」から開けます。",
-            "- 「Lunaで起動」「Locale Emulatorで起動」を使うと、それぞれのプログラムを通してゲームを起動します（先に設定で場所を指定してください）。",
+            "- 「Lunaで起動」「Locale Emulatorで起動」を使うと、それぞれのプログラムを通してゲームを起動します（先に設定で場所を指定してください）。"
+            "LunaTranslatorにまだ登録されていないゲームは、初回の起動時に自動でLunaのゲーム一覧に追加されます（そのためLunaは閉じておく必要があります）。",
         ]),
         ("プレイ", [
             "- ゲームを選んで「読む」を押します（ダブルクリックやEnterキーでも起動できます）。",

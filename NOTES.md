@@ -1274,6 +1274,10 @@ before changing it.
   synced across devices -> chars per VN, chars/hour, speed over time. Check how Luna hands text out first (~15 min).
   ~half a day to a day. Also offered + NOT wanted (don't re-propose): reading log / heatmap, VNDB list updating,
   difficulty ratings (jiten.moe).
+- Meikipop (owner, 2026-10-31: idea pile, only if it becomes part of the routine). OCR popup dictionary (tray app,
+  github.com/rtr46/meikipop, GPL-3.0): no CLI flags for window/region, one saved region set from its tray, no Anki.
+  Verdict: deeper integration = bloat; worth it only as a per-game "Launch With Meikipop" = open alongside (like the
+  standalone LunaHook path), mainly for games Luna can't hook (emulators / Unity - same gap as Agent). ~1-2 h.
 - Folders inside folders (owner, 2026-10-19: "low priority, could be fun if we run out of stuff to do").
 - Background writes (owner, 2026-10-24: idea pile; "is it seriously worth it?" - verdict: worth it eventually, not
   urgent). Window-thread cloud writes that freeze the window while Google Drive stalls: reading status, renames (game /
@@ -1746,3 +1750,23 @@ before changing it.
   counted as "handed over" (very likely the laptop's exact case). Now the running copy replies b"shown" and only that
   reply counts (2 s); closeEvent closes the listener at accept. Re-checked on the built exe: message after 12 s,
   Cancel quits the new copy, frozen one untouched; launchcheck 10/10. Test AuditFixes.test_frozen_copy_does_not_count_as_answering.
+
+## Luna: first launch adds the game + steady Luna note (2026-10-31, owner)
+- Ticking Launch With Luna in the game window made the path boxes below jump: game.luna_note (2 wrapped lines) was
+  shown/hidden, pushing the layout and refitting the window. Now it keeps its space when hidden (retainSizeWhenHidden).
+- First launch of a game LunaTranslator doesn't know: launch_plan now checks "Luna open" FIRST, then
+  luna.add_game() writes the game into userconfig\savegamedata_*.json exactly like Luna's own add (read from Luna
+  5.3.1 source: uid "<time.time()>_<uuid4>", getdefaultsavehook fields + createtime, uid inserted first in list [0];
+  Luna fills other defaults on load; written compact, ensure_ascii=False, tmp + replace). Only while Luna is closed
+  (an open Luna rewrites the file on exit). Backup beside it: <file>.ikemen.bak (doesn't match savegamedata_*.json).
+  Title = our library title. No/unknown-format list -> old "drag the .exe into Luna once" message.
+  Not yet tried with the real Luna (owner to test on a new game).
+- Same kind of jolt fixed in 4 more places (owner: "fix all four", keep spacing + symmetry): keep_place() + SteadyHint
+  (a wrapped hint holding the room of its longest text; hasHeightForWidth forced True - Qt says False while the text is
+  empty, so the room was dropped). (1) VNDB suggestion banner: room kept from the start only when adding with the VNDB
+  lookup running (_keep_banner_room, measured with the cover icon). (2) "Suggested: ..." save hint: SteadyHint, spans
+  under Browse too (Japanese wrapped to 3 lines for one character; now 2 like the Luna note, gaps match). (3) Custom
+  Theme low-contrast warning: room for a warning naming the 3 longest places (all 7 = 4 empty lines). (4) Cover zoom
+  slider / Remove Cover: greyed (disabled), not hidden - a hole between buttons looked broken; QSlider :disabled style
+  added. Checked off-screen with the real fonts (EN + JA): nothing moves. Left as is on purpose: Solo Device rows,
+  Library Background sliders, language switch.

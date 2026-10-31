@@ -40,7 +40,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   bundled fonts — don't raise licensing), `ZenMaruGothic-Regular.ttf` (+OFL, fallback), `check.svg`.
 - LocalSettings: add new fields at the END (SettingsDialog._save fills earlier ones by position;
   test_features.SettingsSave guards this).
-- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 322 tests (2.0.8: + stuck copy / exit watchdog / helper ends stuck copy / broken update undone / spare settings / frozen copy not answering; 2.0.7: + search message words, + theme warning places, sharp folder mosaics; 2.0.6: + colour code boxes, Discord device used last, themed shortcut icons; 2.0.5: + path boxes / wide pop-ups, pop-ups deleted, closed test windows deleted per test; 2.0.4: + arrangement per view, Language list fade; 2.0.3: + shortcut
+- Tests: `test_sync_engine.py`, `test_launcher.py`, `test_features.py` — 322 tests (2.0.9: Luna adds a game new to it; 2.0.8: + stuck copy / exit watchdog / helper ends stuck copy / broken update undone / spare settings / frozen copy not answering; 2.0.7: + search message words, + theme warning places, sharp folder mosaics; 2.0.6: + colour code boxes, Discord device used last, themed shortcut icons; 2.0.5: + path boxes / wide pop-ups, pop-ups deleted, closed test windows deleted per test; 2.0.4: + arrangement per view, Language list fade; 2.0.3: + shortcut
   arguments, Choose VNDB Cover; 2.0.2: + add into open folder / folder-bar rename / trash-drop fade + removal fade; full run now ~7-8 min; 2.0.1: + drag-scroll turns / scroll guard / bars wait / fade-back / held cover while a
   session ends, title-bar press focuses; 2.0.0: notes, saved themes, closed-window timers), all pass on
   the PC (Python 3.14, `py -m unittest`; ~7-8 min with the app open) and the laptop (Python 3.15, ~8-9 min). Older notes below give the count at the time. Process/window/registry tests run for real on Windows.
@@ -164,7 +164,7 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   4 px leeway once inside); clicks in their spare margin pass through to the overlay (= dismiss).
 - Settings fits a 1080p screen (needs 990 of 1000 px): headings inside Settings have padding-top 5 px
   (QDialog#settings_dialog QLabel#section; 8 px elsewhere), 6 px after each divider keeps the gaps equal.
-  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.8" in app.py (build.py reads it).
+  Click elsewhere / Esc (close_folder checks it first) dismisses. APP_VERSION = "2.0.9" in app.py (build.py reads it).
 - Notes (2.0.0): right-click a game -> "Add Notes" / "Notes" (under Edit) -> NotesLayer (DimLayer, like the easter
   egg): 72.5 % text box + elided title, saved on close only (owner), in Game.notes (synced with the game file), saved in
   the background in order, flushed on exit; every key but Esc stays in the box. Removal warns about notes.
@@ -173,6 +173,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   that doesn't REPLY asks "Isn't Responding" (End It and Open); settings.backup.json; crash.log. See NOTES.md.
 - Removing a game: right-click "Remove From Library", the trash button, or Edit's red button — all use
   confirm_remove(): "Are You Sure?" heading, Cancel (default, also on close) | Confirm. Saves untouched.
+- Text that appears on a click / choice / background answer never moves the layout (2.0.9, owner): keep_place() /
+  SteadyHint reserve its room; controls without a use are greyed, not hidden. See NOTES.md (2026-10-31).
 - Buttons never end in "..." (menus still may); all buttons size to their text.
 - Path boxes (Settings: Cloud Folder / LE / Luna / Anki; game window: exe + save folder) = PathBox: the START of a
   long path shows, "..." where cut off (three full stops, not "…"), full path in our hover pop-up (2.0.5, owner). Hover
@@ -187,7 +189,8 @@ Both machines use a Japanese system locale. (Formerly "VN Launcher".)
   (Ikemen Sync messages, Are You Sure?/Confirm, Built In/User Added, Launch Program on Startup, status names).
 - Per-game checkboxes "Launch With Luna" / "Launch With Locale Emulator" (replace the old per-launch LE
   button). LunaTranslator: `LunaTranslator.exe --Exec <uid>` (uid looked up by exe path in
-  `userconfig\savegamedata_*.json`, per device, never stored); Luna's own LE setting then applies.
+  `userconfig\savegamedata_*.json`, per device, never stored); Luna's own LE setting then applies. A game Luna
+  doesn't know is added to that list by us (2.0.9, luna.add_game, only while Luna is closed, backup .ikemen.bak).
   Standalone LunaHook: opened alongside, game launched normally. If Luna is already open, ask the owner
   to close it (a second --Exec instance would open a second Luna). `_admin` Luna builds refused.
   Owner's Luna: `C:\Users\Jaden\Desktop\LunaHook\LunaTranslator\LunaTranslator.exe`. No "import from Luna".

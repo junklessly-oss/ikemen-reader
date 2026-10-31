@@ -697,11 +697,11 @@ def launch_plan(game: Game, settings: LocalSettings) -> tuple[Optional[str], dic
         if not lp or not Path(lp).is_file():
             return "play.luna_missing", plan
         if luna.kind(lp) == "translator":
-            uid = luna.find_uid(lp, mine.exe)
+            if luna.running(lp):                  # (first: a game new to Luna can only be added while it's closed)
+                return "play.luna_running", plan
+            uid = luna.find_uid(lp, mine.exe) or luna.add_game(lp, mine.exe, game.title)
             if uid is None:
                 return "play.luna_unknown_game", plan
-            if luna.running(lp):
-                return "play.luna_running", plan
             plan["luna"] = ("translator", lp, uid)
         else:
             plan["luna"] = ("hook", lp, None)

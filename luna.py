@@ -81,6 +81,49 @@ def game_path_for_uid(luna_exe: str, uid: str) -> Optional[str]:
     return g.get("gamepath") if isinstance(g, dict) else None
 
 
+def add_game(luna_exe: str, game_exe: str, title: str = "") -> Optional[str]:
+    """Put this game into Luna's list the way Luna's own "add game" does, so a first launch works without
+    dragging the .exe into Luna. Only while Luna is CLOSED (an open Luna writes its own list back on exit, and
+    ours would be lost). Luna's file is copied to <name>.ikemen.bak first. Returns the game's ID, or None
+    when the list can't be used (missing, or a format we don't know)."""
+    import shutil
+    import time
+    import uuid
+    uid = find_uid(luna_exe, game_exe)
+    if uid is not None:
+        return uid
+    f = _game_list_file(Path(luna_exe))
+    if f is None:
+        return None
+    try:
+        data = json.loads(f.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not (isinstance(data, list) and len(data) >= 2 and isinstance(data[0], list) and isinstance(data[1], dict)):
+        return None
+    path = os.path.normpath(os.path.abspath(game_exe))
+    t = time.time()
+    uid = "{}_{}".format(t, uuid.uuid4())                 # (Luna's own ID format: utils.initanewitem)
+    # (Luna's getdefaultsavehook; it fills in anything else it needs when it loads)
+    data[1][uid] = {"gamepath": path, "embed_setting_private": {}, "hooksetting_private": {},
+                    "save_text_process_info": {"postprocessconfig": {}, "rank": []},
+                    "title": title or "{}/{}".format(os.path.basename(os.path.dirname(path)), os.path.basename(path)),
+                    "developers": [], "webtags": [], "createtime": t}
+    data[0].insert(0, uid)                                # (shown first in Luna's game list, as when added there)
+    tmp = f.with_name(f.name + ".tmp")
+    try:
+        shutil.copy2(f, f.with_name(f.name + ".ikemen.bak"))
+        tmp.write_text(json.dumps(data, ensure_ascii=False), "utf-8")   # (as Luna writes it)
+        os.replace(tmp, f)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return None
+    return find_uid(luna_exe, game_exe)
+
+
 def running(luna_exe: str) -> bool:
     """Is this Luna program already open?"""
     return bool(_luna_pids(luna_exe))

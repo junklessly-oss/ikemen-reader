@@ -93,7 +93,7 @@ def _reverse(hex_colour: str) -> str:
 # light mode: every grey mirrored, so the same contrasts and "vibe", just reversed
 LIGHT = {k: _reverse(v) for k, v in DARK.items()}
 LIGHT["danger"] = "#B5413E"                      # a red that reads on light grey
-APP_VERSION = "2.0.8"
+APP_VERSION = "2.0.9"
 BASE_LIGHTS = {"green": "#6FBF73", "blue": "#6FA8DC", "amber": "#E0B252", "red": "#E0605B", "grey": "#8C8C8C",
                "lavender": "#A98BD9", "yellow": "#E6D95A"}    # (yellow: a pale lemon, kept clear of the golden amber)
 # folder lights: one slice per colour inside, most important first (clockwise from 12 o'clock)
@@ -1898,6 +1898,8 @@ QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::su
 QSlider::groove:horizontal {{ height: 4px; background: {c['border']}; border-radius: 2px; }}
 QSlider::sub-page:horizontal {{ background: {c['muted']}; border-radius: 2px; }}
 QSlider::handle:horizontal {{ background: {c['select']}; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }}
+QSlider::handle:horizontal:disabled {{ background: {c['other_bg']}; }}
+QSlider::sub-page:horizontal:disabled {{ background: {c['border']}; }}
 QToolTip {{ background: {c['input']}; color: {c['text']}; border: 1px solid {c['border']}; padding: 4px; }}
 QWidget#smooth_tip {{ background: {c['input']}; border: 1px solid {c['border']}; }}
 QLabel#smooth_tip_text {{ color: {c['text']}; padding: 4px; background: transparent; }}
@@ -5526,6 +5528,41 @@ def hint(text: str) -> QLabel:
     return lab
 
 
+def keep_place(*widgets: QWidget) -> None:
+    """Hidden, these still hold their room: showing them later never pushes what's around them (owner, 2026-10-31)."""
+    for w in widgets:
+        sp = w.sizePolicy()
+        sp.setRetainSizeWhenHidden(True)
+        w.setSizePolicy(sp)
+
+
+class SteadyHint(QLabel):
+    """A wrapped hint that always holds the room its LONGEST text needs (at its real width), so text appearing,
+    changing or going never moves what's below it (owner, 2026-10-31)."""
+
+    def __init__(self, longest: str, parent=None):
+        super().__init__("", parent, objectName="hint")
+        self.setWordWrap(True)
+        self._twin = QLabel(longest, self, objectName="hint")   # (never shown: measured only, styled like us)
+        self._twin.setWordWrap(True)
+        self._twin.hide()
+
+    def hasHeightForWidth(self) -> bool:
+        return True                          # (Qt says no while the text is empty: then the room wasn't kept)
+
+    def heightForWidth(self, w: int) -> int:
+        self._twin.ensurePolished()
+        return max(super().heightForWidth(w), self._twin.heightForWidth(w))
+
+    def sizeHint(self) -> QSize:
+        hint_ = super().sizeHint()
+        return QSize(hint_.width(), max(hint_.height(), self.heightForWidth(self.width() or hint_.width())))
+
+    def minimumSizeHint(self) -> QSize:
+        hint_ = super().minimumSizeHint()
+        return QSize(hint_.width(), max(hint_.height(), self.heightForWidth(self.width() or hint_.width())))
+
+
 class PathBox(QLineEdit):
     """A path field that shows the START of a long path (Qt shows the end), like Windows does, ending in "..." where
     it's cut off (full path on hover); back to the start whenever it's set from outside (Browse) or left. While
@@ -7696,8 +7733,12 @@ class ThemeDialog(TaskOwner, QDialog):
         self.scroll = scroll
         lay = outer
 
-        self.warning = QLabel(objectName="hint")
-        self.warning.setWordWrap(True)
+        # (room for a warning naming three places - the usual most - so it doesn't resize the colour list as you
+        # drag; room for all seven would leave four empty lines above the buttons)
+        sep = "、" if i18n.language() == "ja" else ", "
+        places = sorted((tr(f"theme.where_{k}") for k in ("main", "bars", "play", "buttons", "boxes", "muted", "covers")),
+                        key=len)[-3:]
+        self.warning = SteadyHint(tr("theme.low_contrast", where=sep.join(places)))
         self.warning.setStyleSheet(f"color: {COLORS['danger']};")
         lay.addWidget(self.warning)
         btns = QHBoxLayout()
@@ -9462,6 +9503,7 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         lay.addLayout(grid)
         self.luna_note = hint(tr("game.luna_note"))
         lay.addWidget(self.luna_note)
+        keep_place(self.luna_note)      # (ticking Luna used to push the path boxes below down and refit the window)
         self.use_luna.toggled.connect(self.luna_note.setVisible)
         self.luna_note.setVisible(self.use_luna.isChecked())
 
@@ -9489,9 +9531,11 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
                 bs.clicked.connect(lambda _=False, s=save_e: self._pick_save(s))
                 g.addWidget(be, 0, 2)
                 g.addWidget(bs, 1, 2)
-                self.save_hint = hint("")               # "Suggested: ..." under the save folder
+                # "Suggested: ..." under the save folder: its room is kept, so the rows below never jump
+                self.save_hint = SteadyHint(max(tr("game.saves_found"), tr("game.saves_from_other"), key=len))
+                keep_place(self.save_hint)
                 self.save_hint.hide()
-                g.addWidget(self.save_hint, 2, 1)
+                g.addWidget(self.save_hint, 2, 1, 1, 2)    # (under Browse too: two lines in Japanese, like the Luna note)
                 save_e.textEdited.connect(lambda _t: self.save_hint.hide())
                 exe_e.editingFinished.connect(self._suggest_save)
             else:
@@ -9535,6 +9579,7 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
 
         # adding with "fetch covers from VNDB" on: look it up straight away
         if not game and settings.vndb and self.title.text().strip():
+            self._keep_banner_room()
             self._auto_vndb(self.title.text().strip())
         self._suggest_save()
         # its cover is from VNDB: known to have 2+ covers = simply there with the other buttons (no fade); not known yet
@@ -9605,9 +9650,10 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
         """Show a cover (a new one starts uncropped). The crop controls only appear when there is one."""
         self.cover.set_image(path, crop)
         has = self.cover.img is not None
-        self.remove_art_btn.setVisible(has)
-        self.zoom.setVisible(has)
-        self.zoom_label.setVisible(has)
+        # (greyed, not hidden: the buttons below them stay put - owner, 2026-10-31)
+        self.remove_art_btn.setEnabled(has)
+        self.zoom.setEnabled(has)
+        self.zoom_label.setEnabled(has)
         self.zoom.blockSignals(True)
         self.zoom.setValue(int(self.cover.zoom * 100))
         self.zoom.blockSignals(False)
@@ -9738,6 +9784,16 @@ class GameDialog(KeepsTitleBar, FitsScreen, TaskOwner, QDialog):
             self.vndb_covers_btn.setEnabled(True)
             message(self, tr("vndb.error"))
         self._run(lambda: _download_cover(url), done, failed)
+
+    def _keep_banner_room(self) -> None:
+        """The banner's room is there from the start (before the window opens), so when VNDB answers the fields
+        below don't jump down: as tall as the banner with its cover picture, or two lines of a long title."""
+        self.banner_btn.setIcon(QIcon(QPixmap(1, 1)))      # (measured as it will be, with the cover icon)
+        self.banner_btn.setIconSize(QSize(24, 34))
+        tall = self.banner_btn.sizeHint().height()
+        self.banner_btn.setIcon(QIcon())
+        self.banner_box.setMinimumHeight(max(tall, 2 * self.banner.fontMetrics().lineSpacing()))
+        keep_place(self.banner_box)
 
     def _auto_vndb(self, query: str):
         def work():
